@@ -1,4 +1,3 @@
-//>>built
 define("dojox/editor/plugins/TextColor", [
 	"dojo",
 	"dijit",
@@ -7,21 +6,22 @@ define("dojox/editor/plugins/TextColor", [
 	"dijit/_Widget",
 	"dijit/_TemplatedMixin",
 	"dijit/_WidgetsInTemplateMixin",
+	"dijit/_editor/_Plugin",
 	"dijit/TooltipDialog",
 	"dijit/form/Button",
 	"dijit/form/DropDownButton",
-	"dijit/_editor/_Plugin",
 	"dojox/widget/ColorPicker",
 	"dojo/_base/connect",
 	"dojo/_base/declare",
 	"dojo/i18n",
 	"dojo/i18n!dojox/editor/plugins/nls/TextColor"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, popup, _Widget, _TemplatedMixin, _WidgetsInTemplateMixin, _Plugin) {
 
 dojo.experimental("dojox.editor.plugins.TextColor");
-dojo.declare("dojox.editor.plugins._TextColorDropDown", [dijit._Widget, dijit._TemplatedMixin, dijit._WidgetsInTemplateMixin], {
+
+var TextColorDropDown = dojo.declare("dojox.editor.plugins._TextColorDropDown", [_Widget, _TemplatedMixin, _WidgetsInTemplateMixin], {
 	// summary:
-	//		A smple widget that uses/creates a dropdown with a dojox.widget.ColorPicker.  Also provides
+	//		A sample widget that uses/creates a dropdown with a dojox.widget.ColorPicker.  Also provides
 	//		passthroughs to the value of the color picker and convenient hook points.
 	// tags:
 	//		private
@@ -99,25 +99,25 @@ dojo.declare("dojox.editor.plugins._TextColorDropDown", [dijit._Widget, dijit._T
 });
 
 
-dojo.declare("dojox.editor.plugins.TextColor", dijit._editor._Plugin, {
+var TextColor = dojo.declare("dojox.editor.plugins.TextColor", _Plugin, {
 	// summary:
 	//		This plugin provides dropdown color pickers for setting text color and background color
 	//		and makes use of the nicer-looking (though not entirely accessible), dojox.widget.ColorPicker.
 	//
 	// description:
 	//		The commands provided by this plugin are:
-	//		* foreColor - sets the text color
-	//		* hiliteColor - sets the background color
+	//
+	//		- foreColor - sets the text color
+	//		- hiliteColor - sets the background color
 	
 	// Override _Plugin.buttonClass to use DropDownButton (with ColorPalette) to control this plugin
 	buttonClass: dijit.form.DropDownButton,
 	
-	// useDefaultCommand: Boolean
-	//		False as we do not use the default editor command/click behavior.
+	// False as we do not use the default editor command/click behavior.
 	useDefaultCommand: false,
 
 	constructor: function(){
-		this._picker = new dojox.editor.plugins._TextColorDropDown();
+		this._picker = new TextColorDropDown();
 		dojo.body().appendChild(this._picker.domNode);
 		this._picker.startup();
 		this.dropDown = this._picker.dialog;
@@ -190,6 +190,9 @@ dojo.declare("dojox.editor.plugins.TextColor", dijit._editor._Plugin, {
 	}
 });
 
+// For monkey-patching
+TextColor._TextColorDropDown = TextColorDropDown;
+
 // Register this plugin.  Uses the same name as the dijit one, so you
 // use one or the other, not both.
 dojo.subscribe(dijit._scopeName + ".Editor.getPlugin", null, function(o){
@@ -199,12 +202,12 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin", null, function(o){
 	switch(o.args.name){
 		case "foreColor":
 		case "hiliteColor":
-			o.plugin = new dojox.editor.plugins.TextColor({
+			o.plugin = new TextColor({
 				command: o.args.name
 			});
 	}
 });
 
-return dojox.editor.plugins.TextColor;
+return TextColor;
 
 });

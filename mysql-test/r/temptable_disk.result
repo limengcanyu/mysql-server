@@ -49,7 +49,7 @@ SET @@global.temptable_use_mmap = true;
 SELECT @@global.temptable_use_mmap;
 @@global.temptable_use_mmap
 1
-CREATE TABLE t (c VARCHAR(128));
+CREATE TABLE t (c LONGBLOB);
 INSERT INTO t VALUES
 (REPEAT('a', 128)),
 (REPEAT('b', 128)),

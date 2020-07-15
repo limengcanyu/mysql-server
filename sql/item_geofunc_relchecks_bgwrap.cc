@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -43,7 +43,7 @@
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a point.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -77,7 +77,7 @@ int BG_wrap<Geom_types>::point_within_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -86,13 +86,13 @@ int BG_wrap<Geom_types>::multipoint_within_geometry(Geometry *g1, Geometry *g2,
                                                     bool *pnull_value) {
   int result = 0;
   Geometry::wkbType gt2 = g2->get_type();
-  const void *data_ptr = NULL;
+  const void *data_ptr = nullptr;
 
   Multipoint mpts(g1->get_data_ptr(), g1->get_data_size(), g1->get_flags(),
                   g1->get_srid());
   if (gt2 == Geometry::wkb_polygon) {
     data_ptr = g2->normalize_ring_order();
-    if (data_ptr == NULL) {
+    if (data_ptr == nullptr) {
       my_error(ER_GIS_INVALID_DATA, MYF(0), "st_within");
       *pnull_value = true;
       return result;
@@ -103,7 +103,7 @@ int BG_wrap<Geom_types>::multipoint_within_geometry(Geometry *g1, Geometry *g2,
     result = multipoint_within_geometry_internal(mpts, plg);
   } else if (gt2 == Geometry::wkb_multipolygon) {
     data_ptr = g2->normalize_ring_order();
-    if (data_ptr == NULL) {
+    if (data_ptr == nullptr) {
       *pnull_value = true;
       my_error(ER_GIS_INVALID_DATA, MYF(0), "st_within");
       return result;
@@ -348,7 +348,7 @@ int BG_wrap<Geom_types>::multipolygon_within_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -387,7 +387,7 @@ int BG_wrap<Geom_types>::multipoint_equals_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -397,7 +397,7 @@ int BG_wrap<Geom_types>::multipoint_disjoint_geometry(Geometry *g1,
                                                       bool *pnull_value) {
   int result = 0;
   Geometry::wkbType gt2 = g2->get_type();
-  const void *data_ptr = NULL;
+  const void *data_ptr = nullptr;
 
   Multipoint mpts1(g1->get_data_ptr(), g1->get_data_size(), g1->get_flags(),
                    g1->get_srid());
@@ -422,7 +422,7 @@ int BG_wrap<Geom_types>::multipoint_disjoint_geometry(Geometry *g1,
     } break;
     case Geometry::wkb_polygon: {
       data_ptr = g2->normalize_ring_order();
-      if (data_ptr == NULL) {
+      if (data_ptr == nullptr) {
         *pnull_value = true;
         my_error(ER_GIS_INVALID_DATA, MYF(0), "st_disjoint");
         return result;
@@ -434,7 +434,7 @@ int BG_wrap<Geom_types>::multipoint_disjoint_geometry(Geometry *g1,
     } break;
     case Geometry::wkb_multipolygon: {
       data_ptr = g2->normalize_ring_order();
-      if (data_ptr == NULL) {
+      if (data_ptr == nullptr) {
         *pnull_value = true;
         my_error(ER_GIS_INVALID_DATA, MYF(0), "st_disjoint");
         return result;
@@ -536,7 +536,7 @@ int BG_wrap<Geom_types>::multipoint_disjoint_multi_geometry(
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a linestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -570,7 +570,7 @@ int BG_wrap<Geom_types>::linestring_disjoint_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multilinestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -608,7 +608,7 @@ int BG_wrap<Geom_types>::multilinestring_disjoint_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a point.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -656,7 +656,7 @@ int BG_wrap<Geom_types>::point_disjoint_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a polygon.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -698,7 +698,7 @@ int BG_wrap<Geom_types>::polygon_disjoint_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipolygon.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -743,7 +743,7 @@ int BG_wrap<Geom_types>::multipolygon_disjoint_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a point.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -781,7 +781,7 @@ int BG_wrap<Geom_types>::point_intersects_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -798,7 +798,7 @@ int BG_wrap<Geom_types>::multipoint_intersects_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a linestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -834,7 +834,7 @@ int BG_wrap<Geom_types>::linestring_intersects_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multilinestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -871,7 +871,7 @@ int BG_wrap<Geom_types>::multilinestring_intersects_geometry(
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a polygon.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -914,7 +914,7 @@ int BG_wrap<Geom_types>::polygon_intersects_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipolygon.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -959,7 +959,7 @@ int BG_wrap<Geom_types>::multipolygon_intersects_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a linestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -996,7 +996,7 @@ int BG_wrap<Geom_types>::linestring_crosses_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multilinestring.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1035,7 +1035,7 @@ int BG_wrap<Geom_types>::multilinestring_crosses_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, not a geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1137,7 +1137,7 @@ int BG_wrap<Geom_types>::multipoint_overlaps_multipoint(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multilinestring.
   @param g2 Second Geometry operand, a polygon.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1146,7 +1146,7 @@ int BG_wrap<Geom_types>::multilinestring_touches_polygon(Geometry *g1,
                                                          Geometry *g2,
                                                          bool *pnull_value) {
   const void *data_ptr = g2->normalize_ring_order();
-  if (data_ptr == NULL) {
+  if (data_ptr == nullptr) {
     *pnull_value = true;
     my_error(ER_GIS_INVALID_DATA, MYF(0), "st_touches");
     return 0;
@@ -1170,7 +1170,7 @@ int BG_wrap<Geom_types>::multilinestring_touches_polygon(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a point.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1207,7 +1207,7 @@ int BG_wrap<Geom_types>::point_touches_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipoint.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1236,7 +1236,7 @@ int BG_wrap<Geom_types>::multipoint_touches_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a linestring.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1278,7 +1278,7 @@ int BG_wrap<Geom_types>::linestring_touches_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multilinestring.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1324,7 +1324,7 @@ int BG_wrap<Geom_types>::multilinestring_touches_geometry(Geometry *g1,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a polygon.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */
@@ -1367,7 +1367,7 @@ int BG_wrap<Geom_types>::polygon_touches_geometry(Geometry *g1, Geometry *g2,
   @tparam Geom_types Geometry types definitions.
   @param g1 First Geometry operand, a multipolygon.
   @param g2 Second Geometry operand, a geometry other than geometry collection.
-  @param[out] pnull_value Returns whether error occured duirng the computation.
+  @param[out] pnull_value Returns whether error occurred duirng the computation.
   @return 0 if specified relation doesn't hold for the given operands,
                 otherwise returns none 0.
  */

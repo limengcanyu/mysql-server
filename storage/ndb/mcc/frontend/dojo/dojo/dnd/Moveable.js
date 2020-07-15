@@ -1,75 +1,102 @@
 /*
-	Copyright (c) 2004-2011, The Dojo Foundation All Rights Reserved.
+	Copyright (c) 2004-2016, The JS Foundation All Rights Reserved.
 	Available via Academic Free License >= 2.1 OR the modified BSD license.
 	see: http://dojotoolkit.org/license for details
 */
 
 //>>built
-define("dojo/dnd/Moveable",["../main","../Evented","../touch","./Mover"],function(_1,_2,_3){
-_1.declare("dojo.dnd.Moveable",[_2],{handle:"",delay:0,skip:false,constructor:function(_4,_5){
-this.node=_1.byId(_4);
-if(!_5){
-_5={};
+define("dojo/dnd/Moveable",["../_base/array","../_base/declare","../_base/lang","../dom","../dom-class","../Evented","../has","../on","../topic","../touch","./common","./Mover","../_base/window"],function(_1,_2,_3,_4,_5,_6,_7,on,_8,_9,_a,_b,_c){
+var _d;
+var _e=function(){
+};
+function _f(){
+if("touchAction" in document.body.style){
+_d="touchAction";
+}else{
+if("msTouchAction" in document.body.style){
+_d="msTouchAction";
 }
-this.handle=_5.handle?_1.byId(_5.handle):null;
+}
+_e=function _e(_10,_11){
+_10.style[_d]=_11;
+};
+_e(arguments[0],arguments[1]);
+};
+if(_7("touch-action")){
+_e=_f;
+}
+var _12=_2("dojo.dnd.Moveable",[_6],{handle:"",delay:0,skip:false,constructor:function(_13,_14){
+this.node=_4.byId(_13);
+_e(this.node,"none");
+if(!_14){
+_14={};
+}
+this.handle=_14.handle?_4.byId(_14.handle):null;
 if(!this.handle){
 this.handle=this.node;
 }
-this.delay=_5.delay>0?_5.delay:0;
-this.skip=_5.skip;
-this.mover=_5.mover?_5.mover:_1.dnd.Mover;
-this.events=[_1.connect(this.handle,_3.press,this,"onMouseDown"),_1.connect(this.handle,"ondragstart",this,"onSelectStart"),_1.connect(this.handle,"onselectstart",this,"onSelectStart")];
-},markupFactory:function(_6,_7,_8){
-return new _8(_7,_6);
+this.delay=_14.delay>0?_14.delay:0;
+this.skip=_14.skip;
+this.mover=_14.mover?_14.mover:_b;
+this.events=[on(this.handle,_9.press,_3.hitch(this,"onMouseDown")),on(this.handle,"dragstart",_3.hitch(this,"onSelectStart")),on(this.handle,"selectstart",_3.hitch(this,"onSelectStart"))];
+},markupFactory:function(_15,_16,_17){
+return new _17(_16,_15);
 },destroy:function(){
-_1.forEach(this.events,_1.disconnect);
+_1.forEach(this.events,function(_18){
+_18.remove();
+});
+_e(this.node,"");
 this.events=this.node=this.handle=null;
 },onMouseDown:function(e){
-if(this.skip&&_1.dnd.isFormElement(e)){
+if(this.skip&&_a.isFormElement(e)){
 return;
 }
 if(this.delay){
-this.events.push(_1.connect(this.handle,_3.move,this,"onMouseMove"),_1.connect(this.handle,_3.release,this,"onMouseUp"));
+this.events.push(on(this.handle,_9.move,_3.hitch(this,"onMouseMove")),on(this.handle.ownerDocument,_9.release,_3.hitch(this,"onMouseUp")));
 this._lastX=e.pageX;
 this._lastY=e.pageY;
 }else{
 this.onDragDetected(e);
 }
-_1.stopEvent(e);
+e.stopPropagation();
+e.preventDefault();
 },onMouseMove:function(e){
 if(Math.abs(e.pageX-this._lastX)>this.delay||Math.abs(e.pageY-this._lastY)>this.delay){
 this.onMouseUp(e);
 this.onDragDetected(e);
 }
-_1.stopEvent(e);
+e.stopPropagation();
+e.preventDefault();
 },onMouseUp:function(e){
 for(var i=0;i<2;++i){
-_1.disconnect(this.events.pop());
+this.events.pop().remove();
 }
-_1.stopEvent(e);
+e.stopPropagation();
+e.preventDefault();
 },onSelectStart:function(e){
-if(!this.skip||!_1.dnd.isFormElement(e)){
-_1.stopEvent(e);
+if(!this.skip||!_a.isFormElement(e)){
+e.stopPropagation();
+e.preventDefault();
 }
 },onDragDetected:function(e){
 new this.mover(this.node,e,this);
-},onMoveStart:function(_9){
-_1.publish("/dnd/move/start",[_9]);
-_1.addClass(_1.body(),"dojoMove");
-_1.addClass(this.node,"dojoMoveItem");
-},onMoveStop:function(_a){
-_1.publish("/dnd/move/stop",[_a]);
-_1.removeClass(_1.body(),"dojoMove");
-_1.removeClass(this.node,"dojoMoveItem");
-},onFirstMove:function(_b,e){
-},onMove:function(_c,_d,e){
-this.onMoving(_c,_d);
-var s=_c.node.style;
-s.left=_d.l+"px";
-s.top=_d.t+"px";
-this.onMoved(_c,_d);
-},onMoving:function(_e,_f){
-},onMoved:function(_10,_11){
+},onMoveStart:function(_19){
+_8.publish("/dnd/move/start",_19);
+_5.add(_c.body(),"dojoMove");
+_5.add(this.node,"dojoMoveItem");
+},onMoveStop:function(_1a){
+_8.publish("/dnd/move/stop",_1a);
+_5.remove(_c.body(),"dojoMove");
+_5.remove(this.node,"dojoMoveItem");
+},onFirstMove:function(){
+},onMove:function(_1b,_1c){
+this.onMoving(_1b,_1c);
+var s=_1b.node.style;
+s.left=_1c.l+"px";
+s.top=_1c.t+"px";
+this.onMoved(_1b,_1c);
+},onMoving:function(){
+},onMoved:function(){
 }});
-return _1.dnd.Moveable;
+return _12;
 });

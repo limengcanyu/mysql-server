@@ -1,4 +1,3 @@
-//>>built
 define("dijit/Calendar", [
 	"dojo/_base/array", // array.map
 	"dojo/date",
@@ -6,45 +5,37 @@ define("dijit/Calendar", [
 	"dojo/_base/declare", // declare
 	"dojo/dom-attr", // domAttr.get
 	"dojo/dom-class", // domClass.add domClass.contains domClass.remove domClass.toggle
-	"dojo/_base/event", // event.stop
+	"dojo/dom-construct",	// create
 	"dojo/_base/kernel", // kernel.deprecated
 	"dojo/keys", // keys
 	"dojo/_base/lang", // lang.hitch
-	"dojo/_base/sniff", // has("ie")
+	"dojo/on",
+	"dojo/sniff", // has("ie")
 	"./CalendarLite",
 	"./_Widget",
 	"./_CssStateMixin",
 	"./_TemplatedMixin",
-	"./form/DropDownButton",
-	"./hccss"	// not used directly, but sets CSS class on <body>
-], function(array, date, local, declare, domAttr, domClass, event, kernel, keys, lang, has,
+	"./form/DropDownButton"
+], function(array, date, local, declare, domAttr, domClass, domConstruct, kernel, keys, lang, on, has,
 			CalendarLite, _Widget, _CssStateMixin, _TemplatedMixin, DropDownButton){
-
-/*=====
-	var CalendarLite = dijit.CalendarLite;
-	var _CssStateMixin = dijit._CssStateMixin;
-	var _Widget = dijit._Widget;
-	var _TemplatedMixin = dijit._TemplatedMixin;
-	var DropDownButton = dijit.form.DropDownButton;
-=====*/
 
 	// module:
 	//		dijit/Calendar
-	// summary:
-	//		A simple GUI for choosing a date in the context of a monthly calendar.
 
-	var Calendar = declare("dijit.Calendar",
-		[CalendarLite, _Widget, _CssStateMixin], // _Widget for deprecated methods like setAttribute()
-		{
+	// _Widget for deprecated methods like setAttribute()
+	var Calendar = declare("dijit.Calendar", [CalendarLite, _Widget, _CssStateMixin], {
 		// summary:
 		//		A simple GUI for choosing a date in the context of a monthly calendar.
 		//
 		// description:
 		//		See CalendarLite for general description.   Calendar extends CalendarLite, adding:
-		//			- month drop down list
-		//			- keyboard navigation
-		//			- CSS classes for hover/mousepress on date, month, and year nodes
-		//			- support of deprecated methods (will be removed in 2.0)
+		//
+		//		- month drop down list
+		//		- keyboard navigation
+		//		- CSS classes for hover/mousepress on date, month, and year nodes
+		//		- support of deprecated methods (will be removed in 2.0)
+
+		baseClass: "dijitCalendar",
 
 		// Set node classes for various mouse events, see dijit._CssStateMixin for more details
 		cssStateNodes: {
@@ -56,9 +47,9 @@ define("dijit/Calendar", [
 
 		setValue: function(/*Date*/ value){
 			// summary:
-			//      Deprecated.   Use set('value', ...) instead.
+			//		Deprecated.   Use set('value', ...) instead.
 			// tags:
-			//      deprecated
+			//		deprecated
 			kernel.deprecated("dijit.Calendar:setValue() is deprecated.  Use set('value', ...) instead.", "", "2.0");
 			this.set('value', value);
 		},
@@ -76,41 +67,48 @@ define("dijit/Calendar", [
 			}, this.monthNode);
 		},
 
-		buildRendering: function(){
+		postCreate: function(){
 			this.inherited(arguments);
 
 			// Events specific to Calendar, not used in CalendarLite
-			this.connect(this.domNode, "onkeypress", "_onKeyPress");
-			this.connect(this.dateRowsNode, "onmouseover", "_onDayMouseOver");
-			this.connect(this.dateRowsNode, "onmouseout", "_onDayMouseOut");
-			this.connect(this.dateRowsNode, "onmousedown", "_onDayMouseDown");
-			this.connect(this.dateRowsNode, "onmouseup", "_onDayMouseUp");
+			this.own(
+				on(this.domNode, "keydown", lang.hitch(this, "_onKeyDown")),
+				on(this.dateRowsNode, "mouseover", lang.hitch(this, "_onDayMouseOver")),
+				on(this.dateRowsNode, "mouseout", lang.hitch(this, "_onDayMouseOut")),
+				on(this.dateRowsNode, "mousedown", lang.hitch(this, "_onDayMouseDown")),
+				on(this.dateRowsNode, "mouseup", lang.hitch(this, "_onDayMouseUp"))
+			);
 		},
 
 		_onMonthSelect: function(/*Number*/ newMonth){
 			// summary:
-			//      Handler for when user selects a month from the drop down list
+			//		Handler for when user selects a month from the drop down list
 			// tags:
-			//      protected
+			//		protected
 
 			// move to selected month, bounding by the number of days in the month
-			// (ex: dec 31 --> jan 28, not jan 31)
-			this._setCurrentFocusAttr(this.dateFuncObj.add(this.currentFocus, "month",
-				newMonth - this.currentFocus.getMonth()));
+			// (ex: jan 31 --> feb 28, not feb 31)
+			var date = new this.dateClassObj(this.currentFocus);
+			date.setDate(1);
+			date.setMonth(newMonth);
+			var daysInMonth = this.dateModule.getDaysInMonth(date);
+			var currentDate = this.currentFocus.getDate();
+			date.setDate(Math.min(currentDate, daysInMonth));
+			this._setCurrentFocusAttr(date);
 		},
 
 		_onDayMouseOver: function(/*Event*/ evt){
 			// summary:
-			//      Handler for mouse over events on days, sets hovered style
+			//		Handler for mouse over events on days, sets hovered style
 			// tags:
-			//      protected
+			//		protected
 
 			// event can occur on <td> or the <span> inside the td,
 			// set node to the <td>.
 			var node =
 				domClass.contains(evt.target, "dijitCalendarDateLabel") ?
-				evt.target.parentNode :
-				evt.target;
+					evt.target.parentNode :
+					evt.target;
 
 			if(node && (
 				(node.dijitDateValue && !domClass.contains(node, "dijitCalendarDisabledDate"))
@@ -123,14 +121,18 @@ define("dijit/Calendar", [
 
 		_onDayMouseOut: function(/*Event*/ evt){
 			// summary:
-			//      Handler for mouse out events on days, clears hovered style
+			//		Handler for mouse out events on days, clears hovered style
 			// tags:
-			//      protected
+			//		protected
 
-			if(!this._currentNode){ return; }
+			if(!this._currentNode){
+				return;
+			}
 
 			// if mouse out occurs moving from <td> to <span> inside <td>, ignore it
-			if(evt.relatedTarget && evt.relatedTarget.parentNode == this._currentNode){ return; }
+			if(evt.relatedTarget && evt.relatedTarget.parentNode == this._currentNode){
+				return;
+			}
 			var cls = "dijitCalendarHoveredDate";
 			if(domClass.contains(this._currentNode, "dijitCalendarActiveDate")){
 				cls += " dijitCalendarActiveDate";
@@ -158,57 +160,55 @@ define("dijit/Calendar", [
 			// summary:
 			//		Provides keyboard navigation of calendar.
 			// description:
-			//		Called from _onKeyPress() to handle keypress on a stand alone Calendar,
-			//		and also from `dijit.form._DateTimeTextBox` to pass a keypress event
-			//		from the `dijit.form.DateTextBox` to be handled in this widget
+			//		Called from _onKeyDown() to handle keydown on a stand alone Calendar,
+			//		and also from `dijit/form/_DateTimeTextBox` to pass a keydown event
+			//		from the `dijit/form/DateTextBox` to be handled in this widget
 			// returns:
 			//		False if the key was recognized as a navigation key,
-			//		to indicate that the event was handled by Calendar and shouldn't be propogated
+			//		to indicate that the event was handled by Calendar and shouldn't be propagated
 			// tags:
 			//		protected
 			var increment = -1,
 				interval,
 				newValue = this.currentFocus;
-			switch(evt.charOrCode){
+			switch(evt.keyCode){
 				case keys.RIGHT_ARROW:
 					increment = 1;
-					//fallthrough...
+				//fallthrough...
 				case keys.LEFT_ARROW:
 					interval = "day";
-					if(!this.isLeftToRight()){ increment *= -1; }
+					if(!this.isLeftToRight()){
+						increment *= -1;
+					}
 					break;
 				case keys.DOWN_ARROW:
 					increment = 1;
-					//fallthrough...
+				//fallthrough...
 				case keys.UP_ARROW:
 					interval = "week";
 					break;
 				case keys.PAGE_DOWN:
 					increment = 1;
-					//fallthrough...
+				//fallthrough...
 				case keys.PAGE_UP:
 					interval = evt.ctrlKey || evt.altKey ? "year" : "month";
 					break;
 				case keys.END:
 					// go to the next month
-					newValue = this.dateFuncObj.add(newValue, "month", 1);
+					newValue = this.dateModule.add(newValue, "month", 1);
 					// subtract a day from the result when we're done
 					interval = "day";
-					//fallthrough...
+				//fallthrough...
 				case keys.HOME:
 					newValue = new this.dateClassObj(newValue);
 					newValue.setDate(1);
-					break;
-				case keys.ENTER:
-				case " ":
-					this.set("value", this.currentFocus);
 					break;
 				default:
 					return true;
 			}
 
 			if(interval){
-				newValue = this.dateFuncObj.add(newValue, interval, increment);
+				newValue = this.dateModule.add(newValue, interval, increment);
 			}
 
 			this._setCurrentFocusAttr(newValue);
@@ -216,11 +216,12 @@ define("dijit/Calendar", [
 			return false;
 		},
 
-		_onKeyPress: function(/*Event*/ evt){
+		_onKeyDown: function(/*Event*/ evt){
 			// summary:
-			//		For handling keypress events on a stand alone calendar
+			//		For handling keydown events on a stand alone calendar
 			if(!this.handleKey(evt)){
-				event.stop(evt);
+				evt.stopPropagation();
+				evt.preventDefault();
 			}
 		},
 
@@ -228,10 +229,10 @@ define("dijit/Calendar", [
 			// summary:
 			//		Deprecated.   Notification that a date cell was selected.  It may be the same as the previous value.
 			// description:
-			//      Formerly used by `dijit.form._DateTimeTextBox` (and thus `dijit.form.DateTextBox`)
-			//      to get notification when the user has clicked a date.  Now onExecute() (above) is used.
+			//		Formerly used by `dijit/form/_DateTimeTextBox` (and thus `dijit/form/DateTextBox`)
+			//		to get notification when the user has clicked a date.  Now onExecute() (above) is used.
 			// tags:
-			//      protected
+			//		protected
 		},
 
 		onChange: function(value){
@@ -245,11 +246,11 @@ define("dijit/Calendar", [
 			// dateObject: Date
 			// locale: String?
 			// tags:
-			//      extension
+			//		extension
 
-/*=====
-			return ""; // String
-=====*/
+			/*=====
+			 return ""; // String
+			 =====*/
 		}
 	});
 
@@ -258,7 +259,8 @@ define("dijit/Calendar", [
 		//		DropDownButton for the current month.    Displays name of current month
 		//		and a list of month names in the drop down
 
-		onMonthSelect: function(){ },
+		onMonthSelect: function(){
+		},
 
 		postCreate: function(){
 			this.inherited(arguments);
@@ -278,11 +280,11 @@ define("dijit/Calendar", [
 			// the center <TH> overlaps the right <TH> (due to a browser bug).
 			this.containerNode.innerHTML =
 				(has("ie") == 6 ? "" : "<div class='dijitSpacer'>" + this.dropDown.domNode.innerHTML + "</div>") +
-				"<div class='dijitCalendarMonthLabel dijitCalendarCurrentMonthLabel'>" +  monthNames[month.getMonth()] + "</div>";
+					"<div class='dijitCalendarMonthLabel dijitCalendarCurrentMonthLabel'>" + monthNames[month.getMonth()] + "</div>";
 		}
 	});
 
-	Calendar._MonthDropDown = declare("dijit.Calendar._MonthDropDown", [_Widget, _TemplatedMixin], {
+	Calendar._MonthDropDown = declare("dijit.Calendar._MonthDropDown", [_Widget, _TemplatedMixin, _CssStateMixin], {
 		// summary:
 		//		The list-of-months drop down from the MonthDropDownButton
 
@@ -291,13 +293,20 @@ define("dijit/Calendar", [
 		//		(ex: ["January", "February", undefined, "April", ...])
 		months: [],
 
-		templateString: "<div class='dijitCalendarMonthMenu dijitMenu' " +
-			"data-dojo-attach-event='onclick:_onClick,onmouseover:_onMenuHover,onmouseout:_onMenuHover'></div>",
+		baseClass: "dijitCalendarMonthMenu dijitMenu",
+
+		templateString: "<div data-dojo-attach-event='ondijitclick:_onClick'></div>",
 
 		_setMonthsAttr: function(/*String[]*/ months){
-			this.domNode.innerHTML = array.map(months, function(month, idx){
-					return month ? "<div class='dijitCalendarMonthLabel' month='" + idx +"'>" + month + "</div>" : "";
-				}).join("");
+			this.domNode.innerHTML = "";
+			array.forEach(months, function(month, idx){
+				var div = domConstruct.create("div", {
+					className: "dijitCalendarMonthLabel",
+					month: idx,
+					innerHTML: month
+				}, this.domNode);
+				div._cssState = "dijitCalendarMonthLabel";	// trigger _CSSStateMixin magic; property, not attribute.
+			}, this);
 		},
 
 		_onClick: function(/*Event*/ evt){
@@ -307,10 +316,6 @@ define("dijit/Calendar", [
 		onChange: function(/*Number*/ /*===== month =====*/){
 			// summary:
 			//		Callback when month is selected from drop down
-		},
-
-		_onMenuHover: function(evt){
-			domClass.toggle(evt.target, "dijitCalendarMonthLabelHover", evt.type == "mouseover");
 		}
 	});
 

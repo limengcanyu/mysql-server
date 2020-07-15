@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -86,6 +86,14 @@ class Plugin_gcs_events_handler : public Gcs_communication_event_listener,
   */
   void set_stop_wait_timeout(ulong timeout) { stop_wait_timeout = timeout; }
 
+  /**
+    This function disable read-only mode when member version is compatible with
+    group.
+
+    @param[in]  force_check  Compatibility is mandatory re-checked
+  */
+  void disable_read_mode_for_compatible_members(bool force_check = false) const;
+
  private:
   /*
    Individual handling methods for all possible message types
@@ -143,7 +151,7 @@ class Plugin_gcs_events_handler : public Gcs_communication_event_listener,
     This method handles the election of a new primary node when the plugin runs
     in single primary mode.
 
-    @param enum_primary_election_mode election mode
+    @param election_mode     election type
     @param suggested_primary what should be the next primary to elect
 
     @note This function unsets the super read only mode on primary node
@@ -221,34 +229,26 @@ class Plugin_gcs_events_handler : public Gcs_communication_event_listener,
       1) GTID assignment block size
       2) Write set hash algorithm
 
-    @return
-      @retval 0     Joiner has the same value as all other members
-      @retval !=0   Otherwise
+    @retval 0     Joiner has the same value as all other members
+    @retval !=0   Otherwise
   */
   int compare_member_option_compatibility() const;
 
   /**
     Check if a member is not entering a group where an action is running
 
-    @return
-      @retval false     no group action is running
-      @retval true   a group action is running
+    @retval false     no group action is running
+    @retval true   a group action is running
   */
   bool is_group_running_a_configuration_change() const;
 
   /**
     Check if the group is running a primary election
 
-    @return
-      @retval false  no primary election is running
-      @retval true   a primary election is running
+    @retval false  no primary election is running
+    @retval true   a primary election is running
   */
   bool is_group_running_a_primary_election() const;
-
-  /**
-    This method submits a request to leave the group
-  */
-  void leave_group_on_error() const;
 
   /**
     This method checks if member was expelled from the group due
@@ -256,9 +256,8 @@ class Plugin_gcs_events_handler : public Gcs_communication_event_listener,
 
     @param[in]  view        the view delivered by the GCS
 
-    @return
-        @retval true   the member was expelled
-        @retval false  otherwise
+    @retval true   the member was expelled
+    @retval false  otherwise
   */
   bool was_member_expelled_from_group(const Gcs_view &view) const;
 

@@ -354,8 +354,6 @@ mysqld_ld_preload_text() {
 
 # set_malloc_lib LIB
 # - If LIB is empty, do nothing and return
-# - If LIB is 'tcmalloc', look for tcmalloc shared library in $malloc_dirs.
-#   tcmalloc is part of the Google perftools project.
 # - If LIB is an absolute path, assume it is a malloc shared library
 #
 # Put LIB in mysqld_ld_preload, which will be added to LD_PRELOAD when
@@ -364,24 +362,6 @@ set_malloc_lib() {
   # This list is kept intentionally simple.
   malloc_dirs="/usr/lib /usr/lib64 /usr/lib/i386-linux-gnu /usr/lib/x86_64-linux-gnu"
   malloc_lib="$1"
-
-  if [ "$malloc_lib" = tcmalloc ]; then
-    malloc_lib=
-    for libdir in `echo $malloc_dirs`; do
-      for flavor in _minimal '' _and_profiler _debug; do
-        tmp="$libdir/libtcmalloc$flavor.so"
-        #log_notice "DEBUG: Checking for malloc lib '$tmp'"
-        [ -r "$tmp" ] || continue
-        malloc_lib="$tmp"
-        break 2
-      done
-    done
-
-    if [ -z "$malloc_lib" ]; then
-      log_error "no shared library for --malloc-lib=tcmalloc found in $malloc_dirs"
-      exit 1
-    fi
-  fi
 
   # Allow --malloc-lib='' to override other settings
   [ -z  "$malloc_lib" ] && return
@@ -406,8 +386,7 @@ set_malloc_lib() {
       esac
       ;;
     *)
-      log_error "--malloc-lib must be an absolute path or 'tcmalloc'; " \
-        "ignoring value '$malloc_lib'"
+      log_error "--malloc-lib must be an absolute path ignoring value '$malloc_lib'"
       exit 1
       ;;
   esac
@@ -621,17 +600,17 @@ then
           #
           # Note: If directory of log file name does not exists or
           #       if write or execute permissions are missing on directory then
-          #       --log-error is set  $DATADIR/`@HOSTNAME@`.err
+          #       --log-error is set  $DATADIR/`hostname`.err
 
           log_dir_name="$(dirname "$err_log")";
           if [ ! -d "$log_dir_name" ]
           then
             log_notice "Directory "$log_dir_name" does not exists.";
-            err_log=$DATADIR/`@HOSTNAME@`.err
+            err_log=$DATADIR/`hostname`.err
           elif [ ! -x "$log_dir_name" -o ! -w "$log_dir_name" ]
           then
             log_notice "Do not have Execute or Write permissions on directory "$log_dir_name".";
-            err_log=$DATADIR/`@HOSTNAME@`.err
+            err_log=$DATADIR/`hostname`.err
           else
             err_log=$(cd $log_dir_name && pwd -P)/$(basename "$err_log")
           fi
@@ -639,8 +618,8 @@ then
       * ) err_log="$DATADIR/$err_log" ;;
     esac
   else
-    err_log=$DATADIR/`@HOSTNAME@`.err
-    err_log_append=`@HOSTNAME@`.err
+    err_log=$DATADIR/`hostname`.err
+    err_log_append=`hostname`.err
   fi
 
   append_arg_to_args "--log-error=$err_log_append"
@@ -740,8 +719,8 @@ fi
 
 if test -z "$pid_file"
 then
-  pid_file="$DATADIR/`@HOSTNAME@`.pid"
-  pid_file_append="`@HOSTNAME@`.pid"
+  pid_file="$DATADIR/`hostname`.pid"
+  pid_file_append="`hostname`.pid"
 else
   pid_file_append="$pid_file"
   case "$pid_file" in

@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1997, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1997, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -54,11 +54,10 @@ sym_node_t *sym_tab_add_int_lit(sym_tab_t *sym_tab, /*!< in: symbol table */
                                 ulint val);         /*!< in: integer value */
 /** Adds an string literal to a symbol table.
  @return symbol table node */
-sym_node_t *sym_tab_add_str_lit(
-    sym_tab_t *sym_tab, /*!< in: symbol table */
-    const byte *str,    /*!< in: string with no quotes around
-                        it */
-    ulint len);         /*!< in: string length */
+sym_node_t *sym_tab_add_str_lit(sym_tab_t *sym_tab, /*!< in: symbol table */
+                                const byte *str, /*!< in: string with no quotes
+                                                 around it */
+                                ulint len);      /*!< in: string length */
 /** Add a bound literal to a symbol table.
  @return symbol table node */
 sym_node_t *sym_tab_add_bound_lit(
@@ -221,7 +220,5 @@ struct sym_tab_t {
   mem_heap_t *heap; /*!< memory heap from which we can
                     allocate space */
 };
-
-#include "pars0sym.ic"
 
 #endif

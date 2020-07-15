@@ -1,4 +1,4 @@
-# Copyright (c) 2010, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -27,6 +27,10 @@ INCLUDE(CheckCSourceRuns)
 
 SET(LINUX 1)
 
+# OS display name (version_compile_os etc).
+# Used by the test suite to ignore bugs on some platforms.
+SET(SYSTEM_TYPE "Linux")
+
 IF(EXISTS "/etc/SuSE-release")
   SET(LINUX_SUSE 1)
 ENDIF()
@@ -35,9 +39,39 @@ IF(EXISTS "/etc/alpine-release")
   SET(LINUX_ALPINE 1)
 ENDIF()
 
+IF(EXISTS "/etc/fedora-release")
+  SET(LINUX_FEDORA 1)
+  FILE(READ "/etc/fedora-release" FEDORA_RELEASE)
+  IF(FEDORA_RELEASE MATCHES "Fedora" AND
+      FEDORA_RELEASE MATCHES "28")
+    SET(LINUX_FEDORA_28 1)
+  ENDIF()
+ENDIF()
+
+IF(EXISTS "/etc/os-release")
+  FILE(READ "/etc/os-release" MY_OS_RELEASE)
+  IF(MY_OS_RELEASE MATCHES "Ubuntu" AND
+      MY_OS_RELEASE MATCHES "16.04")
+    SET(LINUX_UBUNTU_16_04 1)
+  ENDIF()
+  IF(MY_OS_RELEASE MATCHES "Debian")
+    SET(LINUX_DEBIAN 1)
+  ELSEIF(MY_OS_RELEASE MATCHES "Ubuntu")
+    SET(LINUX_UBUNTU 1)
+  ENDIF()
+ENDIF()
+
+IF(MY_HOST_SYSTEM_VERSION AND MY_HOST_FILESYSTEM_NAME)
+  IF( MY_HOST_SYSTEM_VERSION MATCHES "\\.el6(uek)?\\."
+      OR
+      MY_HOST_FILESYSTEM_NAME MATCHES "\\.el6\\.")
+    SET(LINUX_RHEL6 1)
+  ENDIF()
+ENDIF()
+
 # We require at least GCC 5.3 or Clang 3.4.
 IF(NOT FORCE_UNSUPPORTED_COMPILER)
-  IF(CMAKE_COMPILER_IS_GNUCC)
+  IF(MY_COMPILER_IS_GNU)
     EXECUTE_PROCESS(COMMAND ${CMAKE_C_COMPILER} -dumpversion
                     OUTPUT_STRIP_TRAILING_WHITESPACE
                     OUTPUT_VARIABLE GCC_VERSION)
@@ -50,7 +84,7 @@ IF(NOT FORCE_UNSUPPORTED_COMPILER)
       MESSAGE(${WARNING_LEVEL}
         "GCC 5.3 or newer is required (-dumpversion says ${GCC_VERSION})")
     ENDIF()
-  ELSEIF(CMAKE_C_COMPILER_ID MATCHES "Clang")
+  ELSEIF(MY_COMPILER_IS_CLANG)
     CHECK_C_SOURCE_RUNS("
       int main()
       {

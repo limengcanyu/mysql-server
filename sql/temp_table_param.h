@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -23,21 +23,25 @@
 #ifndef TEMP_TABLE_PARAM_INCLUDED
 #define TEMP_TABLE_PARAM_INCLUDED
 
+#include <sys/types.h>
 #include <vector>
 
 #include "my_base.h"
+#include "my_inttypes.h"
+#include "sql/field.h"
+#include "sql/mem_root_allocator.h"
 #include "sql/mem_root_array.h"
-#include "sql/sql_list.h"
 #include "sql/thr_malloc.h"
-#include "sql/window.h"
 
 class KEY;
-class Copy_field;
 class Item;
+class Item_copy;
 class Window;
+struct CHARSET_INFO;
+struct MEM_ROOT;
 
 template <typename T>
-using Memroot_vector = std::vector<T, Memroot_allocator<T>>;
+using Mem_root_vector = std::vector<T, Mem_root_allocator<T>>;
 
 /**
    Helper class for copy_funcs(); represents an Item to copy from table to
@@ -76,8 +80,8 @@ class Temp_table_param {
     @see setup_copy_fields
     @see copy_fields
   */
-  Memroot_vector<Item_copy *> grouped_expressions;
-  Memroot_vector<Copy_field> copy_fields;
+  Mem_root_vector<Item_copy *> grouped_expressions;
+  Mem_root_vector<Copy_field> copy_fields;
 
   uchar *group_buff;
   Func_ptr_array *items_to_copy; /* Fields in tmp table */
@@ -88,7 +92,13 @@ class Temp_table_param {
     duplicate elimination, etc. There is at most one such index.
   */
   KEY *keyinfo;
-  ha_rows end_write_records;
+
+  /**
+    LIMIT (maximum number of rows) for this temp table, or HA_POS_ERROR
+    for no limit. Enforced by MaterializeIterator when writing to the table.
+   */
+  ha_rows end_write_records{HA_POS_ERROR};
+
   /**
     Number of normal fields in the query, including those referred to
     from aggregate functions. Hence, "SELECT `field1`,
@@ -118,7 +128,17 @@ class Temp_table_param {
   uint sum_func_count;
   uint hidden_field_count;
   uint group_parts, group_length, group_null_parts;
-  uint quick_group;
+  /**
+    Whether we allow running GROUP BY processing into a temporary table,
+    i.e., keeping many different aggregations going at once without
+    having ordered input. This is usually the case, but is currently not
+    supported for aggregation UDFs, aggregates with DISTINCT, or ROLLUP.
+
+    Note that even if this is true, the optimizer may choose to not use
+    a temporary table, as it is often more efficient to just read along
+    an index.
+   */
+  bool allow_group_via_temp_table{true};
   /**
     Number of outer_sum_funcs i.e the number of set functions that are
     aggregated in a query block outer to this subquery.
@@ -160,6 +180,12 @@ class Temp_table_param {
   /// Whether the UNIQUE index can be promoted to PK
   bool can_use_pk_for_unique;
 
+  /// Whether UNIQUE keys should always be implemented by way of a hidden
+  /// hash field, never a unique index. Needed for materialization of mixed
+  /// UNION ALL / UNION DISTINCT queries (see comments in
+  /// create_result_table()).
+  bool force_hash_field_for_unique{false};
+
   /// (Last) window's tmp file step can be skipped
   bool m_window_short_circuit;
 
@@ -170,12 +196,11 @@ class Temp_table_param {
   Window *m_window;
 
   Temp_table_param(MEM_ROOT *mem_root = *THR_MALLOC)
-      : grouped_expressions(Memroot_allocator<Item_copy *>(mem_root)),
-        copy_fields(Memroot_allocator<Copy_field>(mem_root)),
+      : grouped_expressions(Mem_root_allocator<Item_copy *>(mem_root)),
+        copy_fields(Mem_root_allocator<Copy_field>(mem_root)),
         group_buff(nullptr),
         items_to_copy(nullptr),
-        keyinfo(NULL),
-        end_write_records(0),
+        keyinfo(nullptr),
         field_count(0),
         func_count(0),
         sum_func_count(0),
@@ -183,10 +208,9 @@ class Temp_table_param {
         group_parts(0),
         group_length(0),
         group_null_parts(0),
-        quick_group(1),
         outer_sum_func_count(0),
         using_outer_summary_function(false),
-        table_charset(NULL),
+        table_charset(nullptr),
         schema_table(false),
         precomputed_group_by(false),
         force_copy_fields(false),

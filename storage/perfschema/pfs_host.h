@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -33,6 +33,7 @@
 #include <atomic>
 
 #include "lf.h"
+#include "my_hostname.h" /* HOSTNAME_LENGTH */
 #include "my_inttypes.h"
 #include "mysql_com.h"
 #include "storage/perfschema/pfs_con_slice.h"
@@ -94,7 +95,7 @@ struct PFS_ALIGNED PFS_host : PFS_connection_slice {
 
   const PFS_memory_shared_stat *read_instr_class_memory_stats() const {
     if (!m_has_memory_stats) {
-      return NULL;
+      return nullptr;
     }
     return m_instr_class_memory_stats;
   }

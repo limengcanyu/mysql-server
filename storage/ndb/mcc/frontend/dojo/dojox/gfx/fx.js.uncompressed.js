@@ -1,8 +1,6 @@
-//>>built
-define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Color", "dojo/_base/array", "dojo/_base/fx", "dojo/_base/connect"], 
-  function(lang, g, m, Color, arr, fx, Hub){
+define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Color", "dojo/_base/array", "dojo/_base/fx", "dojo/_base/connect", "dojo/sniff"], 
+  function(lang, g, m, Color, arr, fx, Hub, has){
 	var fxg = g.fx = {};
-	/*===== g = dojox.gfx; fxg = dojox.gfx.fx; =====*/
 
 	// Generic interpolators. Should they be moved to dojox.fx?
 
@@ -64,6 +62,17 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 				ret.push(this.original);
 				return;
 			}
+ 			// Adding support for custom matrices
+ 			if(t.name == "matrix"){
+ 				if((t.start instanceof m.Matrix2D) && (t.end instanceof m.Matrix2D)){
+ 					var transfMatrix = new m.Matrix2D();
+ 					for(var p in t.start) {
+ 						transfMatrix[p] = (t.end[p] - t.start[p])*r + t.start[p];
+ 					}
+ 					ret.push(transfMatrix);
+ 				}
+ 				return;
+ 			}
 			if(!(t.name in m)){ return; }
 			var f = m[t.name];
 			if(typeof f != "function"){
@@ -128,9 +137,11 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 
 	fxg.animateStroke = function(/*Object*/ args){
 		// summary:
-		//	Returns an animation which will change stroke properties over time.
+		//		Returns an animation which will change stroke properties over time.
+		// args:
+		//		an object defining the animation setting.
 		// example:
-		//	|	dojox.gfx.fx.animateStroke{{
+		//	|	fxg.animateStroke{{
 		//	|		shape: shape,
 		//	|		duration: 500,
 		//	|		color: {start: "red", end: "green"},
@@ -177,10 +188,12 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 
 	fxg.animateFill = function(/*Object*/ args){
 		// summary:
-		//	Returns an animation which will change fill color over time.
-		//	Only solid fill color is supported at the moment
+		//		Returns an animation which will change fill color over time.
+		//		Only solid fill color is supported at the moment
+		// args:
+		//		an object defining the animation setting.
 		// example:
-		//	|	dojox.gfx.fx.animateFill{{
+		//	|	gfx.animateFill{{
 		//	|		shape: shape,
 		//	|		duration: 500,
 		//	|		color: {start: "red", end: "green"}
@@ -200,9 +213,11 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 
 	fxg.animateFont = function(/*Object*/ args){
 		// summary:
-		//	Returns an animation which will change font properties over time.
+		//		Returns an animation which will change font properties over time.
+		// args:
+		//		an object defining the animation setting.
 		// example:
-		//	|	dojox.gfx.fx.animateFont{{
+		//	|	gfx.animateFont{{
 		//	|		shape: shape,
 		//	|		duration: 500,
 		//	|		variant: {values: ["normal", "small-caps"]},
@@ -242,9 +257,11 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 
 	fxg.animateTransform = function(/*Object*/ args){
 		// summary:
-		//	Returns an animation which will change transformation over time.
+		//		Returns an animation which will change transformation over time.
+		// args:
+		//		an object defining the animation setting.
 		// example:
-		//	|	dojox.gfx.fx.animateTransform{{
+		//	|	gfx.animateTransform{{
 		//	|		shape: shape,
 		//	|		duration: 500,
 		//	|		transform: [
@@ -259,6 +276,73 @@ define("dojox/gfx/fx", ["dojo/_base/lang", "./_base", "./matrix", "dojo/_base/Co
 			this.curve = new InterpolTransform(args.transform, original);
 		});
 		Hub.connect(anim, "onAnimate", shape, "setTransform");
+		if(g.renderer === "svg" && (has("ie") >= 9 || has("ff"))){
+			// fix http://bugs.dojotoolkit.org/ticket/16879
+			var handlers = [
+					Hub.connect(anim, "onBegin", anim, function(){
+						var parent = shape.getParent();
+						while(parent && parent.getParent){
+							parent = parent.getParent();
+						}
+						if(parent){
+							shape.__svgContainer = parent.rawNode.parentNode;
+							shape.__svgRoot = parent.rawNode;
+							if(shape.__svgRoot && shape.__svgRoot.getAttribute){
+								shape.__svgWidth = parseInt(shape.__svgRoot.getAttribute("width"), 10);
+								if(isNaN(shape.__svgWidth)){
+									delete shape.__svgWidth;
+								}
+							}
+						}
+					}),
+					Hub.connect(anim, "onAnimate", anim, function(){
+						try{
+							if(shape.__svgContainer){
+								var ov = shape.__svgContainer.style.visibility;
+								shape.__svgContainer.style.visibility = "visible";
+								var pokeNode = shape.__svgContainer.offsetHeight;
+								shape.__svgContainer.style.visibility = ov;
+								var width = shape.__svgWidth;
+								if(!isNaN(width)){
+									try{
+										shape.__svgRoot.setAttribute("width", width  - 0.000005);
+										shape.__svgRoot.setAttribute("width", width);
+									}catch(ignore){}
+								}
+							}
+						}catch(e){}
+					}),
+					Hub.connect(anim, "onEnd", anim, function(){
+						arr.forEach(handlers, Hub.disconnect);
+						if(shape.__svgContainer){
+							var sn = shape.__svgContainer;
+							if(sn.getAttribute("__gotVis") == null){
+								sn.setAttribute("__gotVis", true);
+								var ov = shape.__svgContainer.style.visibility;
+								var root = shape.__svgRoot;
+								var width = shape.__svgWidth;
+								sn.style.visibility = "visible";
+								setTimeout(function(){
+									try{
+										sn.style.visibility = ov;
+										sn.removeAttribute("__gotVis");
+										sn = null;
+										try{
+											if(!isNaN(width)){
+												root.setAttribute("width", width - 0.000005);
+												root.setAttribute("width", width);
+											}
+										}catch(ignore){}
+									}catch(e){}
+								},100);
+							}
+						}
+						delete shape.__svgContainer;
+						delete shape.__svgRoot;
+						delete shape.__svgWidth;
+					})
+				];
+		}
 		return anim; // dojo.Animation
 	};
 	

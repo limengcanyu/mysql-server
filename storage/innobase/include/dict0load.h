@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2019, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -113,12 +113,6 @@ flag in the table object we return. */
 dict_table_t *dict_load_table(const char *name, bool cached,
                               dict_err_ignore_t ignore_err);
 
-/** Loads a table object based on the table id.
- @return table; NULL if table does not exist */
-dict_table_t *dict_load_table_on_id(
-    table_id_t table_id,           /*!< in: table id */
-    dict_err_ignore_t ignore_err); /*!< in: errors to ignore
-                                   when loading the table */
 /** This function is called when the database is booted.
  Loads system table index definitions except for the clustered index which
  is added to the dictionary cache at booting before calling this function. */
@@ -157,10 +151,9 @@ const rec_t *dict_startscan_system(
     dict_system_id_t system_id); /*!< in: which system table to open */
 /** This function get the next system table record as we scan the table.
  @return the record if found, NULL if end of scan. */
-const rec_t *dict_getnext_system(
-    btr_pcur_t *pcur, /*!< in/out: persistent cursor
-                      to the record */
-    mtr_t *mtr);      /*!< in: the mini-transaction */
+const rec_t *dict_getnext_system(btr_pcur_t *pcur, /*!< in/out: persistent
+                                                   cursor to the record */
+                                 mtr_t *mtr); /*!< in: the mini-transaction */
 
 /** This function parses a SYS_TABLESPACES record, extracts necessary
  information from the record and returns to caller.
@@ -202,6 +195,10 @@ tablespaces to dictionary table mysql.tablespaces */
 using missing_sys_tblsp_t = std::set<fil_space_t *, space_compare>;
 extern missing_sys_tblsp_t missing_spaces;
 
-#include "dict0load.ic"
+/** This bool denotes if we found a Table or Partition with discarded Tablespace
+during load of SYS_TABLES (in dict_check_sys_tables).
+
+We use it to stop upgrade from 5.7 to 8.0 if there are discarded Tablespaces. */
+extern bool has_discarded_tablespaces;
 
 #endif

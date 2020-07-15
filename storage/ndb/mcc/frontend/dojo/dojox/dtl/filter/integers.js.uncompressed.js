@@ -1,14 +1,16 @@
-//>>built
 define("dojox/dtl/filter/integers", [
 	"dojo/_base/lang",
 	"../_base"
 ], function(lang,dd){
-	/*=====
-		dd = dojox.dtl;
-	=====*/
-	lang.getObject("dojox.dtl.filter.integers", true);
 
-	lang.mixin(dd.filter.integers, {
+	var integers = lang.getObject("filter.integers", true, dd);
+	/*=====
+	 integers = {
+	 	// TODO: summary
+	 };
+	 =====*/
+
+	lang.mixin(integers, {
 		add: function(value, arg){
 			value = parseInt(value, 10);
 			arg = parseInt(arg, 10);
@@ -34,5 +36,6 @@ define("dojox/dtl/filter/integers", [
 			return (isNaN(value) ? 0 : value);
 		}
 	});
-	return dojox.dtl.filter.integers;
+
+	return integers;
 });

@@ -1,7 +1,6 @@
-//>>built
-define("dojox/highlight/languages/pygments/javascript", ["dojox/main", "../../_base"], function(dojox){
+define("dojox/highlight/languages/pygments/javascript", ["../../_base"], function(dh){
 
-	var dh = dojox.highlight, dhc = dh.constants;
+	var dhc = dh.constants;
 	dh.languages.javascript = {
 		defaultMode: {
 			lexems: ["\\b[a-zA-Z]+"],
@@ -19,7 +18,7 @@ define("dojox/highlight/languages/pygments/javascript", ["dojox/main", "../../_b
 					"Array": 1, "Boolean": 1, "Date": 1, "Error": 1, "Function": 1, "Math": 1,
 					"netscape": 1, "Number": 1, "Object": 1, "Packages": 1, "RegExp": 1,
 					"String": 1, "sun": 1, "decodeURI": 1, "decodeURIComponent": 1,
-					"encodeURI": 1, "encodeURIComponent": 1, "Error": 1, "eval": 1,
+					"encodeURI": 1, "encodeURIComponent": 1, "eval": 1,
 					"isFinite": 1, "isNaN": 1, "parseFloat": 1, "parseInt": 1, "document": 1,
 					"window": 1
 				},

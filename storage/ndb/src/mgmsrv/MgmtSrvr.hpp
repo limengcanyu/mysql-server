@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -154,17 +154,18 @@ public:
    * Copy the string if you are not going to use it immediately.
    */
   int status(int nodeId,
-	     ndb_mgm_node_status * status,
-	     Uint32 * version,
-	     Uint32 * mysql_version,
-	     Uint32 * phase,
-	     bool * systemShutdown,
-	     Uint32 * dynamicId,
-	     Uint32 * nodeGroup,
-	     Uint32 * connectCount,
-	     const char **address,
+             ndb_mgm_node_status * status,
+             Uint32 * version,
+             Uint32 * mysql_version,
+             Uint32 * phase,
+             bool * systemShutdown,
+             Uint32 * dynamicId,
+             Uint32 * nodeGroup,
+             Uint32 * connectCount,
+             const char **address,
              char *addr_buf,
-             size_t addr_buf_size);
+             size_t addr_buf_size,
+             bool* is_single_user);
 
   /**
    *   Stop a list of nodes
@@ -192,7 +193,7 @@ public:
 
   /**
    *   Start DB process by sending START_ORD to it.
-   *   @param   processId: Id of the DB process to start
+   *   @param   processId  Id of the DB process to start
    *   @return 0 if succeeded, otherwise: as stated above, plus:
    */
  int sendSTART_ORD(int processId);
@@ -236,8 +237,8 @@ public:
 
   /**
    *   Insert an error in a DB process.
-   *   @param   processId: Id of the DB process
-   *   @param   errorNo: The error number. > 0.
+   *   @param   processId  Id of the DB process
+   *   @param   errorNo    The error number. > 0.
    *   @return  0 if succeeded, otherwise: as stated above, plus:
    *            INVALID_ERROR_NUMBER
    */
@@ -312,8 +313,8 @@ public:
 
   /**
    *   Get error text
-   * 
-   *   @param   errorCode: Error code to get a match error text for.
+   *
+   *   @param   errorCode  Error code to get a match error text for.
    *   @return  The error text.
    */
   const char* getErrorText(int errorCode, char *buf, int buf_sz);
@@ -372,20 +373,23 @@ private:
                   Uint32& version, Uint32& mysql_version,
                   const char **address,
                   char *addr_buf,
-                  size_t addr_buf_size);
+                  size_t addr_buf_size,
+                  bool& is_single_user);
   void status_mgmd(NodeId node_id,
                    ndb_mgm_node_status& node_status,
                    Uint32& version, Uint32& mysql_version,
                    const char **address,
                    char *addr_buf,
-                   size_t addr_buf_size);
+                   size_t addr_buf_size,
+                   bool& is_single_user);
 
   int sendVersionReq(int processId,
                      Uint32 &version,
                      Uint32& mysql_version,
                      const char **address,
                      char *addr_buf,
-                     size_t addr_buf_size);
+                     size_t addr_buf_size,
+                     bool& is_single_user);
 
   int sendStopMgmd(NodeId nodeId,
                    bool abort,
@@ -409,11 +413,11 @@ private:
 		   bool nostart,
 		   bool initialStart,
                    int *stopSelf);
- 
+
   /**
    *   Check if it is possible to send a signal to a (DB) process
    *
-   *   @param   processId: Id of the process to send to
+   *   @param   nodeId  Id of the node to send to
    *   @return  0 OK, 1 process dead, 2 API or MGMT process, 3 not configured
    */
   int okToSendTo(NodeId nodeId, bool unCond = false);
@@ -461,7 +465,9 @@ private:
   /**
    * An event from <i>nodeId</i> has arrived
    */
-  void eventReport(const Uint32 * theData, Uint32 len);
+  void eventReport(const Uint32 * theSignalData,
+                   Uint32 len,
+                   const Uint32 * theData);
  
   class TransporterFacade * theFacade;
 
@@ -492,11 +498,16 @@ private:
 public:
   /* Get copy of configuration packed with base64 */
   bool get_packed_config(ndb_mgm_node_type nodetype,
-                         BaseString& buf64, BaseString& error);
+                         BaseString& buf64,
+                         BaseString& error,
+                         bool v2,
+                         Uint32 node_id);
 
   /* Get copy of configuration packed with base64 from node nodeid */
   bool get_packed_config_from_node(NodeId nodeid,
-                         BaseString& buf64, BaseString& error);
+                         BaseString& buf64,
+                         BaseString& error,
+                         bool v2);
 
   void print_config(const char* section_filter = NULL,
                     NodeId nodeid_filter = 0,
@@ -538,11 +549,15 @@ private:
                         Uint32 timeout_ms);
   int try_alloc(NodeId id,
                 ndb_mgm_node_type type,
-                Uint32 timeout_ms);
-  bool try_alloc_from_list(NodeId& nodeid,
-                           ndb_mgm_node_type type,
-                           Uint32 timeout_ms,
-                           Vector<PossibleNode>& nodes_info);
+                Uint32 timeout_ms,
+                int& error_code,
+                BaseString& error_string);
+  int try_alloc_from_list(NodeId& nodeid,
+                          ndb_mgm_node_type type,
+                          Uint32 timeout_ms,
+                          Vector<PossibleNode>& nodes_info,
+                          int& error_code,
+                          BaseString& error_string);
   int find_node_type(NodeId nodeid,
                      ndb_mgm_node_type type,
                      const struct sockaddr* client_addr,

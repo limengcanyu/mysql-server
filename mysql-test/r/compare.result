@@ -52,6 +52,8 @@ SELECT CHAR(30) = '', '' = CHAR(30);
 CHAR(30) = ''	'' = CHAR(30)
 0	0
 create table t1 (a tinyint(1),b binary(1));
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 insert into t1 values (0x01,0x01);
 select * from t1 where a=b;
 a	b
@@ -63,6 +65,11 @@ Warnings:
 Warning	1292	Truncated incorrect DOUBLE value: '\x01'
 drop table if exists t1;
 CREATE TABLE  t1 (b int(2) zerofill, c int(2) zerofill);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 INSERT INTO t1 (b,c) VALUES (1,2), (1,1), (2,2);
 SELECT CONCAT(b,c), CONCAT(b,c) = '0101' FROM t1;
 CONCAT(b,c)	CONCAT(b,c) = '0101'
@@ -117,6 +124,8 @@ DROP TABLE t1;
 SET sql_mode = default;
 End of 5.0 tests
 CREATE TABLE t1(a INT ZEROFILL);
+Warnings:
+Warning	1681	The ZEROFILL attribute is deprecated and will be removed in a future release. Use the LPAD function to zero-pad numbers, or store the formatted numbers in a CHAR column.
 SELECT 1 FROM t1 WHERE t1.a IN (1, t1.a) AND t1.a=2;
 1
 DROP TABLE t1;
@@ -139,3 +148,33 @@ ROW(a, '1') > ROW('1', '1')
 1
 DROP TABLE t1;
 SET NAMES default;
+#
+# Bug#30961924 AND OF TWO PREDICATES WITH DIFFERENT COLLATION ON SAME COLUMN GIVES WRONG RESULT
+#
+CREATE TABLE t1(
+firstname CHAR(20),
+lastname CHAR(20)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+INSERT INTO t1 VALUES("john","doe"), ("John","Doe");
+SELECT * FROM t1 WHERE firstname = 'john';
+firstname	lastname
+john	doe
+John	Doe
+SELECT * FROM t1 WHERE firstname = 'john' COLLATE utf8mb4_0900_ai_ci;
+firstname	lastname
+john	doe
+John	Doe
+SELECT * FROM t1 WHERE firstname = 'john' COLLATE utf8mb4_0900_as_cs;
+firstname	lastname
+john	doe
+SELECT * FROM t1
+WHERE firstname = 'john' COLLATE utf8mb4_0900_ai_ci AND
+firstname = 'john' COLLATE utf8mb4_0900_as_cs;
+firstname	lastname
+john	doe
+SELECT * FROM t1
+WHERE firstname = 'john' COLLATE utf8mb4_0900_as_cs AND
+firstname = 'john' COLLATE utf8mb4_0900_ai_ci;
+firstname	lastname
+john	doe
+DROP TABLE t1;

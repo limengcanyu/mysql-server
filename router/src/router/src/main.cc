@@ -1,5 +1,5 @@
 ﻿/*
-  Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -82,6 +82,7 @@
 #include "mysql/harness/tty.h"
 #include "mysql/harness/vt100_filter.h"
 #include "mysql_session.h"
+#include "mysqlrouter/mysql_client_thread_token.h"
 #include "random_generator.h"
 #include "router_app.h"
 #include "utils.h"
@@ -152,7 +153,6 @@ static void preconfig_log_init(bool use_os_logger_initially) noexcept {
 int real_main(int argc, char **argv, bool use_os_logger_initially) {
   preconfig_log_init(use_os_logger_initially);
 
-  mysql_harness::rename_thread("main");
   init_DIM();
 
   // TODO This is very ugly, it should not be a global. It's defined in
@@ -162,7 +162,8 @@ int real_main(int argc, char **argv, bool use_os_logger_initially) {
   extern std::string g_program_name;
   g_program_name = argv[0];
 
-  if (mysql_library_init(argc, argv, NULL)) {
+  mysqlrouter::MySQLClientThreadToken api_token;
+  if (mysql_library_init(argc, argv, nullptr)) {
     log_error("Could not initialize MySQL library");
     return 1;
   }
@@ -193,6 +194,8 @@ int real_main(int argc, char **argv, bool use_os_logger_initially) {
       result = 1;
     } catch (const silent_exception &) {
     }
+    // cleanup on shutdown
+    router.stop();
   } catch (const std::invalid_argument &exc) {
     log_error("Configuration error: %s", exc.what());
     result = 1;
@@ -207,11 +210,6 @@ int real_main(int argc, char **argv, bool use_os_logger_initially) {
     result = 1;
   }
 
-  // We should deinitialize mysql-lib but we can't do it safely here until
-  // we do WL9558 "Plugin life-cycle that support graceful shutdown and
-  // restart." Currently we can get here while there are still some threads
-  // running (like metadata_cache thread that is managed by the global
-  // g_metadata_cache) that still use mysql-lib, which leads to crash.
   mysql_library_end();
 
   return result;

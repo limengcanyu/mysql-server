@@ -1,4 +1,4 @@
-# Copyright (c) 2005, 2019, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2005, 2020, Oracle and/or its affiliates.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -60,7 +60,7 @@
    Memcheck:Leak
    fun:memalign
    ...
-   fun:tls_get_addr_tail
+   fun:tls_get_addr_tail*
 }
 
 {
@@ -120,6 +120,16 @@
    fun:allocate_dtv
    fun:_dl_allocate_tls
    fun:pthread_create*
+}
+
+{
+   pthread allocate_dtv memory loss third
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:allocate_dtv_entry
+   ...
+   fun:exit
 }
 
 {
@@ -763,6 +773,7 @@
    ...
    fun:_Z19my_b_flush_io_cacheP8IO_CACHEi
    fun:_Z11_my_b_writeP8IO_CACHEPKhm
+   ...
    fun:_Z*10write_keysP10Sort_paramP13Filesort_infojP8IO_CACHES4_
    ...
    fun:_Z8filesortP3THDP8Filesort*
@@ -774,7 +785,91 @@
    write(buf)
    ...
    fun:_Z19my_b_flush_io_cacheP8IO_CACHEi
-   fun:_Z8filesortP3THDP8Filesort*
+   ...
+   fun:_Z8filesortP3THDP8FilesortP11RowIteratorP13Filesort_infoP11Sort_resultPy
+}
+
+# http://www.openldap.org/its/index.cgi/Software%20Bugs?id=9081;page=23
+# Memory leak in ldap_initialize/ldap_unbind
+# Version: 2.4.48
+# Fixed in RE24 (2.4.49)
+{
+   OpenLDAP bug 9081
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:calloc
+   fun:ber_memcalloc_x
+   fun:ber_memcalloc
+   fun:ber_sockbuf_alloc
+   fun:ldap_create
+   fun:ldap_initialize
+}
+
+# sasl_client_init will load all available plugins with _sasl_load_plugins().
+# It seems some of the SASL plugin have leaks.
+# Both LSAN and Valgrind report leaks.
+{
+   Loading SASL plugins 1
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   ...
+   fun:sasl_client_add_plugin
+}
+
+{
+   Loading SASL plugins 2
+   Memcheck:Leak
+   match-leak-kinds: indirect
+   fun:malloc
+   ...
+   fun:sasl_client_add_plugin
+}
+
+{
+   Unloading SASL plugins
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:dlclose
+   fun:_sasl_done_with_plugins
+}
+
+{
+   cyrus libsasl2 still reachable one
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:sasl_client_init
+}
+
+{
+   cyrus libsasl2 still reachable two
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   ...
+   fun:sasl_client_init
+}
+
+{
+   cyrus libsasl2 still reachable three
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:sasl_set_path
+}
+
+{
+   cyrus libsasl2 still reachable four
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:_sasl_build_mechlist
 }
 
 {
@@ -897,6 +992,13 @@
 }
 
 {
+   OpenSSL conditional jump in RAND_DRBG_generate
+   Memcheck:Cond
+   ...
+   fun:RAND_DRBG_generate
+}
+
+{
    OpenSSL uninitialised value of size 8 in new_VioSSLFd
    Memcheck:Value8
    fun:BN_num_bits_word
@@ -989,12 +1091,18 @@
 
 # supress uninitialized because some SSL libraries do random like that
 {
-   OpenSSL conditional jump in generate_user_salt due to randomness
+   OpenSSL conditional jump in generate_user_salt due to randomness 1
    Memcheck:Cond
    fun:generate_user_salt
    fun:native_password_authenticate
 }
 
+{
+   OpenSSL conditional jump in generate_user_salt due to randomness 2
+   Memcheck:Cond
+   fun:_Z18generate_user_saltPci
+   fun:_ZL34caching_sha2_password_authenticateP16MYSQL_PLUGIN_VIOP22MYSQL_SERVER_AUTH_INFO
+}
 
 # Remove the NUMA ones below when https://github.com/numactl/numactl/issues/3
 # is resolved.
@@ -1599,6 +1707,18 @@
   obj:*
 }
 
+{
+   TPL leak 23
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:_ZL13my_raw_mallocmi
+   fun:_Z9my_mallocjmi
+   fun:_ZL17my_openssl_mallocm
+   fun:CRYPTO_malloc
+   ...
+}
+
 # Workarounds for
 #
 # Bug#26116237 SYSCALL PARAM PPOLL(SIGMASK) POINTS TO UNADDRESSABLE BYTE
@@ -1821,15 +1941,9 @@
 {
    LDAP_TLS_workaround3
    Memcheck:Leak
-   fun:calloc
+   match-leak-kinds: reachable
+   ...
    fun:PR_LoadLibraryWithFlags
-   ...
-   ...
-   ...
-   fun:PR_CallOnce
-   ...
-   ...
-   fun:_dl_init
 }
 {
    LDAP_TLS_workaround4
@@ -1874,6 +1988,7 @@
 {
    LDAP_TLS_workaround6
    Memcheck:Leak
+   match-leak-kinds: reachable
    fun:malloc
    fun:ber_memalloc_x
    fun:ber_strdup_x
@@ -1881,7 +1996,6 @@
    fun:ldap_int_initialize
    fun:ldap_create
    fun:ldap_initialize
-   fun:*create*
 }
 {
    LDAP_TLS_workaround7
@@ -1889,16 +2003,11 @@
    fun:malloc
    fun:*dl_close_worker*
    fun:*dl_close*
-   fun:*dl_catch_error*
    ...
    fun:*free_mem*
    fun:*libc_freeres*
    fun:*vgnU_freeres*
    fun:*run_exit_handlers*
-   fun:exit*
-   fun:*mysqld_exit*
-   fun:*mysqld_main*
-   fun:*main*
 }
 {
    LDAP_TLS_workaround8
@@ -1909,25 +2018,21 @@
    ...
    fun:ldap_int_initialize
    fun:ldap_set_option
-   fun:*configure_tls*
 }
 {
    LDAP_TLS_workaround9
    Memcheck:Leak
    match-leak-kinds: reachable
    fun:malloc
-   fun:PR_ErrorInstallTable
    ...
-   ...
-   ...
-   ...
-   ...
-   ...  
-   ...
-   ...
-   ...
-   ...
-   ...
+   fun:ldap_int_tls_start
+   fun:ldap_start_tls_s
+}
+{
+   LDAP_TLS_workaround10
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
    ...
    fun:ldap_int_tls_start
    fun:ldap_start_tls_s
@@ -1958,6 +2063,384 @@
    fun:*
    fun:*
    fun:*
+}
+
+{
+   LDAP_1
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PORT_Alloc_Util
+   ...
+   fun:SECMOD_LoadModule
+   ...
+   fun:ldap_int_tls_start
+   ...
+}
+
+
+{
+   LDAP_2
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:NSSRWLock_New_Util
+   fun:SECOID_Init
+   obj:/usr/lib64/libsoftokn3.so
+   ...
+   fun:dlopen_doit
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   ...
+}
+
+
+{
+   LDAP_3
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:strdup
+   fun:PR_LoadLibraryWithFlags
+   ...
+   fun:tlsmc_open_nssdb
+   fun:tlsmc_convert
+   fun:tlsmc_intercept_initialization
+   obj:/usr/lib64/libldap-2.4.so.2.10.7
+   ...
+}
+
+{
+   LDAP_4
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:strdup
+   fun:_dl_load_cache_lookup
+   fun:_dl_map_object
+   fun:openaux
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+}
+
+{
+   LDAP_5
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PR_LoadLibraryWithFlags
+   ...
+   fun:tlsmc_open_nssdb
+}
+
+{
+   LDAP_6
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PL_NewHashTable
+   fun:SECOID_Init
+   obj:/usr/lib64/libsoftokn3.so
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+   fun:PORT_LoadLibraryFromOrigin
+   ...
+}
+
+{
+   LDAP_7
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PL_HashTableRawAdd
+   fun:SECOID_Init
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+   fun:PORT_LoadLibraryFromOrigin
+   ...
+}
+
+{
+   LDAP_8
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:_dl_close_worker
+   fun:_dl_close
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   ...
+   obj:*
+   fun:_ZL35authsm_run_second_authenticate_userP16mysql_async_auth
+   fun:run_plugin_auth
+   ...
+}
+
+{
+   LDAP_9
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   ...
+   fun:dl_open_worker
+   ...
+   fun:_dl_open
+}
+
+{
+   LDAP_10
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PR_NewCondVar
+   ...
+   fun:SECMOD_LoadModule
+   obj:/usr/lib64/libnss3.so
+   ...
+   obj:/usr/lib64/libldap-2.4.so.2.10.7
+   fun:ldap_int_tls_start
+   fun:ldap_start_tls_s
+   fun:_ZN23Ldap_connection_creator13establish_tlsER9Ldap_info
+}
+
+{
+   LDAP_11
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PORT_ZAlloc_Util
+}
+
+{
+   LDAP_12
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PR_NewLock
+   fun:NSSRWLock_New_Util
+   ...
+   fun:ldap_int_tls_start
+   fun:ldap_start_tls_s
+   ...
+}
+
+{
+   LDAP_13
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PORT_Alloc_Util
+   fun:SECITEM_CopyItem_Util
+   obj:/usr/lib64/libfreeblpriv3.so
+   ...
+   fun:dlopen_doit
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   ...
+}
+
+{
+   LDAP_14
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   obj:/usr/lib64/libfreeblpriv3.so
+   ...
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   fun:dlopen@@GLIBC_2.2.5
+   fun:PR_LoadLibraryWithFlags
+   ...
+}
+
+{
+   LDAP_15
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:PL_ArenaAllocate
+   fun:PORT_ArenaAlloc_Util
+   ...
+   fun:ldap_int_tls_start
+}
+
+{
+   LDAP_16
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:PORT_ZAlloc_Util
+   ...
+   fun:SECOID_Init
+   obj:/usr/lib64/libsoftokn3.so
+   fun:_dl_init
+   fun:dl_open_worker
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+   ...
+}
+
+{
+   LDAP_17
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:PR_NewLock
+   ...
+   fun:SECMOD_LoadModule
+   ...
+   fun:ldap_int_tls_start
+}
+
+{
+   LDAP_18
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PR_NewCondVar
+   fun:NSSRWLock_New_Util
+   ...
+   fun:dl_open_worker
+   fun:_dl_catch_error
+   fun:_dl_open
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+   fun:PORT_LoadLibraryFromOrigin
+}
+
+{
+   LDAP_19
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:PR_NewCondVar
+   ...
+   fun:PR_CallOnce
+   ...
+   fun:dlopen_doit
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   fun:dlopen@@GLIBC_2.2.5
+   fun:PR_LoadLibraryWithFlags
+}
+
+{
+   LDAP_20
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:calloc
+   fun:PORT_ZAlloc_Util
+   ...
+   fun:SECMOD_CreateModuleEx
+   fun:SECMOD_LoadModule
+   ...
+   fun:ldap_int_tls_start
+}
+
+{
+   LDAP_21
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PR_NewLock
+   ...
+   fun:SECOID_Init
+   ...
+   fun:PR_LoadLibraryWithFlags
+   obj:/usr/lib64/libnssutil3.so
+   fun:PORT_LoadLibraryFromOrigin
+   ...
+}
+
+{
+   LDAP_22
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PR_NewLock
+   obj:/usr/lib64/libfreeblpriv3.so
+   fun:PR_CallOnce
+   ...
+   fun:_dlerror_run
+   fun:dlopen@@GLIBC_2.2.5
+   fun:PR_LoadLibraryWithFlags
+   ...
+}
+
+{
+   LDAP_23
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PR_NewLock
+   obj:/usr/lib64/libnssdbm3.so
+   ...
+   fun:legacy_Open
+   ...
+   fun:SECMOD_LoadModule
+   fun:SECMOD_LoadModule
+   ...
+}
+
+{
+   LDAP_24
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:PL_ArenaAllocate
+   fun:PORT_ArenaAlloc_Util
+   ...
+   fun:tlsmc_convert
+   fun:tlsmc_intercept_initialization
+}
+
+{
+   LDAP_25
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:_dl_close
+   ...
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   fun:dlclose
+   fun:mysql_client_plugin_deinit
+   fun:_ZL8clean_upb
+   fun:_Z11mysqld_mainiPPc
+   fun:main
+}
+
+{
+   LDAP_26
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:PORT_ZAlloc_Util
+   fun:PORT_NewArena_Util
+   fun:SECOID_Init
+   ...
+   fun:dlopen_doit
+   fun:_dl_catch_error
+   fun:_dlerror_run
+   ...
+   obj:/usr/lib64/libnssutil3.so
+   fun:PORT_LoadLibraryFromOrigin
+   ...
+}
+
+{
+   LDAP_27
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:dlopen@@GLIBC_2.2.5
 }
 
 # Suppress all issues related to libcrypto library
@@ -2047,6 +2530,7 @@
    Syscall param socketcall.sendto(msg) points to uninitialised byte(s)
    Memcheck:Param
    socketcall.sendto(msg)
+   ...
    fun:send
    fun:*
    ...
@@ -2057,4 +2541,38 @@
    fun:RSA_eay_public_encrypt
    fun:*
    ...
+}
+
+# Sporadic error in GR tests
+
+{
+   Syscall param socketcall.sendto(msg) points to uninitialised byte(s)
+   Memcheck:Param
+   socketcall.sendto(msg)
+   obj:*
+   fun:__netlink_request
+   fun:getifaddrs_internal
+   fun:getifaddrs
+}
+
+# We might end up writing uninitialised NULL flags out to chunk files during
+# hash join. These flags are never used, so suppress the warnings.
+
+{
+   Syscall param write(buf) points to uninitialised byte(s)
+   Memcheck:Param
+   write(buf)
+   ...
+   fun:_Z19my_b_flush_io_cacheP8IO_CACHEi
+   fun:_ZN13HashJoinChunk6RewindEv
+}
+
+{
+   Syscall param write(buf) points to uninitialised byte(s)
+   Memcheck:Param
+   write(buf)
+   ...
+   fun:_Z19my_b_flush_io_cacheP8IO_CACHEi
+   ...
+   fun:_ZN16HashJoinIterator4InitEv
 }

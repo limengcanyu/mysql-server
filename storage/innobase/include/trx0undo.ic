@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -211,7 +211,7 @@ trx_undo_rec_t *trx_undo_page_get_prev_rec(
   start = trx_undo_page_get_start(undo_page, page_no, offset);
 
   if (start + undo_page == rec) {
-    return (NULL);
+    return (nullptr);
   }
 
   return (undo_page + mach_read_from_2(rec - 2));
@@ -237,7 +237,7 @@ trx_undo_rec_t *trx_undo_page_get_next_rec(
   next = mach_read_from_2(rec);
 
   if (next == end) {
-    return (NULL);
+    return (nullptr);
   }
 
   return (undo_page + next);
@@ -259,7 +259,7 @@ trx_undo_rec_t *trx_undo_page_get_last_rec(
   end = trx_undo_page_get_end(undo_page, page_no, offset);
 
   if (start == end) {
-    return (NULL);
+    return (nullptr);
   }
 
   return (undo_page + mach_read_from_2(undo_page + end - 2));
@@ -281,9 +281,18 @@ trx_undo_rec_t *trx_undo_page_get_first_rec(
   end = trx_undo_page_get_end(undo_page, page_no, offset);
 
   if (start == end) {
-    return (NULL);
+    return (nullptr);
   }
 
   return (undo_page + start);
 }
+
+/* Set undo segment to prepared state and set XID
+@param[in]   in_xid  transaction XID. */
+inline void trx_undo_t::set_prepared(const XID *in_xid) {
+  state = TRX_UNDO_PREPARED;
+  xid = *in_xid;
+  flag |= TRX_UNDO_FLAG_XID;
+}
+
 #endif /* !UNIV_HOTBACKUP */

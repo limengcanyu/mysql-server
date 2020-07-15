@@ -1,4 +1,4 @@
-// Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+// Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License, version 2.0,
@@ -41,9 +41,11 @@
 #include "sql/gis/box.h"
 #include "sql/gis/box_traits.h"
 #include "sql/gis/covered_by_functor.h"
+#include "sql/gis/disjoint_functor.h"
 #include "sql/gis/equals_functor.h"
 #include "sql/gis/geometries.h"
 #include "sql/gis/geometries_cs.h"
+#include "sql/gis/intersects_functor.h"
 #include "sql/gis/mbr_utils.h"
 #include "sql/gis/srid.h"
 #include "sql/gis/wkb.h"
@@ -141,17 +143,66 @@ bool mbr_equal_cmp(const dd::Spatial_reference_system *srs, rtr_mbr_t *a,
   return result;
 }
 
-bool mbr_intersect_cmp(rtr_mbr_t *a MY_ATTRIBUTE((unused)),
-                       rtr_mbr_t *b MY_ATTRIBUTE((unused))) {
-  // This assertion contains the old return value of the function. Given a valid
-  // box, it should always be true.
-  DBUG_ASSERT((b->xmin <= a->xmax || b->xmax >= a->xmin) &&
-              (b->ymin <= a->ymax || b->ymax >= a->ymin));
-  return true;
+bool mbr_intersect_cmp(const dd::Spatial_reference_system *srs, rtr_mbr_t *a,
+                       rtr_mbr_t *b) {
+  try {
+    gis::Intersects intersects(srs ? srs->semi_major_axis() : 0.0,
+                               srs ? srs->semi_minor_axis() : 0.0);
+    if (srs == nullptr || srs->is_cartesian()) {
+      gis::Cartesian_box a_box(gis::Cartesian_point(a->xmin, a->ymin),
+                               gis::Cartesian_point(a->xmax, a->ymax));
+      gis::Cartesian_box b_box(gis::Cartesian_point(b->xmin, b->ymin),
+                               gis::Cartesian_point(b->xmax, b->ymax));
+      return intersects(&a_box, &b_box);
+    } else {
+      DBUG_ASSERT(srs->is_geographic());
+      gis::Geographic_box a_box(
+          gis::Geographic_point(srs->to_radians(a->xmin),
+                                srs->to_radians(a->ymin)),
+          gis::Geographic_point(srs->to_radians(a->xmax),
+                                srs->to_radians(a->ymax)));
+      gis::Geographic_box b_box(
+          gis::Geographic_point(srs->to_radians(b->xmin),
+                                srs->to_radians(b->ymin)),
+          gis::Geographic_point(srs->to_radians(b->xmax),
+                                srs->to_radians(b->ymax)));
+      return intersects(&a_box, &b_box);
+    }
+  } catch (...) {
+    assert(false); /* purecov: inspected */
+  }
+  return false; /* purecov: dead code */
 }
 
-bool mbr_disjoint_cmp(rtr_mbr_t *a, rtr_mbr_t *b) {
-  return !mbr_intersect_cmp(a, b);
+bool mbr_disjoint_cmp(const dd::Spatial_reference_system *srs, rtr_mbr_t *a,
+                      rtr_mbr_t *b) {
+  try {
+    gis::Disjoint disjoint(srs ? srs->semi_major_axis() : 0.0,
+                           srs ? srs->semi_minor_axis() : 0.0);
+    if (srs == nullptr || srs->is_cartesian()) {
+      gis::Cartesian_box a_box(gis::Cartesian_point(a->xmin, a->ymin),
+                               gis::Cartesian_point(a->xmax, a->ymax));
+      gis::Cartesian_box b_box(gis::Cartesian_point(b->xmin, b->ymin),
+                               gis::Cartesian_point(b->xmax, b->ymax));
+      return disjoint(&a_box, &b_box);
+    } else {
+      DBUG_ASSERT(srs->is_geographic());
+      gis::Geographic_box a_box(
+          gis::Geographic_point(srs->to_radians(a->xmin),
+                                srs->to_radians(a->ymin)),
+          gis::Geographic_point(srs->to_radians(a->xmax),
+                                srs->to_radians(a->ymax)));
+      gis::Geographic_box b_box(
+          gis::Geographic_point(srs->to_radians(b->xmin),
+                                srs->to_radians(b->ymin)),
+          gis::Geographic_point(srs->to_radians(b->xmax),
+                                srs->to_radians(b->ymax)));
+      return disjoint(&a_box, &b_box);
+    }
+  } catch (...) {
+    assert(false); /* purecov: inspected */
+  }
+  return false; /* purecov: dead code */
 }
 
 bool mbr_within_cmp(const dd::Spatial_reference_system *srs, rtr_mbr_t *a,
@@ -299,9 +350,10 @@ double compute_area(const dd::Spatial_reference_system *srs, const double *a,
   return area;
 }
 
-int get_mbr_from_store(const dd::Spatial_reference_system *srs, uchar *store,
-                       uint size, uint n_dims MY_ATTRIBUTE((unused)),
-                       double *mbr, gis::srid_t *srid) {
+int get_mbr_from_store(const dd::Spatial_reference_system *srs,
+                       const uchar *store, uint size,
+                       uint n_dims MY_ATTRIBUTE((unused)), double *mbr,
+                       gis::srid_t *srid) {
   DBUG_ASSERT(n_dims == 2);
   // The SRS should match the SRID of the geometry, with one exception: For
   // backwards compatibility it is allowed to create indexes with mixed
@@ -319,9 +371,10 @@ int get_mbr_from_store(const dd::Spatial_reference_system *srs, uchar *store,
     // in gis::parse_wkb, but the geometry has been parsed before with the stack
     // size check enabled. We assume we have at least the same amount of stack
     // when called from an internal thread as when called from a MySQL thread.
-    std::unique_ptr<gis::Geometry> g = gis::parse_wkb(
-        current_thd, srs, pointer_cast<char *>(store) + sizeof(gis::srid_t),
-        size - sizeof(gis::srid_t), true);
+    std::unique_ptr<gis::Geometry> g =
+        gis::parse_wkb(current_thd, srs,
+                       pointer_cast<const char *>(store) + sizeof(gis::srid_t),
+                       size - sizeof(gis::srid_t), true);
     if (g.get() == nullptr) {
       return -1; /* purecov: inspected */
     }
@@ -370,23 +423,14 @@ double rtree_area_increase(const dd::Spatial_reference_system *srs,
                            double *ab_area) {
   DBUG_ASSERT(mbr_len == sizeof(double) * 4);
 
-  double a_xmin;
-  double a_ymin;
-  double a_xmax;
-  double a_ymax;
-  double b_xmin;
-  double b_ymin;
-  double b_xmax;
-  double b_ymax;
-
-  float8get(&a_xmin, mbr_a);
-  float8get(&a_xmax, mbr_a + sizeof(double));
-  float8get(&a_ymin, mbr_a + sizeof(double) * 2);
-  float8get(&a_ymax, mbr_a + sizeof(double) * 3);
-  float8get(&b_xmin, mbr_b);
-  float8get(&b_xmax, mbr_b + sizeof(double));
-  float8get(&b_ymin, mbr_b + sizeof(double) * 2);
-  float8get(&b_ymax, mbr_b + sizeof(double) * 3);
+  double a_xmin = float8get(mbr_a);
+  double a_xmax = float8get(mbr_a + sizeof(double));
+  double a_ymin = float8get(mbr_a + sizeof(double) * 2);
+  double a_ymax = float8get(mbr_a + sizeof(double) * 3);
+  double b_xmin = float8get(mbr_b);
+  double b_xmax = float8get(mbr_b + sizeof(double));
+  double b_ymin = float8get(mbr_b + sizeof(double) * 2);
+  double b_ymax = float8get(mbr_b + sizeof(double) * 3);
 
   DBUG_ASSERT(a_xmin <= a_xmax && a_ymin <= a_ymax);
   DBUG_ASSERT(b_xmin <= b_xmax && b_ymin <= b_ymax);
@@ -435,23 +479,14 @@ double rtree_area_overlapping(const dd::Spatial_reference_system *srs,
                               int mbr_len MY_ATTRIBUTE((unused))) {
   DBUG_ASSERT(mbr_len == sizeof(double) * 4);
 
-  double a_xmin;
-  double a_ymin;
-  double a_xmax;
-  double a_ymax;
-  double b_xmin;
-  double b_ymin;
-  double b_xmax;
-  double b_ymax;
-
-  float8get(&a_xmin, mbr_a);
-  float8get(&a_xmax, mbr_a + sizeof(double));
-  float8get(&a_ymin, mbr_a + sizeof(double) * 2);
-  float8get(&a_ymax, mbr_a + sizeof(double) * 3);
-  float8get(&b_xmin, mbr_b);
-  float8get(&b_xmax, mbr_b + sizeof(double));
-  float8get(&b_ymin, mbr_b + sizeof(double) * 2);
-  float8get(&b_ymax, mbr_b + sizeof(double) * 3);
+  double a_xmin = float8get(mbr_a);
+  double a_xmax = float8get(mbr_a + sizeof(double));
+  double a_ymin = float8get(mbr_a + sizeof(double) * 2);
+  double a_ymax = float8get(mbr_a + sizeof(double) * 3);
+  double b_xmin = float8get(mbr_b);
+  double b_xmax = float8get(mbr_b + sizeof(double));
+  double b_ymin = float8get(mbr_b + sizeof(double) * 2);
+  double b_ymax = float8get(mbr_b + sizeof(double) * 3);
 
   DBUG_ASSERT(a_xmin <= a_xmax && a_ymin <= a_ymax);
   DBUG_ASSERT(b_xmin <= b_xmax && b_ymin <= b_ymax);

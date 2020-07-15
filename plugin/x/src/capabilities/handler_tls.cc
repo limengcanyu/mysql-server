@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2.0,
@@ -24,11 +24,11 @@
 
 #include "plugin/x/src/capabilities/handler_tls.h"
 
-#include "plugin/x/ngs/include/ngs/interface/client_interface.h"
-#include "plugin/x/ngs/include/ngs/interface/server_interface.h"
-#include "plugin/x/ngs/include/ngs/interface/ssl_context_interface.h"
 #include "plugin/x/ngs/include/ngs/mysqlx/getter_any.h"
 #include "plugin/x/ngs/include/ngs/mysqlx/setter_any.h"
+#include "plugin/x/src/interface/client.h"
+#include "plugin/x/src/interface/server.h"
+#include "plugin/x/src/interface/ssl_context.h"
 
 namespace xpl {
 
@@ -45,7 +45,7 @@ bool Capability_tls::is_supported_impl() const {
          is_supported_connection_type;
 }
 
-void Capability_tls::get_impl(Any &any) {
+void Capability_tls::get_impl(Any *any) {
   bool is_tls_active = m_client.connection().get_type() == Connection_tls;
 
   ngs::Setter_any::set_scalar(any, is_tls_active);

@@ -42,8 +42,8 @@ Item_row::Item_row(const POS &pos, Item *head, List<Item> &tail)
       with_null(false) {
   // TODO: think placing 2-3 component items in item (as it done for function)
   arg_count = 1 + tail.elements;
-  items = (Item **)sql_alloc(sizeof(Item *) * arg_count);
-  if (items == NULL) {
+  items = (Item **)(*THR_MALLOC)->Alloc(sizeof(Item *) * arg_count);
+  if (items == nullptr) {
     arg_count = 0;
     return;  // OOM
   }
@@ -61,8 +61,8 @@ Item_row::Item_row(Item *head, List<Item> &tail)
     : used_tables_cache(0), not_null_tables_cache(0), with_null(false) {
   // TODO: think placing 2-3 component items in item (as it done for function)
   arg_count = 1 + tail.elements;
-  items = (Item **)sql_alloc(sizeof(Item *) * arg_count);
-  if (items == NULL) {
+  items = (Item **)(*THR_MALLOC)->Alloc(sizeof(Item *) * arg_count);
+  if (items == nullptr) {
     arg_count = 0;
     return;  // OOM
   }
@@ -87,16 +87,15 @@ bool Item_row::itemize(Parse_context *pc, Item **res) {
 
 void Item_row::illegal_method_call(
     const char *method MY_ATTRIBUTE((unused))) const {
-  DBUG_ENTER("Item_row::illegal_method_call");
+  DBUG_TRACE;
   DBUG_PRINT("error", ("!!! %s method was called for row item", method));
   DBUG_ASSERT(0);
   my_error(ER_OPERAND_COLUMNS, MYF(0), 1);
-  DBUG_VOID_RETURN;
 }
 
 bool Item_row::fix_fields(THD *thd, Item **) {
   DBUG_ASSERT(fixed == 0);
-  null_value = 0;
+  null_value = false;
   maybe_null = false;
   Item **arg, **arg_end;
   for (arg = items, arg_end = items + arg_count; arg != arg_end; arg++) {
@@ -125,14 +124,12 @@ bool Item_row::fix_fields(THD *thd, Item **) {
 }
 
 void Item_row::cleanup() {
-  DBUG_ENTER("Item_row::cleanup");
+  DBUG_TRACE;
 
   Item::cleanup();
   /* Reset to the original values */
   used_tables_cache = 0;
   with_null = false;
-
-  DBUG_VOID_RETURN;
 }
 
 void Item_row::split_sum_func(THD *thd, Ref_item_array ref_item_array,
@@ -145,9 +142,11 @@ void Item_row::split_sum_func(THD *thd, Ref_item_array ref_item_array,
 void Item_row::update_used_tables() {
   used_tables_cache = 0;
   m_accum_properties = 0;
+  not_null_tables_cache = 0;
   for (uint i = 0; i < arg_count; i++) {
     items[i]->update_used_tables();
     used_tables_cache |= items[i]->used_tables();
+    not_null_tables_cache |= items[i]->not_null_tables();
     add_accum_properties(items[i]);
   }
 }
@@ -166,9 +165,9 @@ void Item_row::fix_after_pullout(SELECT_LEX *parent_select,
 bool Item_row::check_cols(uint c) {
   if (c != arg_count) {
     my_error(ER_OPERAND_COLUMNS, MYF(0), c);
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 
 void Item_row::print(const THD *thd, String *str,
@@ -193,7 +192,7 @@ bool Item_row::walk(Item_processor processor, enum_walk walk, uchar *arg) {
 Item *Item_row::transform(Item_transformer transformer, uchar *arg) {
   for (uint i = 0; i < arg_count; i++) {
     Item *new_item = items[i]->transform(transformer, arg);
-    if (new_item == NULL) return NULL; /* purecov: inspected */
+    if (new_item == nullptr) return nullptr; /* purecov: inspected */
 
     /*
       THD::change_item_tree() should be called only if the tree was

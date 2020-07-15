@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -39,6 +39,7 @@
 #include "my_sys.h"  // my_write, my_malloc
 #include "mysql_com.h"
 #include "sql_string.h" /* STRING_PSI_MEMORY_KEY */
+#include "template_utils.h"
 
 static const char *log_filename = "test_sql_sqlmode";
 
@@ -50,36 +51,36 @@ struct st_test_statement {
 
 static struct st_test_statement test_query_plan[] = {
     /* DB    RESULT  QUERY */
-    {NULL, true, "SELECT 'first complex command' as a"},
-    {NULL, true, "SELECT @@global.sql_mode"},
-    {NULL, true, "SELECT @@session.sql_mode"},
-    {NULL, false, "SET @@session.sql_mode = @@global.sql_mode"},
-    {NULL, true, "SELECT @@global.sql_mode"},
-    {NULL, true, "SELECT @@session.sql_mode"},
+    {nullptr, true, "SELECT 'first complex command' as a"},
+    {nullptr, true, "SELECT @@global.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
+    {nullptr, false, "SET @@session.sql_mode = @@global.sql_mode"},
+    {nullptr, true, "SELECT @@global.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
     /* SQL_MODE : NO_UNSIGNED_SUBTRACTION(Checking whether subtraction
        result is signed) */
-    {NULL, true, "SELECT CAST(0 AS UNSIGNED) - 1"},
+    {nullptr, true, "SELECT CAST(0 AS UNSIGNED) - 1"},
 
     /* Checking whether sql_mode value is getting changed or not */
-    {NULL, false, "SET @@global.sql_mode = NO_ZERO_DATE"},
-    {NULL, false, "SET @@session.sql_mode = NO_ZERO_DATE"},
-    {NULL, true, "SELECT @@global.sql_mode"},
-    {NULL, true, "SELECT @@session.sql_mode"},
-    {NULL, false, "SET @@global.sql_mode = DEFAULT"},
-    {NULL, false, "SET @@session.sql_mode = DEFAULT"},
-    {NULL, true, "SELECT @@global.sql_mode"},
-    {NULL, true, "SELECT @@session.sql_mode"},
+    {nullptr, false, "SET @@global.sql_mode = NO_ZERO_DATE"},
+    {nullptr, false, "SET @@session.sql_mode = NO_ZERO_DATE"},
+    {nullptr, true, "SELECT @@global.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
+    {nullptr, false, "SET @@global.sql_mode = DEFAULT"},
+    {nullptr, false, "SET @@session.sql_mode = DEFAULT"},
+    {nullptr, true, "SELECT @@global.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
 
     /* SQL_MODE : ANSI */
     {"test", true, "SELECT * FROM t1 WHERE t1.a IN (SELECT MAX(t1.b) FROM t2)"},
-    {NULL, false, "SET @@session.sql_mode = ANSI"},
-    {NULL, true, "SELECT @@session.sql_mode"},
+    {nullptr, false, "SET @@session.sql_mode = ANSI"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
     /* Expected error for invalid group function */
     {"test", true, "SELECT * FROM t1 WHERE t1.a IN (SELECT MAX(t1.b) FROM t2)"},
 
     /* SQL_MODE : STRICT_TRANS_TABLES */
     {"test", false, "SET @@session.sql_mode = STRICT_TRANS_TABLES"},
-    {NULL, true, "SELECT @@session.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
     {"test", false, "INSERT INTO t2 VALUES(NULL,'t2b1')"},
     /* Expected error Bad NULL value */
     {"test", false, "INSERT INTO t1 SELECT * FROM t2"},
@@ -88,15 +89,15 @@ static struct st_test_statement test_query_plan[] = {
 
     /* SQL_MODE : TRADITIONAL */
     {"test", false, "SET @@session.sql_mode = TRADITIONAL"},
-    {NULL, true, "SELECT @@session.sql_mode"},
+    {nullptr, true, "SELECT @@session.sql_mode"},
     {"test", false, "INSERT INTO t2 VALUES(NULL,'t2b1')"},
     /* Expected error Bad NULL value */
     {"test", false, "INSERT INTO t1 SELECT * FROM t2"},
     /* Should return no rows in columns a and b */
     {"test", true, "SELECT * FROM t1 WHERE a = 't2a2'"},
 
-    {NULL, false, "SET @@global.sql_mode = NO_UNSIGNED_SUBTRACTION"},
-    {NULL, false, "SET @@session.sql_mode = NO_UNSIGNED_SUBTRACTION"}};
+    {nullptr, false, "SET @@global.sql_mode = NO_UNSIGNED_SUBTRACTION"},
+    {nullptr, false, "SET @@session.sql_mode = NO_UNSIGNED_SUBTRACTION"}};
 
 #define STRING_BUFFER_SIZE 512
 
@@ -126,7 +127,8 @@ static const char *sep =
     "========================================================================"
     "\n";
 
-#define WRITE_SEP() my_write(outfile, (uchar *)sep, strlen(sep), MYF(0))
+#define WRITE_SEP() \
+  my_write(outfile, pointer_cast<const uchar *>(sep), strlen(sep), MYF(0))
 
 static const char *user_localhost = "localhost";
 static const char *user_local = "127.0.0.1";
@@ -185,7 +187,7 @@ struct st_plugin_ctx {
   st_plugin_ctx() { reset(); }
 
   void reset() {
-    resultcs = NULL;
+    resultcs = nullptr;
     meta_server_status = 0;
     meta_warn_count = 0;
     server_status = 0;
@@ -215,7 +217,7 @@ static int sql_start_result_metadata(void *ctx, uint num_cols, uint,
                                      const CHARSET_INFO *resultcs) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_start_result_metadata\n");
-  DBUG_ENTER("sql_start_result_metadata");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("resultcs->number: %d", resultcs->number));
   DBUG_PRINT("info", ("resultcs->csname: %s", resultcs->csname));
   DBUG_PRINT("info", ("resultcs->name: %s", resultcs->name));
@@ -223,7 +225,7 @@ static int sql_start_result_metadata(void *ctx, uint num_cols, uint,
   pctx->resultcs = resultcs;
   pctx->current_col = 0;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_field_metadata(void *ctx, struct st_send_field *field,
@@ -231,7 +233,7 @@ static int sql_field_metadata(void *ctx, struct st_send_field *field,
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   st_send_field_n *cfield = &pctx->sql_field[pctx->current_col];
   //  WRITE_STR("sql_field_metadata\n");
-  DBUG_ENTER("sql_field_metadata");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("field->db_name: %s", field->db_name));
   DBUG_PRINT("info", ("field->table_name: %s", field->table_name));
   DBUG_PRINT("info", ("field->org_table_name: %s", field->org_table_name));
@@ -243,11 +245,11 @@ static int sql_field_metadata(void *ctx, struct st_send_field *field,
   DBUG_PRINT("info", ("field->decimals: %d", (int)field->decimals));
   DBUG_PRINT("info", ("field->type: %d", (int)field->type));
 
-  strcpy(cfield->db_name, (char *)field->db_name);
-  strcpy(cfield->table_name, (char *)field->table_name);
-  strcpy(cfield->org_table_name, (char *)field->org_table_name);
-  strcpy(cfield->col_name, (char *)field->col_name);
-  strcpy(cfield->org_col_name, (char *)field->org_col_name);
+  strcpy(cfield->db_name, field->db_name);
+  strcpy(cfield->table_name, field->table_name);
+  strcpy(cfield->org_table_name, field->org_table_name);
+  strcpy(cfield->col_name, field->col_name);
+  strcpy(cfield->org_col_name, field->org_col_name);
   cfield->length = field->length;
   cfield->charsetnr = field->charsetnr;
   cfield->flags = field->flags;
@@ -255,50 +257,47 @@ static int sql_field_metadata(void *ctx, struct st_send_field *field,
   cfield->type = field->type;
 
   pctx->current_col++;
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_end_result_metadata(void *ctx, uint server_status,
                                    uint warn_count) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_end_result_metadata\n");
-  DBUG_ENTER("sql_end_result_metadata");
+  DBUG_TRACE;
   pctx->meta_server_status = server_status;
   pctx->meta_warn_count = warn_count;
   pctx->num_rows = 0;
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_start_row(void *ctx) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_start_row\n");
-  DBUG_ENTER("sql_start_row");
+  DBUG_TRACE;
   pctx->current_col = 0;
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_end_row(void *ctx) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_end_row\n");
-  DBUG_ENTER("sql_end_row");
+  DBUG_TRACE;
   pctx->num_rows++;
-  DBUG_RETURN(false);
+  return false;
 }
 
-static void sql_abort_row(void *) {
-  DBUG_ENTER("sql_abort_row");
-  DBUG_VOID_RETURN;
-}
+static void sql_abort_row(void *) { DBUG_TRACE; }
 
 static ulong sql_get_client_capabilities(void *) {
-  DBUG_ENTER("sql_get_client_capabilities");
-  DBUG_RETURN(0);
+  DBUG_TRACE;
+  return 0;
 }
 
 static int sql_get_null(void *ctx) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_null\n");
-  DBUG_ENTER("sql_get_null");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -306,13 +305,13 @@ static int sql_get_null(void *ctx) {
   memcpy(pctx->sql_str_value[row][col], "[NULL]", sizeof("[NULL]"));
   pctx->sql_str_len[row][col] = sizeof("[NULL]") - 1;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_integer(void *ctx, longlong value) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_integer\n");
-  DBUG_ENTER("sql_get_integer");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -322,13 +321,13 @@ static int sql_get_integer(void *ctx, longlong value) {
 
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_longlong(void *ctx, longlong value, uint is_unsigned) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_longlong\n");
-  DBUG_ENTER("sql_get_longlong");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -339,20 +338,20 @@ static int sql_get_longlong(void *ctx, longlong value, uint is_unsigned) {
 
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static const char *test_decimal_as_string(char *buff, const decimal_t *val,
                                           int *length) {
   if (!val) return "NULL";
-  (void)decimal2string(val, buff, length, 0, 0, 0);
+  (void)decimal2string(val, buff, length);
   return buff;
 }
 
 static int sql_get_decimal(void *ctx, const decimal_t *value) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_decimal\n");
-  DBUG_ENTER("sql_get_decimal");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -361,13 +360,13 @@ static int sql_get_decimal(void *ctx, const decimal_t *value) {
   test_decimal_as_string(pctx->sql_str_value[row][col], value, &len);
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_double(void *ctx, double value, uint32) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_double\n");
-  DBUG_ENTER("sql_get_double");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -377,13 +376,13 @@ static int sql_get_double(void *ctx, double value, uint32) {
 
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_date(void *ctx, const MYSQL_TIME *value) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_date\n");
-  DBUG_ENTER("sql_get_date");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -394,13 +393,13 @@ static int sql_get_date(void *ctx, const MYSQL_TIME *value) {
                value->neg ? "-" : "", value->year, value->month, value->day);
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_time(void *ctx, const MYSQL_TIME *value, uint) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_time\n");
-  DBUG_ENTER("sql_get_time");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -412,13 +411,13 @@ static int sql_get_time(void *ctx, const MYSQL_TIME *value, uint) {
       value->second);
 
   pctx->sql_str_len[row][col] = len;
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_datetime(void *ctx, const MYSQL_TIME *value, uint) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_datetime\n");
-  DBUG_ENTER("sql_get_datetime");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -430,14 +429,14 @@ static int sql_get_datetime(void *ctx, const MYSQL_TIME *value, uint) {
 
   pctx->sql_str_len[row][col] = len;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static int sql_get_string(void *ctx, const char *const value, size_t length,
                           const CHARSET_INFO *const) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_get_string\n");
-  DBUG_ENTER("sql_get_string");
+  DBUG_TRACE;
   uint row = pctx->num_rows;
   uint col = pctx->current_col;
   pctx->current_col++;
@@ -445,7 +444,7 @@ static int sql_get_string(void *ctx, const char *const value, size_t length,
   strncpy(pctx->sql_str_value[row][col], value, length);
   pctx->sql_str_len[row][col] = length;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 static void sql_handle_ok(void *ctx, uint server_status,
@@ -453,7 +452,7 @@ static void sql_handle_ok(void *ctx, uint server_status,
                           ulonglong last_insert_id, const char *const message) {
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_handle_ok\n");
-  DBUG_ENTER("sql_handle_ok");
+  DBUG_TRACE;
   /* This could be an EOF */
   if (!pctx->num_cols) pctx->num_rows = 0;
   pctx->server_status = server_status;
@@ -462,8 +461,6 @@ static void sql_handle_ok(void *ctx, uint server_status,
   pctx->last_insert_id = last_insert_id;
   if (message) strncpy(pctx->message, message, sizeof(pctx->message) - 1);
   pctx->message[sizeof(pctx->message) - 1] = '\0';
-
-  DBUG_VOID_RETURN;
 }
 
 static void sql_handle_error(void *ctx, uint sql_errno,
@@ -472,17 +469,13 @@ static void sql_handle_error(void *ctx, uint sql_errno,
   char buffer[1024];
   struct st_plugin_ctx *pctx = (struct st_plugin_ctx *)ctx;
   //  WRITE_STR("sql_handle_error\n");
-  DBUG_ENTER("sql_handle_error");
+  DBUG_TRACE;
   WRITE_VAL2("[%u][%s]", sql_errno, sqlstate);
   WRITE_VAL("[%s]\n", err_msg);
   pctx->num_rows = 0;
-  DBUG_VOID_RETURN;
 }
 
-static void sql_shutdown(void *, int) {
-  DBUG_ENTER("sql_shutdown");
-  DBUG_VOID_RETURN;
-}
+static void sql_shutdown(void *, int) { DBUG_TRACE; }
 
 const struct st_command_service_cbs protocol_callbacks = {
     sql_start_result_metadata,
@@ -752,7 +745,7 @@ static void dump_closing_ok(struct st_plugin_ctx *ctx) {
 static void set_query_in_com_data(const char *query, union COM_DATA *cmd) {
   char buffer[STRING_BUFFER_SIZE];
 
-  cmd->com_query.query = (char *)query;
+  cmd->com_query.query = query;
   cmd->com_query.length = strlen(query);
   WRITE_VAL2("EXECUTING:[%u][%s]\n", cmd->com_query.length, query);
 }
@@ -815,12 +808,12 @@ void static change_current_db(MYSQL_SESSION session, const char *db,
 }
 
 static void test_selects(MYSQL_SESSION session, void *p) {
-  DBUG_ENTER("test_selects");
+  DBUG_TRACE;
   char buffer[STRING_BUFFER_SIZE];
 
   struct st_plugin_ctx *plugin_ctx = new st_plugin_ctx();
 
-  const char *last_db = NULL;
+  const char *last_db = nullptr;
   size_t stmt_count = sizeof(test_query_plan) / sizeof(test_query_plan[0]);
   for (size_t i = 0; i < stmt_count; i++) {
     /* Change current DB if needed */
@@ -832,24 +825,23 @@ static void test_selects(MYSQL_SESSION session, void *p) {
     run_statement(session, test_query_plan[i].query, plugin_ctx,
                   test_query_plan[i].generates_result_set, p);
 
-    last_db = NULL;
+    last_db = nullptr;
   }
 
   WRITE_DASHED_LINE();
 
   delete plugin_ctx;
-  DBUG_VOID_RETURN;
 }
 
 static void test_sql(void *p) {
   char buffer[STRING_BUFFER_SIZE];
-  DBUG_ENTER("test_sql");
+  DBUG_TRACE;
 
   WRITE_STR("[srv_session_open]\n");
   MYSQL_SESSION session = srv_session_open(NULL, NULL);
   if (!session) {
     LogPluginErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "srv_session_open failed.");
-    DBUG_VOID_RETURN;
+    return;
   }
 
   switch_user(session, user_privileged);
@@ -860,8 +852,6 @@ static void test_sql(void *p) {
   WRITE_STR("[srv_session_close]\n");
   if (srv_session_close(session))
     LogPluginErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "srv_session_close failed.");
-
-  DBUG_VOID_RETURN;
 }
 
 struct test_thread_context {
@@ -887,7 +877,7 @@ static void *test_sql_threaded_wrapper(void *param) {
   srv_session_deinit_thread();
 
   context->thread_finished = true;
-  return NULL;
+  return nullptr;
 }
 
 static void create_log_file(const char *log_name) {
@@ -916,14 +906,13 @@ static void test_in_spawned_thread(void *p, void (*test_function)(void *)) {
     LogPluginErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG,
                  "Could not create test session thread");
   else
-    my_thread_join(&context.thread, NULL);
+    my_thread_join(&context.thread, nullptr);
 }
 
 static int test_sql_service_plugin_init(void *p) {
   char buffer[STRING_BUFFER_SIZE];
-  DBUG_ENTER("test_sql_service_plugin_init");
-  if (init_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs))
-    DBUG_RETURN(1);
+  DBUG_TRACE;
+  if (init_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs)) return 1;
   LogPluginErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "Installation.");
 
   create_log_file(log_filename);
@@ -938,14 +927,14 @@ static int test_sql_service_plugin_init(void *p) {
 
   my_close(outfile, MYF(0));
 
-  DBUG_RETURN(0);
+  return 0;
 }
 
 static int test_sql_service_plugin_deinit(void *p MY_ATTRIBUTE((unused))) {
-  DBUG_ENTER("test_sql_service_plugin_deinit");
+  DBUG_TRACE;
   LogPluginErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "Uninstallation.");
   deinit_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs);
-  DBUG_RETURN(0);
+  return 0;
 }
 
 static struct st_mysql_daemon test_sql_service_plugin = {
@@ -959,15 +948,15 @@ mysql_declare_plugin(test_daemon){
     MYSQL_DAEMON_PLUGIN,
     &test_sql_service_plugin,
     "test_sql_sqlmode",
-    "Pavan Naik, Andrey Hristov",
+    PLUGIN_AUTHOR_ORACLE,
     "Test sql sql_mode",
     PLUGIN_LICENSE_GPL,
     test_sql_service_plugin_init,   /* Plugin Init      */
-    NULL,                           /* Plugin Check uninstall    */
+    nullptr,                        /* Plugin Check uninstall    */
     test_sql_service_plugin_deinit, /* Plugin Deinit    */
     0x0100,                         /* 1.0              */
-    NULL,                           /* status variables */
-    NULL,                           /* system variables */
-    NULL,                           /* config options   */
+    nullptr,                        /* status variables */
+    nullptr,                        /* system variables */
+    nullptr,                        /* config options   */
     0,                              /* flags            */
 } mysql_declare_plugin_end;

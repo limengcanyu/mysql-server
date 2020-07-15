@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2007, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2007, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -148,13 +148,12 @@ char *fts_config_create_index_param_name(
  must ensure that enough space is allocated for value to hold the
  column contents.
  @return DB_SUCCESS or error code */
-dberr_t fts_config_get_index_value(
-    trx_t *trx,          /*!< transaction */
-    dict_index_t *index, /*!< in: index */
-    const char *param,   /*!< in: get config value for
-                         this parameter name */
-    fts_string_t *value) /*!< out: value read from
-                         config table */
+dberr_t fts_config_get_index_value(trx_t *trx,          /*!< transaction */
+                                   dict_index_t *index, /*!< in: index */
+                                   const char *param, /*!< in: get config value
+                                                      for this parameter name */
+                                   fts_string_t *value) /*!< out: value read
+                                                        from config table */
 {
   char *name;
   dberr_t error;
@@ -241,13 +240,12 @@ dberr_t fts_config_set_value(
 
 /** Set the value specific to an FTS index in the config table.
  @return DB_SUCCESS or error code */
-dberr_t fts_config_set_index_value(
-    trx_t *trx,          /*!< transaction */
-    dict_index_t *index, /*!< in: index */
-    const char *param,   /*!< in: get config value for
-                         this parameter name */
-    fts_string_t *value) /*!< out: value read from
-                         config table */
+dberr_t fts_config_set_index_value(trx_t *trx,          /*!< transaction */
+                                   dict_index_t *index, /*!< in: index */
+                                   const char *param, /*!< in: get config value
+                                                      for this parameter name */
+                                   fts_string_t *value) /*!< out: value read
+                                                        from config table */
 {
   char *name;
   dberr_t error;
@@ -352,7 +350,7 @@ dberr_t fts_config_get_ulint(trx_t *trx,             /*!< in: transaction */
     ib::error(ER_IB_MSG_459)
         << "(" << ut_strerr(error) << ") reading `" << name << "'";
   } else {
-    *int_value = strtoul((char *)value.f_str, NULL, 10);
+    *int_value = strtoul((char *)value.f_str, nullptr, 10);
   }
 
   ut_free(value.f_str);

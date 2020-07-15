@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -30,24 +30,28 @@
 #include "sql/item_sum.h"
 
 #include <string.h>
+
 #include <algorithm>
 #include <bitset>
-#include <cstring>
 #include <functional>
 #include <string>
+#include <utility>  // std::forward
 
 #include "decimal.h"
 #include "my_alloc.h"
 #include "my_base.h"
 #include "my_byteorder.h"
+#include "my_compare.h"
 #include "my_dbug.h"
 #include "my_double2ulonglong.h"
+#include "my_macros.h"
 #include "my_sys.h"
 #include "mysql_com.h"
 #include "mysqld_error.h"
 #include "sql/aggregate_check.h"  // Distinct_check
-#include "sql/current_thd.h"      // current_thd
-#include "sql/derror.h"           // ER_THD
+#include "sql/create_field.h"
+#include "sql/current_thd.h"  // current_thd
+#include "sql/derror.h"       // ER_THD
 #include "sql/field.h"
 #include "sql/handler.h"
 #include "sql/item_cmpfunc.h"
@@ -59,6 +63,7 @@
 #include "sql/mysqld.h"
 #include "sql/parse_tree_helpers.h"  // PT_item_list
 #include "sql/parse_tree_nodes.h"    // PT_order_list
+#include "sql/parser_yystype.h"
 #include "sql/sql_array.h"
 #include "sql/sql_class.h"  // THD
 #include "sql/sql_const.h"
@@ -91,6 +96,7 @@ bool Item_sum::itemize(Parse_context *pc, Item **res) {
       m_window->set_def_pos(pc->select->m_windows.elements);
     }
     m_is_window_function = true;
+    pc->select->n_sum_items++;
     set_wf();
   } else {
     mark_as_sum_func(pc->select);
@@ -171,14 +177,14 @@ bool Item_sum::init_sum_func_check(THD *thd) {
                                   << thd->lex->current_select()->nest_level;
   // @todo: When resolving once, move following code to constructor
   base_select = thd->lex->current_select();
-  aggr_select = NULL;  // Aggregation query block is undetermined yet
-  ref_by[0] = nullptr;
+  aggr_select = nullptr;  // Aggregation query block is undetermined yet
+  referenced_by[0] = nullptr;
   /*
-    Leave ref_by[1] unchanged as in execution of PS, in-to-exists is not
-    re-done, so ref_by[1] isn't set again. So keep it as it was in
+    Leave referenced_by[1] unchanged as in execution of PS, in-to-exists is not
+    re-done, so referenced_by[1] isn't set again. So keep it as it was in
     preparation.
   */
-  if (thd->lex->current_select()->first_execution) ref_by[1] = nullptr;
+  if (thd->lex->current_select()->first_execution) referenced_by[1] = nullptr;
   max_aggr_level = -1;
   max_sum_func_level = -1;
   used_tables_cache = 0;
@@ -232,19 +238,19 @@ bool Item_sum::init_sum_func_check(THD *thd) {
 */
 
 bool Item_sum::check_sum_func(THD *thd, Item **ref) {
-  DBUG_ENTER("Item_sum::check_sum_func");
+  DBUG_TRACE;
 
   if (m_is_window_function) {
     update_used_tables();
     thd->lex->m_deny_window_func = save_deny_window_func;
-    DBUG_RETURN(false);
+    return false;
   }
 
   const nesting_map allow_sum_func = thd->lex->allow_sum_func;
   const nesting_map nest_level_map = (nesting_map)1 << base_select->nest_level;
 
   DBUG_ASSERT(thd->lex->current_select() == base_select);
-  DBUG_ASSERT(aggr_select == NULL);
+  DBUG_ASSERT(aggr_select == nullptr);
 
   /*
     max_aggr_level is the level of the innermost qualifying query block of
@@ -280,7 +286,7 @@ bool Item_sum::check_sum_func(THD *thd, Item **ref) {
     aggr_select = base_select;
   }
 
-  if (aggr_select == NULL && (allow_sum_func & nest_level_map) != 0 &&
+  if (aggr_select == nullptr && (allow_sum_func & nest_level_map) != 0 &&
       !(thd->variables.sql_mode & MODE_ANSI))
     aggr_select = base_select;
 
@@ -293,13 +299,13 @@ bool Item_sum::check_sum_func(THD *thd, Item **ref) {
     here: their aggregation level must be greater than this set function's
     aggregation level.
   */
-  if (aggr_select == NULL || aggr_select->nest_level <= max_sum_func_level) {
+  if (aggr_select == nullptr || aggr_select->nest_level <= max_sum_func_level) {
     my_error(ER_INVALID_GROUP_FUNC_USE, MYF(0));
-    DBUG_RETURN(true);
+    return true;
   }
 
   if (aggr_select != base_select) {
-    ref_by[0] = ref;
+    referenced_by[0] = ref;
     /*
       Add the set function to the list inner_sum_func_list for the
       aggregating query block.
@@ -360,8 +366,10 @@ bool Item_sum::check_sum_func(THD *thd, Item **ref) {
       as its parent's nest level.
     */
     if (in_sum_func->base_select->nest_level >= aggr_select->nest_level)
-      set_if_bigger(in_sum_func->max_sum_func_level, aggr_select->nest_level);
-    set_if_bigger(in_sum_func->max_sum_func_level, max_sum_func_level);
+      in_sum_func->max_sum_func_level =
+          max(in_sum_func->max_sum_func_level, int8(aggr_select->nest_level));
+    in_sum_func->max_sum_func_level =
+        max(in_sum_func->max_sum_func_level, max_sum_func_level);
   }
 
   aggr_select->set_agg_func_used(true);
@@ -370,12 +378,12 @@ bool Item_sum::check_sum_func(THD *thd, Item **ref) {
   thd->lex->in_sum_func = in_sum_func;
   thd->lex->m_deny_window_func = save_deny_window_func;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool Item_sum::check_wf_semantics(THD *thd MY_ATTRIBUTE((unused)),
                                   SELECT_LEX *select MY_ATTRIBUTE((unused)),
-                                  Window::Evaluation_requirements *r) {
+                                  Window_evaluation_requirements *r) {
   const PT_frame *frame = m_window->frame();
 
   /*
@@ -399,13 +407,13 @@ Item_sum::Item_sum(const POS &pos, PT_item_list *opt_list, PT_window *w)
       m_window(w),
       m_window_resolved(false),
       next_sum(nullptr),
-      arg_count(opt_list == NULL ? 0 : opt_list->elements()),
+      arg_count(opt_list == nullptr ? 0 : opt_list->elements()),
       args(nullptr),
       used_tables_cache(0),
       forced_const(false) {
   if (arg_count > 0) {
-    args = (Item **)sql_alloc(sizeof(Item *) * arg_count);
-    if (args == NULL) {
+    args = (Item **)(*THR_MALLOC)->Alloc(sizeof(Item *) * arg_count);
+    if (args == nullptr) {
       return;  // OOM
     }
     uint i = 0;
@@ -421,14 +429,14 @@ Item_sum::Item_sum(const POS &pos, PT_item_list *opt_list, PT_window *w)
   Constructor used in processing select with temporary tebles.
 */
 
-Item_sum::Item_sum(THD *thd, Item_sum *item)
+Item_sum::Item_sum(THD *thd, const Item_sum *item)
     : Item_result_field(thd, item),
       m_window(item->m_window),
       m_window_resolved(false),
       next_sum(nullptr),
       base_select(item->base_select),
       aggr_select(item->aggr_select),
-      quick_group(item->quick_group),
+      allow_group_via_temp_table(item->allow_group_via_temp_table),
       arg_count(item->arg_count),
       used_tables_cache(item->used_tables_cache),
       forced_const(item->forced_const) {
@@ -439,7 +447,9 @@ Item_sum::Item_sum(THD *thd, Item_sum *item)
   memcpy(args, item->args, sizeof(Item *) * arg_count);
   init_aggregator();
   with_distinct = item->with_distinct;
-  if (item->aggr) set_aggregator(item->aggr->Aggrtype());
+  if (item->aggr) {
+    Item_sum::set_aggregator(item->aggr->Aggrtype());
+  }
   DBUG_ASSERT(!m_is_window_function);  // WF items are never copied
 }
 
@@ -474,7 +484,7 @@ void Item_sum::print(const THD *thd, String *str,
 void Item_sum::fix_num_length_and_dec() {
   decimals = 0;
   for (uint i = 0; i < arg_count; i++)
-    set_if_bigger(decimals, args[i]->decimals);
+    decimals = max(decimals, args[i]->decimals);
   max_length = float_length(decimals);
 }
 
@@ -499,6 +509,29 @@ bool Item_sum::walk(Item_processor processor, enum_walk walk, uchar *argument) {
   }
 
   return (walk & enum_walk::POSTFIX) && (this->*processor)(argument);
+}
+
+/**
+ Transform an Item_func object with a transformer callback function.
+
+ The function recursively applies the transform method to each
+ argument of the Item_func node.
+ If the call of the method for an argument item returns a new item
+ the old item is substituted for a new one.
+ After this the transformer is applied to the root node
+ of the Item_func object.
+ */
+
+Item *Item_sum::transform(Item_transformer transformer, uchar *argument) {
+  if (arg_count) {
+    Item **arg, **arg_end;
+    for (arg = args, arg_end = args + arg_count; arg != arg_end; arg++) {
+      Item *new_item = (*arg)->transform(transformer, argument);
+      if (new_item == nullptr) return nullptr;
+      if (*arg != new_item) current_thd->change_item_tree(arg, new_item);
+    }
+  }
+  return (this->*transformer)(argument);
 }
 
 /**
@@ -537,18 +570,15 @@ bool Item_sum::clean_up_after_removal(uchar *arg) {
     3) the item is not an element in the inner_sum_func_list.
   */
   if (!fixed ||  // 1
-      (m_window == nullptr &&
-       (aggr_select == NULL || aggr_select->inner_sum_func_list == NULL  // 2
-        || next_sum == NULL)))                                           // 3
+      (m_window == nullptr && (aggr_select == nullptr ||
+                               aggr_select->inner_sum_func_list == nullptr  // 2
+                               || next_sum == nullptr)))                    // 3
     return false;
 
   if (m_window) {
-    /*
-      Cleanup the reference for this window function from m_functions when
-      constant predicates are being removed.
-    */
+    // Cleanup the reference for this window function from m_functions
     auto *ctx = pointer_cast<Cleanup_after_removal_context *>(arg);
-    if (ctx != nullptr && ctx->m_removing_const_preds) {
+    if (ctx != nullptr) {
       List_iterator<Item_sum> li(m_window->functions());
       Item *item = nullptr;
       while ((item = li++)) {
@@ -560,13 +590,13 @@ bool Item_sum::clean_up_after_removal(uchar *arg) {
     }
   } else {
     if (next_sum == this)
-      aggr_select->inner_sum_func_list = NULL;
+      aggr_select->inner_sum_func_list = nullptr;
     else {
       Item_sum *prev;
       for (prev = this; prev->next_sum != this; prev = prev->next_sum)
         ;
       prev->next_sum = next_sum;
-      next_sum = NULL;
+      next_sum = nullptr;
 
       if (aggr_select->inner_sum_func_list == this)
         aggr_select->inner_sum_func_list = prev;
@@ -657,19 +687,19 @@ bool Item_sum::has_aggregate_ref_in_group_by(uchar *) {
 }
 
 Field *Item_sum::create_tmp_field(bool, TABLE *table) {
-  DBUG_ENTER("Item_sum::create_tmp_field");
+  DBUG_TRACE;
   Field *field;
   switch (result_type()) {
     case REAL_RESULT:
-      field = new (*THR_MALLOC)
-          Field_double(max_length, maybe_null, item_name.ptr(), decimals, true);
+      field = new (*THR_MALLOC) Field_double(
+          max_length, maybe_null, item_name.ptr(), decimals, false, true);
       break;
     case INT_RESULT:
       field = new (*THR_MALLOC) Field_longlong(max_length, maybe_null,
                                                item_name.ptr(), unsigned_flag);
       break;
     case STRING_RESULT:
-      DBUG_RETURN(make_string_field(table));
+      return make_string_field(table);
     case DECIMAL_RESULT:
       field = Field_new_decimal::create_from_item(this);
       break;
@@ -677,45 +707,131 @@ Field *Item_sum::create_tmp_field(bool, TABLE *table) {
     default:
       // This case should never be choosen
       DBUG_ASSERT(0);
-      DBUG_RETURN(0);
+      return nullptr;
   }
   if (field) field->init(table);
-  DBUG_RETURN(field);
+  return field;
+}
+
+bool Item_sum::collect_grouped_aggregates(uchar *arg) {
+  auto *info = pointer_cast<Collect_grouped_aggregate_info *>(arg);
+
+  if (m_is_window_function || info->m_break_off) return false;
+
+  if (info->m_select == aggr_select && (used_tables() & OUTER_REF_TABLE_BIT)) {
+    // This aggregate function aggregates in the transformed query block, but is
+    // located inside a subquery. Currently, transform cannot get to this since
+    // it doesn't descend into subqueries. This means we cannot substitute a
+    // field for this aggregates, so break off. TODO.
+    info->m_break_off = true;
+    return false;
+  }
+
+  if (info->m_select != aggr_select) {
+    // Aggregated either inside a subquery of the transformed query block or
+    // outside of it. In either case, ignore it.
+    return false;
+  }
+
+  for (auto e : info->list) {  // eliminate duplicates
+    if (e == this) {
+      return false;
+    }
+  }
+
+  info->list.emplace_back(this);
+  return false;
+}
+
+Item *Item_sum::replace_aggregate(uchar *arg) {
+  auto *info = pointer_cast<Item::Aggregate_replacement *>(arg);
+  if (info->m_target == this)
+    return info->m_replacement;
+  else
+    return this;
+}
+
+bool Item_sum::collect_scalar_subqueries(uchar *arg) {
+  if (!m_is_window_function) {
+    auto *info = pointer_cast<Collect_scalar_subquery_info *>(arg);
+    /// Don't walk below grouped aggregate functions
+    if (info->is_stopped(this)) return false;
+    info->stop_at(this);
+  }
+  return false;
+}
+
+bool Item_sum::collect_item_field_or_view_ref_processor(uchar *arg) {
+  if (!m_is_window_function) {
+    auto *info = pointer_cast<Collect_item_fields_or_view_refs *>(arg);
+    /// Don't walk below grouped aggregate functions
+    if (info->is_stopped(this)) return false;
+    info->stop_at(this);
+  }
+  return false;
 }
 
 void Item_sum::update_used_tables() {
-  if (!forced_const) {
-    used_tables_cache = 0;
-    // Re-accumulate all properties except three
-    m_accum_properties &=
-        (PROP_AGGREGATION | PROP_WINDOW_FUNCTION | PROP_ROLLUP_EXPR);
+  if (forced_const) return;
 
-    for (uint i = 0; i < arg_count; i++) {
-      args[i]->update_used_tables();
-      used_tables_cache |= args[i]->used_tables();
-      add_accum_properties(args[i]);
-    }
+  used_tables_cache = 0;
+  // Re-accumulate all properties except three
+  m_accum_properties &=
+      (PROP_AGGREGATION | PROP_WINDOW_FUNCTION | PROP_ROLLUP_EXPR);
 
-    /*
-      If the function is aggregated into its local context, it can
-      be calculated only after evaluating the full join, thus it
-      depends on all tables of this join. Otherwise, it depends on
-      outer tables, even if its arguments args[] do not explicitly
-      reference an outer table, like COUNT (*) or COUNT(123).
-
-      Window functions are always evaluated in the local scope
-      and depend on all tables involved in the join since they cannot
-      be evaluated until after the join is completed.
-    */
-    used_tables_cache |= aggr_select == base_select || m_is_window_function
-                             ? base_select->all_tables_map()
-                             : OUTER_REF_TABLE_BIT;
-    /*
-      Aggregate functions are not allowed to be const, but they may
-      be const-for-execution.
-    */
-    if (used_tables_cache == 0) used_tables_cache = INNER_TABLE_BIT;
+  for (uint i = 0; i < arg_count; i++) {
+    args[i]->update_used_tables();
+    used_tables_cache |= args[i]->used_tables();
+    add_accum_properties(args[i]);
   }
+  add_used_tables_for_aggr_func();
+}
+
+void Item_sum::fix_after_pullout(SELECT_LEX *parent_select,
+                                 SELECT_LEX *removed_select) {
+  // Cannot aggregate into a context that is merged up.
+  DBUG_ASSERT(aggr_select != removed_select);
+
+  // We may merge up a query block, if it is not the aggregating query context
+  if (base_select == removed_select) base_select = parent_select;
+
+  // Perform pullout of arguments to aggregate function
+  used_tables_cache = 0;
+
+  Item **arg, **arg_end;
+  for (arg = args, arg_end = args + arg_count; arg != arg_end; arg++) {
+    Item *const item = *arg;
+    item->fix_after_pullout(parent_select, removed_select);
+    used_tables_cache |= item->used_tables();
+  }
+  // Complete used_tables information by looking at aggregate function
+  add_used_tables_for_aggr_func();
+}
+
+/**
+  Add used_tables information for aggregate function, based on its aggregated
+  query block.
+
+  If the function is aggregated into its local context, it can
+  be calculated only after evaluating the full join, thus it
+  depends on all tables of this join. Otherwise, it depends on
+  outer tables, even if its arguments args[] do not explicitly
+  reference an outer table, like COUNT (*) or COUNT(123).
+
+  Window functions are always evaluated in the local scope
+  and depend on all tables involved in the join since they cannot
+  be evaluated until after the join is completed.
+*/
+
+void Item_sum::add_used_tables_for_aggr_func() {
+  used_tables_cache |= aggr_select == base_select || m_is_window_function
+                           ? base_select->all_tables_map()
+                           : OUTER_REF_TABLE_BIT;
+  /*
+    Aggregate functions are not allowed to be const, but they may
+    be const-for-execution.
+  */
+  if (used_tables_cache == 0) used_tables_cache = INNER_TABLE_BIT;
 }
 
 Item *Item_sum::set_arg(uint i, THD *thd, Item *new_val) {
@@ -753,7 +869,7 @@ int Item_sum::set_aggregator(Aggregator::Aggregator_type aggregator) {
 void Item_sum::cleanup() {
   if (aggr) {
     destroy(aggr);
-    aggr = NULL;
+    aggr = nullptr;
   }
   Item_result_field::cleanup();
   forced_const = false;
@@ -761,7 +877,7 @@ void Item_sum::cleanup() {
 
 bool Item_sum::fix_fields(THD *thd, Item **ref MY_ATTRIBUTE((unused))) {
   DBUG_ASSERT(fixed == 0);
-  if (m_window != NULL) {
+  if (m_window != nullptr) {
     if (m_window_resolved) return false;
 
     if (Window::resolve_reference(thd, this, &m_window)) return true;
@@ -781,7 +897,7 @@ void Item_sum::split_sum_func(THD *thd, Ref_item_array ref_item_array,
 
 bool Item_sum::reset_wf_state(uchar *arg) {
   if (!m_is_window_function) return false;
-  DBUG_ENTER("Item_sum::reset_wf_state");
+  DBUG_TRACE;
   bool *do_framing = (bool *)arg;
 
   if (*do_framing) {
@@ -789,7 +905,7 @@ bool Item_sum::reset_wf_state(uchar *arg) {
   } else {
     if (!framing()) clear();
   }
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool Item_sum::wf_common_init() {
@@ -820,7 +936,7 @@ bool Item_sum::wf_common_init() {
 */
 
 static int simple_str_key_cmp(const void *arg, const void *a, const void *b) {
-  Field *f = const_cast<Field *>(pointer_cast<const Field *>(arg));
+  const Field *f = pointer_cast<const Field *>(arg);
   const uchar *key1 = pointer_cast<const uchar *>(a);
   const uchar *key2 = pointer_cast<const uchar *>(b);
   return f->cmp(key1, key2);
@@ -843,7 +959,8 @@ static int simple_str_key_cmp(const void *arg, const void *a, const void *b) {
 
 int Aggregator_distinct::composite_key_cmp(const void *arg, const void *a,
                                            const void *b) {
-  Aggregator_distinct *aggr = (Aggregator_distinct *)arg;
+  const Aggregator_distinct *aggr =
+      static_cast<const Aggregator_distinct *>(arg);
   const uchar *key1 = pointer_cast<const uchar *>(a);
   const uchar *key2 = pointer_cast<const uchar *>(b);
   Field **field = aggr->table->field;
@@ -960,7 +1077,7 @@ bool Aggregator_distinct::setup(THD *thd) {
     }
     count_field_types(select_lex, tmp_table_param, list, false, false);
     tmp_table_param->force_copy_fields = item_sum->has_force_copy_fields();
-    DBUG_ASSERT(table == 0);
+    DBUG_ASSERT(table == nullptr);
     /*
       Make create_tmp_table() convert BIT columns to BIGINT.
       This is needed because BIT fields store parts of their data in table's
@@ -977,12 +1094,12 @@ bool Aggregator_distinct::setup(THD *thd) {
       }
     }
     if (!(table =
-              create_tmp_table(thd, tmp_table_param, list, NULL, true, false,
+              create_tmp_table(thd, tmp_table_param, list, nullptr, true, false,
                                select_lex->active_options(), HA_POS_ERROR, "")))
       return true;
-    table->file->extra(HA_EXTRA_NO_ROWS);  // Don't update rows
-    table->no_rows = 1;
-    if (table->hash_field) table->file->ha_index_init(0, 0);
+    table->file->ha_extra(HA_EXTRA_NO_ROWS);  // Don't update rows
+    table->no_rows = true;
+    if (table->hash_field) table->file->ha_index_init(0, false);
 
     if ((table->s->db_type() == temptable_hton ||
          table->s->db_type() == heap_hton) &&
@@ -1036,7 +1153,7 @@ bool Aggregator_distinct::setup(THD *thd) {
           }
         }
       }
-      DBUG_ASSERT(tree == 0);
+      DBUG_ASSERT(tree == nullptr);
       tree = new (thd->mem_root) Unique(compare_key, cmp_arg, tree_key_length,
                                         item_sum->ram_limitation(thd));
       /*
@@ -1052,28 +1169,28 @@ bool Aggregator_distinct::setup(THD *thd) {
     List<Create_field> field_list;
     Create_field field_def; /* field definition */
     Item *arg;
-    DBUG_ENTER("Aggregator_distinct::setup");
+    DBUG_TRACE;
     /* It's legal to call setup() more than once when in a subquery */
-    if (tree) DBUG_RETURN(false);
+    if (tree) return false;
 
     /*
       Virtual table and the tree are created anew on each re-execution of
       PS/SP. Hence all further allocations are performed in the runtime
       mem_root.
     */
-    if (field_list.push_back(&field_def)) DBUG_RETURN(true);
+    if (field_list.push_back(&field_def)) return true;
 
-    item_sum->null_value = item_sum->maybe_null = 1;
-    item_sum->quick_group = 0;
+    item_sum->null_value = item_sum->maybe_null = true;
+    item_sum->allow_group_via_temp_table = false;
 
     DBUG_ASSERT(item_sum->get_arg(0)->fixed);
 
     arg = item_sum->get_arg(0);
     if (arg->const_item()) {
-      (void)arg->val_int();
+      if (arg->update_null_value()) return true;
       if (arg->null_value) {
         const_distinct = CONST_NULL;
-        DBUG_RETURN(false);
+        return false;
       }
     }
 
@@ -1087,8 +1204,7 @@ bool Aggregator_distinct::setup(THD *thd) {
             : arg->decimals,
         arg->maybe_null, arg->unsigned_flag, 0);
 
-    if (!(table = create_tmp_table_from_fields(thd, field_list)))
-      DBUG_RETURN(true);
+    if (!(table = create_tmp_table_from_fields(thd, field_list))) return true;
 
     /* XXX: check that the case of CHAR(0) works OK */
     tree_key_length = table->s->reclength - table->s->null_bytes;
@@ -1103,7 +1219,7 @@ bool Aggregator_distinct::setup(THD *thd) {
         Unique(simple_raw_key_cmp, &tree_key_length, tree_key_length,
                item_sum->ram_limitation(thd));
 
-    DBUG_RETURN(tree == 0);
+    return tree == nullptr;
   }
 }
 
@@ -1123,10 +1239,10 @@ void Aggregator_distinct::clear() {
       item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) {
     if (!tree && table) {
       (void)table->empty_result_table();
-      if (table->hash_field) table->file->ha_index_init(0, 0);
+      if (table->hash_field) table->file->ha_index_init(0, false);
     }
   } else {
-    item_sum->null_value = 1;
+    item_sum->null_value = true;
   }
 }
 
@@ -1147,7 +1263,7 @@ void Aggregator_distinct::clear() {
 */
 
 bool Aggregator_distinct::add() {
-  if (const_distinct == CONST_NULL) return 0;
+  if (const_distinct == CONST_NULL) return false;
 
   if (item_sum->sum_func() == Item_sum::COUNT_FUNC ||
       item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) {
@@ -1157,13 +1273,13 @@ bool Aggregator_distinct::add() {
       DBUG_ASSERT(item_sum->fixed == 1);
       Item_sum_count *sum = (Item_sum_count *)item_sum;
       sum->count = 1;
-      return 0;
+      return false;
     }
     if (copy_fields(tmp_table_param, table->in_use)) return true;
     if (copy_funcs(tmp_table_param, table->in_use)) return true;
 
     for (Field **field = table->field; *field; field++)
-      if ((*field)->is_real_null()) return 0;  // Don't count NULL
+      if ((*field)->is_real_null()) return false;  // Don't count NULL
 
     if (tree) {
       /*
@@ -1182,14 +1298,14 @@ bool Aggregator_distinct::add() {
     return false;
   } else {
     item_sum->get_arg(0)->save_in_field(table->field[0], false);
-    if (table->field[0]->is_null()) return 0;
+    if (table->field[0]->is_null()) return false;
     DBUG_ASSERT(tree);
-    item_sum->null_value = 0;
+    item_sum->null_value = false;
     /*
       '0' values are also stored in the tree. This doesn't matter
       for SUM(DISTINCT), but is important for AVG(DISTINCT)
     */
-    return tree->unique_add(table->field[0]->ptr);
+    return tree->unique_add(table->field[0]->field_ptr());
   }
 }
 
@@ -1205,27 +1321,27 @@ bool Aggregator_distinct::add() {
 */
 
 void Aggregator_distinct::endup() {
-  DBUG_ENTER("Aggregator_distinct::endup");
+  DBUG_TRACE;
   /* prevent consecutive recalculations */
-  if (endup_done) DBUG_VOID_RETURN;
+  if (endup_done) return;
 
   if (const_distinct == CONST_NOT_NULL) {
     endup_done = true;
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /* we are going to calculate the aggregate value afresh */
   item_sum->clear();
 
   /* The result will definitely be null : no more calculations needed */
-  if (const_distinct == CONST_NULL) DBUG_VOID_RETURN;
+  if (const_distinct == CONST_NULL) return;
 
   if (item_sum->sum_func() == Item_sum::COUNT_FUNC ||
       item_sum->sum_func() == Item_sum::COUNT_DISTINCT_FUNC) {
     DBUG_ASSERT(item_sum->fixed == 1);
     Item_sum_count *sum = (Item_sum_count *)item_sum;
 
-    if (tree && tree->elements == 0) {
+    if (tree && tree->is_in_memory()) {
       /* everything fits in memory */
       sum->count = (longlong)tree->elements_in_tree();
       endup_done = true;
@@ -1266,7 +1382,6 @@ void Aggregator_distinct::endup() {
   }
   /* prevent consecutive recalculations */
   endup_done = true;
-  DBUG_VOID_RETURN;
 }
 
 String *Item_sum_num::val_str(String *str) { return val_string_from_real(str); }
@@ -1286,7 +1401,7 @@ bool Item_sum_num::fix_fields(THD *thd, Item **ref) {
 
   if (init_sum_func_check(thd)) return true;
 
-  Disable_semijoin_flattening DSF(thd->lex->current_select(), true);
+  Condition_context CCT(thd->lex->current_select());
 
   maybe_null = false;
 
@@ -1315,7 +1430,7 @@ bool Item_sum_bit::fix_fields(THD *thd, Item **ref) {
 
   if (init_sum_func_check(thd)) return true;
 
-  Disable_semijoin_flattening DSF(thd->lex->current_select(), true);
+  Condition_context CCT(thd->lex->current_select());
 
   for (uint i = 0; i < arg_count; i++) {
     if ((!args[i]->fixed && args[i]->fix_fields(thd, args + i)) ||
@@ -1338,7 +1453,7 @@ bool Item_sum_bit::resolve_type(THD *thd) {
   if (bit_func_returns_binary(args[0], nullptr)) {
     hybrid_type = STRING_RESULT;
     for (uint i = 0; i < arg_count; i++)
-      max_length = std::max(max_length, args[i]->max_length);
+      max_length = max(max_length, args[i]->max_length);
     if (max_length > (CONVERT_IF_BIGGER_TO_BLOB - 1)) {
       /*
         Implementation of Item_sum_bit_field expects that "result_field" is
@@ -1393,7 +1508,7 @@ void Item_sum_bit::remove_bits(const String *s1, ulonglong b1) {
 
   if (hybrid_type == STRING_RESULT) {
     s1_c_p = pointer_cast<const uchar *>(s1->ptr());
-    value_bits = pointer_cast<uchar *>(const_cast<char *>(value_buff.ptr()));
+    value_bits = pointer_cast<uchar *>(value_buff.ptr());
     buff_length = value_buff.length() - 1;
   } else {
     s1_c_p = pointer_cast<const uchar *>(&b1);
@@ -1493,8 +1608,7 @@ bool Item_sum_bit::add_bits(const String *s1, ulonglong b1) {
       }
 
       // At this point the values should be not-null and have the same size.
-      uchar *value_bits =
-          pointer_cast<uchar *>(const_cast<char *>(value_buff.ptr()));
+      uchar *value_bits = pointer_cast<uchar *>(value_buff.ptr());
       if (m_is_xor)
         apply_bit_op<std::bit_xor<char>, std::bit_xor<ulonglong>>(
             buff_length, s1_c_p, value_bits);
@@ -1608,7 +1722,7 @@ bool Item_sum_hybrid::fix_fields(THD *thd, Item **ref) {
 
   if (init_sum_func_check(thd)) return true;
 
-  Disable_semijoin_flattening DSF(thd->lex->current_select(), true);
+  Condition_context CCT(thd->lex->current_select());
 
   // 'item' can be changed during fix_fields
   if ((!item->fixed && item->fix_fields(thd, args)) ||
@@ -1629,16 +1743,18 @@ bool Item_sum_hybrid::fix_fields(THD *thd, Item **ref) {
     default:
       DBUG_ASSERT(0);
   };
-  if (setup_hybrid(args[0], NULL)) return true;
+  if (setup_hybrid(args[0], nullptr)) return true;
   /* MIN/MAX can return NULL for empty set indepedent of the used column */
   maybe_null = true;
   unsigned_flag = item->unsigned_flag;
-  result_field = NULL;
+  result_field = nullptr;
   null_value = true;
   if (resolve_type(thd)) return true;
   item = item->real_item();
   if (item->type() == Item::FIELD_ITEM)
     set_data_type(item->data_type());
+  else if (item->data_type() == MYSQL_TYPE_JSON)
+    set_data_type_json();
   else
     set_data_type_from_result(hybrid_type, max_length);
 
@@ -1648,27 +1764,15 @@ bool Item_sum_hybrid::fix_fields(THD *thd, Item **ref) {
   return false;
 }
 
-/**
-  MIN/MAX function setup.
-
-  @param item       argument of MIN/MAX function
-  @param value_arg  calculated value of MIN/MAX function
-
-  @details
-    Setup cache/comparator of MIN/MAX functions. When called by the
-    copy_or_same function value_arg parameter contains calculated value
-    of the original MIN/MAX object and it is saved in this object's cache.
-*/
-
 bool Item_sum_hybrid::setup_hybrid(Item *item, Item *value_arg) {
   value = Item_cache::get_cache(item);
   value->setup(item);
   value->store(value_arg);
   arg_cache = Item_cache::get_cache(item);
-  if (arg_cache == NULL) return true;
+  if (arg_cache == nullptr) return true;
   arg_cache->setup(item);
   cmp = new (*THR_MALLOC) Arg_comparator();
-  if (cmp == NULL) return true;
+  if (cmp == nullptr) return true;
   if (cmp->set_cmp_func(this, pointer_cast<Item **>(&arg_cache),
                         pointer_cast<Item **>(&value), false))
     return true;
@@ -1678,15 +1782,15 @@ bool Item_sum_hybrid::setup_hybrid(Item *item, Item *value_arg) {
 }
 
 Field *Item_sum_hybrid::create_tmp_field(bool group, TABLE *table) {
-  DBUG_ENTER("Item_sum_hybrid::create_tmp_field");
+  DBUG_TRACE;
   Field *field;
   if (args[0]->type() == Item::FIELD_ITEM) {
     field = ((Item_field *)args[0])->field;
 
     if ((field = create_tmp_field_from_field(current_thd, field,
-                                             item_name.ptr(), table, NULL)))
-      field->flags &= ~NOT_NULL_FLAG;
-    DBUG_RETURN(field);
+                                             item_name.ptr(), table, nullptr)))
+      field->clear_flag(NOT_NULL_FLAG);
+    return field;
   }
   /*
     DATE/TIME fields have STRING_RESULT result types.
@@ -1710,10 +1814,10 @@ Field *Item_sum_hybrid::create_tmp_field(bool group, TABLE *table) {
           Field_datetimef(maybe_null, item_name.ptr(), decimals);
       break;
     default:
-      DBUG_RETURN(Item_sum::create_tmp_field(group, table));
+      return Item_sum::create_tmp_field(group, table);
   }
   if (field) field->init(table);
-  DBUG_RETURN(field);
+  return field;
 }
 
 /***********************************************************************
@@ -1739,14 +1843,14 @@ Item_sum_sum::Item_sum_sum(THD *thd, Item_sum_sum *item)
 }
 
 Item *Item_sum_sum::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_sum::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_sum(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 void Item_sum_sum::clear() {
-  null_value = 1;
+  null_value = true;
   if (hybrid_type == DECIMAL_RESULT) {
     curr_dec_buff = 0;
     my_decimal_set_zero(&dec_buffs[0]);
@@ -1758,10 +1862,11 @@ void Item_sum_sum::clear() {
 }
 
 bool Item_sum_sum::resolve_type(THD *) {
-  DBUG_ENTER("Item_sum_sum::resolve_type");
+  DBUG_TRACE;
   maybe_null = true;
   null_value = true;
   decimals = args[0]->decimals;
+  max_length = float_length(decimals);
 
   switch (args[0]->numeric_context_result_type()) {
     case REAL_RESULT:
@@ -1785,7 +1890,7 @@ bool Item_sum_sum::resolve_type(THD *) {
       DBUG_ASSERT(0);
   }
 
-  if (reject_geometry_args(arg_count, args, this)) DBUG_RETURN(true);
+  if (reject_geometry_args(arg_count, args, this)) return true;
 
   set_data_type_from_result(hybrid_type, max_length);
 
@@ -1798,11 +1903,11 @@ bool Item_sum_sum::resolve_type(THD *) {
                          : hybrid_type == INT_RESULT ? "INT_RESULT"
                                                      : "--ILLEGAL!!!--"),
               max_length, (int)decimals));
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool Item_sum_sum::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                      Window::Evaluation_requirements *r) {
+                                      Window_evaluation_requirements *r) {
   bool result = Item_sum::check_wf_semantics(thd, select, r);
   if (hybrid_type == REAL_RESULT) {
     /*
@@ -1824,7 +1929,7 @@ bool Item_sum_sum::check_wf_semantics(THD *thd, SELECT_LEX *select,
 }
 
 bool Item_sum_sum::add() {
-  DBUG_ENTER("Item_sum_sum::add");
+  DBUG_TRACE;
   DBUG_ASSERT(!m_is_window_function);
   if (hybrid_type == DECIMAL_RESULT) {
     my_decimal value;
@@ -1833,13 +1938,13 @@ bool Item_sum_sum::add() {
       my_decimal_add(E_DEC_FATAL_ERROR, dec_buffs + (curr_dec_buff ^ 1), val,
                      dec_buffs + curr_dec_buff);
       curr_dec_buff ^= 1;
-      null_value = 0;
+      null_value = false;
     }
   } else {
     sum += aggr->arg_val_real();
-    if (!aggr->arg_is_null(true)) null_value = 0;
+    if (!aggr->arg_is_null(true)) null_value = false;
   }
-  DBUG_RETURN(0);
+  return false;
 }
 
 longlong Item_sum_sum::val_int() {
@@ -1867,10 +1972,10 @@ longlong Item_sum_sum::val_int() {
 }
 
 double Item_sum_sum::val_real() {
-  DBUG_ENTER("Item_sum_sum::val_real");
+  DBUG_TRACE;
   DBUG_ASSERT(fixed == 1);
   if (m_is_window_function) {
-    if (wf_common_init()) DBUG_RETURN(0.0);
+    if (wf_common_init()) return 0.0;
 
     if (hybrid_type == DECIMAL_RESULT) {
       my_decimal tmp;
@@ -1901,12 +2006,12 @@ double Item_sum_sum::val_real() {
       }
       null_value = (m_count == m_frame_null_count);
     }
-    DBUG_RETURN(sum);
+    return sum;
   } else {
     if (aggr) aggr->endup();
     if (hybrid_type == DECIMAL_RESULT)
       my_decimal2double(E_DEC_FATAL_ERROR, dec_buffs + curr_dec_buff, &sum);
-    DBUG_RETURN(sum);
+    return sum;
   }
 }
 
@@ -1978,25 +2083,25 @@ my_decimal *Item_sum_sum::val_decimal(my_decimal *val) {
 */
 
 bool Aggregator_distinct::unique_walk_function(void *element) {
-  DBUG_ENTER("Aggregator_distinct::unique_walk_function");
-  memcpy(table->field[0]->ptr, element, tree_key_length);
+  DBUG_TRACE;
+  memcpy(table->field[0]->field_ptr(), element, tree_key_length);
   item_sum->add();
-  DBUG_RETURN(0);
+  return false;
 }
 
 Aggregator_distinct::~Aggregator_distinct() {
   if (tree) {
     destroy(tree);
-    tree = NULL;
+    tree = nullptr;
   }
   if (table) {
     if (table->file) table->file->ha_index_or_rnd_end();
     free_tmp_table(table->in_use, table);
-    table = NULL;
+    table = nullptr;
   }
   if (tmp_table_param) {
     destroy(tmp_table_param);
-    tmp_table_param = NULL;
+    tmp_table_param = nullptr;
   }
 }
 
@@ -2045,39 +2150,39 @@ bool Aggregator_distinct::arg_is_null(bool use_null_value) {
 }
 
 Item *Item_sum_count::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_count::copy_or_same");
+  DBUG_TRACE;
   Item *result = m_is_window_function ? this
                                       : new (thd->mem_root)
                                             Item_sum_count(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 void Item_sum_count::clear() { count = 0; }
 
 bool Item_sum_count::add() {
   DBUG_ASSERT(!m_is_window_function);
-  if (aggr->arg_is_null(false)) return 0;
+  if (aggr->arg_is_null(false)) return false;
   count++;
-  return 0;
+  return false;
 }
 
 longlong Item_sum_count::val_int() {
-  DBUG_ENTER("Item_sum_count::val_int");
+  DBUG_TRACE;
   DBUG_ASSERT(fixed == 1);
   if (m_is_window_function) {
-    if (wf_common_init()) DBUG_RETURN(0);
+    if (wf_common_init()) return 0;
 
     DBUG_EXECUTE_IF(("enter"), {
       DBUG_PRINT("enter", ("Item_sum_count::val_int arg0 %p", args[0]));
       if (dynamic_cast<Item_field *>(args[0])) {
         Item_field *f = down_cast<Item_field *>(args[0]);
         DBUG_PRINT(("enter"), ("Item_sum_count::val_int field: %p ptr: %p",
-                               f->field, f->field->ptr));
+                               f->field, f->field->field_ptr()));
       }
     });
 
     if (args[0]->is_null()) {
-      DBUG_RETURN(count);
+      return count;
     }
     if (m_window->do_inverse()) {
       if (count > 0) count--;
@@ -2086,18 +2191,17 @@ longlong Item_sum_count::val_int() {
     }
     null_value = false;
 
-    DBUG_RETURN(count);
+    return count;
   } else {
     if (aggr) aggr->endup();
-    DBUG_RETURN(count);
+    return count;
   }
 }
 
 void Item_sum_count::cleanup() {
-  DBUG_ENTER("Item_sum_count::cleanup");
+  DBUG_TRACE;
   count = 0;
   Item_sum_int::cleanup();
-  DBUG_VOID_RETURN;
 }
 
 bool Item_sum_avg::resolve_type(THD *thd) {
@@ -2116,7 +2220,8 @@ bool Item_sum_avg::resolve_type(THD *thd) {
     f_scale = args[0]->decimals;
     dec_bin_size = my_decimal_get_binary_size(f_precision, f_scale);
   } else {
-    decimals = min<uint>(args[0]->decimals + prec_increment, NOT_FIXED_DEC);
+    decimals =
+        min<uint>(args[0]->decimals + prec_increment, DECIMAL_NOT_SPECIFIED);
     max_length = args[0]->max_length + prec_increment;
   }
   set_data_type_from_result(hybrid_type, max_length);
@@ -2124,14 +2229,14 @@ bool Item_sum_avg::resolve_type(THD *thd) {
 }
 
 Item *Item_sum_avg::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_avg::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_avg(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 Field *Item_sum_avg::create_tmp_field(bool group, TABLE *table) {
-  DBUG_ENTER("Item_sum_avg::create_tmp_field");
+  DBUG_TRACE;
   Field *field;
   if (group) {
     /*
@@ -2142,14 +2247,14 @@ Field *Item_sum_avg::create_tmp_field(bool group, TABLE *table) {
     field = new (*THR_MALLOC) Field_string(
         ((hybrid_type == DECIMAL_RESULT) ? dec_bin_size : sizeof(double)) +
             sizeof(longlong),
-        0, item_name.ptr(), &my_charset_bin);
+        false, item_name.ptr(), &my_charset_bin);
   } else if (hybrid_type == DECIMAL_RESULT)
     field = Field_new_decimal::create_from_item(this);
   else
-    field = new (*THR_MALLOC)
-        Field_double(max_length, maybe_null, item_name.ptr(), decimals, true);
+    field = new (*THR_MALLOC) Field_double(
+        max_length, maybe_null, item_name.ptr(), decimals, false, true);
   if (field) field->init(table);
-  DBUG_RETURN(field);
+  return field;
 }
 
 void Item_sum_avg::clear() { Item_sum_sum::clear(); }
@@ -2179,7 +2284,7 @@ double Item_sum_avg::val_real() {
   } else {
     if (aggr) aggr->endup();
     if (!m_count) {
-      null_value = 1;
+      null_value = true;
       return 0.0;
     }
     return Item_sum_sum::val_real() / ulonglong2double(m_count);
@@ -2187,7 +2292,7 @@ double Item_sum_avg::val_real() {
 }
 
 my_decimal *Item_sum_avg::val_decimal(my_decimal *val) {
-  DBUG_ENTER("Item_sum_avg::val_decimal");
+  DBUG_TRACE;
   my_decimal sum_buff, cnt;
   const my_decimal *sum_dec;
   DBUG_ASSERT(fixed == 1);
@@ -2195,12 +2300,12 @@ my_decimal *Item_sum_avg::val_decimal(my_decimal *val) {
   if (m_is_window_function) {
     if (hybrid_type != DECIMAL_RESULT) {
       my_decimal *result = val_decimal_from_real(val);
-      DBUG_RETURN(result);
+      return result;
     }
 
     if (wf_common_init()) {
       my_decimal_set_zero(val);
-      DBUG_RETURN(null_value ? nullptr : val);
+      return null_value ? nullptr : val;
     }
 
     /*
@@ -2238,7 +2343,7 @@ my_decimal *Item_sum_avg::val_decimal(my_decimal *val) {
                          : m_count - m_frame_null_count);
 
     if (m_window->is_last_row_in_frame() && divisor > 0) {
-      int2my_decimal(E_DEC_FATAL_ERROR, divisor, 0, &cnt);
+      int2my_decimal(E_DEC_FATAL_ERROR, divisor, false, &cnt);
       my_decimal_div(E_DEC_FATAL_ERROR, &dec_buffs[0], &dec_buffs[1], &cnt,
                      prec_increment);
       val->swap(dec_buffs[0]);
@@ -2248,12 +2353,12 @@ my_decimal *Item_sum_avg::val_decimal(my_decimal *val) {
     null_value = (m_count == m_frame_null_count);
     my_decimal tmp(*val);
     m_avg_dec.swap(tmp);  // save result
-    DBUG_RETURN(val);
+    return val;
   } else {
     if (aggr) aggr->endup();
     if (!m_count) {
-      null_value = 1;
-      DBUG_RETURN(NULL);
+      null_value = true;
+      return nullptr;
     }
 
     /*
@@ -2262,13 +2367,13 @@ my_decimal *Item_sum_avg::val_decimal(my_decimal *val) {
      */
     if (hybrid_type != DECIMAL_RESULT) {
       my_decimal *result = val_decimal_from_real(val);
-      DBUG_RETURN(result);
+      return result;
     }
 
     sum_dec = dec_buffs + curr_dec_buff;
-    int2my_decimal(E_DEC_FATAL_ERROR, m_count, 0, &cnt);
+    int2my_decimal(E_DEC_FATAL_ERROR, m_count, false, &cnt);
     my_decimal_div(E_DEC_FATAL_ERROR, val, sum_dec, &cnt, prec_increment);
-    DBUG_RETURN(val);
+    return val;
   }
 }
 
@@ -2292,10 +2397,10 @@ double Item_sum_std::val_real() {
 }
 
 Item *Item_sum_std::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_std::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_std(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 /*
@@ -2455,7 +2560,7 @@ Item_sum_variance::Item_sum_variance(THD *thd, Item_sum_variance *item)
 }
 
 bool Item_sum_variance::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                           Window::Evaluation_requirements *r) {
+                                           Window_evaluation_requirements *r) {
   bool result = Item_sum::check_wf_semantics(thd, select, r);
   const PT_frame *f = m_window->frame();
   if (f->m_from->m_border_type == WBT_VALUE_PRECEDING ||
@@ -2471,7 +2576,7 @@ bool Item_sum_variance::check_wf_semantics(THD *thd, SELECT_LEX *select,
 }
 
 bool Item_sum_variance::resolve_type(THD *) {
-  DBUG_ENTER("Item_sum_variance::resolve_type");
+  DBUG_TRACE;
   maybe_null = true;
   null_value = true;
 
@@ -2484,17 +2589,17 @@ bool Item_sum_variance::resolve_type(THD *) {
   set_data_type_double();
   hybrid_type = REAL_RESULT;
 
-  if (reject_geometry_args(arg_count, args, this)) DBUG_RETURN(true);
+  if (reject_geometry_args(arg_count, args, this)) return true;
   DBUG_PRINT("info", ("Type: REAL_RESULT (%d, %d)", max_length, (int)decimals));
-  DBUG_RETURN(false);
+  return false;
 }
 
 Item *Item_sum_variance::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_variance::copy_or_same");
+  DBUG_TRACE;
   Item *result = m_is_window_function ? this
                                       : new (thd->mem_root)
                                             Item_sum_variance(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 /**
@@ -2503,7 +2608,7 @@ Item *Item_sum_variance::copy_or_same(THD *thd) {
   pass around.
 */
 Field *Item_sum_variance::create_tmp_field(bool group, TABLE *table) {
-  DBUG_ENTER("Item_sum_variance::create_tmp_field");
+  DBUG_TRACE;
   Field *field;
   if (group) {
     /*
@@ -2512,15 +2617,15 @@ Field *Item_sum_variance::create_tmp_field(bool group, TABLE *table) {
       and unpack on access.
     */
     field =
-        new (*THR_MALLOC) Field_string(sizeof(double) * 2 + sizeof(longlong), 0,
-                                       item_name.ptr(), &my_charset_bin);
+        new (*THR_MALLOC) Field_string(sizeof(double) * 2 + sizeof(longlong),
+                                       false, item_name.ptr(), &my_charset_bin);
   } else
-    field = new (*THR_MALLOC)
-        Field_double(max_length, maybe_null, item_name.ptr(), decimals, true);
+    field = new (*THR_MALLOC) Field_double(
+        max_length, maybe_null, item_name.ptr(), decimals, false, true);
 
-  if (field != NULL) field->init(table);
+  if (field != nullptr) field->init(table);
 
-  DBUG_RETURN(field);
+  return field;
 }
 
 void Item_sum_variance::clear() { count = 0; }
@@ -2536,7 +2641,7 @@ bool Item_sum_variance::add() {
     variance_fp_recurrence_next(
         &recurrence_m, &recurrence_s, &recurrence_s2, &count, nr, optimize,
         m_is_window_function ? m_window->do_inverse() : false);
-  return 0;
+  return false;
 }
 
 double Item_sum_variance::val_real() {
@@ -2578,7 +2683,7 @@ my_decimal *Item_sum_variance::val_decimal(my_decimal *dec_buf) {
 
 void Item_sum_variance::reset_field() {
   double nr;
-  uchar *res = result_field->ptr;
+  uchar *res = result_field->field_ptr();
 
   nr = args[0]->val_real(); /* sets null_value as side-effect */
 
@@ -2598,16 +2703,15 @@ void Item_sum_variance::reset_field() {
 
 void Item_sum_variance::update_field() {
   ulonglong field_count;
-  uchar *res = result_field->ptr;
+  uchar *res = result_field->field_ptr();
 
   double nr = args[0]->val_real(); /* sets null_value as side-effect */
 
   if (args[0]->null_value) return;
 
   /* Serialize format is (double)m, (double)s, (longlong)count */
-  double field_recurrence_m, field_recurrence_s;
-  float8get(&field_recurrence_m, res);
-  float8get(&field_recurrence_s, res + sizeof(double));
+  double field_recurrence_m = float8get(res);
+  double field_recurrence_s = float8get(res + sizeof(double));
   field_count = sint8korr(res + sizeof(double) * 2);
 
   variance_fp_recurrence_next(&field_recurrence_m, &field_recurrence_s, nullptr,
@@ -2625,14 +2729,14 @@ void Item_sum_hybrid::clear() {
   value->clear();
   value->store(args[0]);
   arg_cache->clear();
-  null_value = 1;
+  arg_cache->store(args[0]);
+  null_value = true;
   m_cnt = 0;
   m_saved_last_value_at = 0;
 }
 
-bool Item_sum_hybrid::wf_semantics(THD *thd, SELECT_LEX *select,
-                                   Window::Evaluation_requirements *r,
-                                   bool min) {
+bool Item_sum_hybrid::check_wf_semantics(THD *thd, SELECT_LEX *select,
+                                         Window_evaluation_requirements *r) {
   bool result = Item_sum::check_wf_semantics(thd, select, r);
 
   const PT_order_list *order = m_window->effective_order_by();
@@ -2640,19 +2744,19 @@ bool Item_sum_hybrid::wf_semantics(THD *thd, SELECT_LEX *select,
     ORDER *o = order->value.first;
     // The logic below (see class's doc) makes sense only for MIN and MAX
     DBUG_ASSERT(sum_func() == MIN_FUNC || sum_func() == MAX_FUNC);
-    if (o->item_ptr->real_item()->eq(args[0]->real_item(), 0)) {
+    if (o->item_ptr->real_item()->eq(args[0]->real_item(), false)) {
       if (r->row_optimizable || r->range_optimizable) {
         m_optimize = true;
         value->setup(args[0]);  // no comparisons needed
         if (o->direction == ORDER_ASC) {
-          r->opt_first_row = min ? true : r->opt_first_row;
-          r->opt_last_row = !min ? true : r->opt_last_row;
-          m_want_first = min;
+          r->opt_first_row = m_is_min ? true : r->opt_first_row;
+          r->opt_last_row = !m_is_min ? true : r->opt_last_row;
+          m_want_first = m_is_min;
           m_nulls_first = true;
         } else {
-          r->opt_last_row = min ? true : r->opt_last_row;
-          r->opt_first_row = !min ? true : r->opt_first_row;
-          m_want_first = !min;
+          r->opt_last_row = m_is_min ? true : r->opt_last_row;
+          r->opt_first_row = !m_is_min ? true : r->opt_first_row;
+          m_want_first = !m_is_min;
           m_nulls_first = false;
         }
       }
@@ -2828,10 +2932,10 @@ my_decimal *Item_sum_hybrid::val_decimal(my_decimal *val) {
     m_optimize ? ret = compute() : add();
     if (ret) return nullptr;
   }
-  if (null_value) return 0;
+  if (null_value) return nullptr;
   my_decimal *retval = value->val_decimal(val);
   if ((null_value = value->null_value))
-    DBUG_ASSERT(retval == NULL || my_decimal_is_zero(retval));
+    DBUG_ASSERT(retval == nullptr || my_decimal_is_zero(retval));
   return retval;
 }
 
@@ -2858,7 +2962,7 @@ String *Item_sum_hybrid::val_str(String *str) {
   if (null_value) return nullptr;
 
   String *retval = value->val_str(str);
-  if ((null_value = value->null_value)) DBUG_ASSERT(retval == NULL);
+  if ((null_value = value->null_value)) DBUG_ASSERT(retval == nullptr);
   return retval;
 }
 
@@ -2882,11 +2986,11 @@ void Item_sum_hybrid::split_sum_func(THD *thd, Ref_item_array ref_item_array,
 }
 
 void Item_sum_hybrid::cleanup() {
-  DBUG_ENTER("Item_sum_hybrid::cleanup");
+  DBUG_TRACE;
   Item_sum::cleanup();
   forced_const = false;
   destroy(cmp);
-  cmp = 0;
+  cmp = nullptr;
   /*
     by default it is true to avoid true reporting by
     Item_func_not_all/Item_func_nop_all if this item was never called.
@@ -2895,7 +2999,6 @@ void Item_sum_hybrid::cleanup() {
     If some results found it will be left unchanged.
   */
   was_values = true;
-  DBUG_VOID_RETURN;
 }
 
 void Item_sum_hybrid::no_rows_in_result() {
@@ -2903,52 +3006,45 @@ void Item_sum_hybrid::no_rows_in_result() {
   clear();
 }
 
-Item *Item_sum_min::copy_or_same(THD *thd) {
+Item *Item_sum_hybrid::copy_or_same(THD *thd) {
   if (m_is_window_function) return this;
-  Item_sum_min *item = new (thd->mem_root) Item_sum_min(thd, this);
-  if (item == NULL) return NULL;
-  if (item->setup_hybrid(args[0], value)) return NULL;
+  Item_sum_hybrid *item = clone_hybrid(thd);
+  if (item == nullptr || item->setup_hybrid(args[0], value)) return nullptr;
   return item;
 }
 
-bool Item_sum_min::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                      Window::Evaluation_requirements *r) {
-  return Item_sum_hybrid::wf_semantics(thd, select, r, true);
+Item_sum_min *Item_sum_min::clone_hybrid(THD *thd) const {
+  return new (thd->mem_root) Item_sum_min(thd, this);
 }
 
-bool Item_sum_min::add() {
-  /* args[0] < value */
+Item_sum_max *Item_sum_max::clone_hybrid(THD *thd) const {
+  return new (thd->mem_root) Item_sum_max(thd, this);
+}
+
+/**
+  Checks if a value should replace the minimum or maximum value seen so far in
+  the MIN and MAX aggregate functions.
+
+  @param comparison_result  the result of comparing the current value with the
+                            min/max value seen so far (negative if it's
+                            smaller, 0 if it's equal, positive if it's greater)
+  @param is_min  true if called by MIN, false if called by MAX
+
+  @return true if the current value should replace the min/max value seen so far
+*/
+static bool min_max_best_so_far(int comparison_result, bool is_min) {
+  return is_min ? comparison_result < 0 : comparison_result > 0;
+}
+
+bool Item_sum_hybrid::add() {
   arg_cache->cache_value();
-  if (!arg_cache->null_value && (null_value || cmp->compare() < 0)) {
+  if (!arg_cache->null_value &&
+      (null_value || min_max_best_so_far(cmp->compare(), m_is_min))) {
     value->store(arg_cache);
     value->cache_value();
     null_value = false;
   }
-  return 0;
-}
-
-Item *Item_sum_max::copy_or_same(THD *thd) {
-  if (m_is_window_function) return this;
-  Item_sum_max *item = new (thd->mem_root) Item_sum_max(thd, this);
-  if (item == NULL) return NULL;
-  if (item->setup_hybrid(args[0], value)) return NULL;
-  return item;
-}
-
-bool Item_sum_max::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                      Window::Evaluation_requirements *r) {
-  return Item_sum_hybrid::wf_semantics(thd, select, r, false);
-}
-
-bool Item_sum_max::add() {
-  /* args[0] > value */
-  arg_cache->cache_value();
-  if (!arg_cache->null_value && (null_value || cmp->compare() > 0)) {
-    value->store(arg_cache);
-    value->cache_value();
-    null_value = false;
-  }
-  return 0;
+  return false;
 }
 
 String *Item_sum_bit::val_str(String *str) {
@@ -3074,24 +3170,24 @@ void Item_sum_bit::clear() {
 }
 
 Item *Item_sum_or::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_or::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_or(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 Item *Item_sum_xor::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_xor::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_xor(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 Item *Item_sum_and::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_sum_and::copy_or_same");
+  DBUG_TRACE;
   Item *result =
       m_is_window_function ? this : new (thd->mem_root) Item_sum_and(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 /************************************************************************
@@ -3100,7 +3196,6 @@ Item *Item_sum_and::copy_or_same(THD *thd) {
 
 void Item_sum_num::reset_field() {
   double nr = args[0]->val_real();
-  uchar *res = result_field->ptr;
 
   if (maybe_null) {
     if (args[0]->null_value) {
@@ -3109,7 +3204,7 @@ void Item_sum_num::reset_field() {
     } else
       result_field->set_notnull();
   }
-  float8store(res, nr);
+  float8store(result_field->field_ptr(), nr);
 }
 
 void Item_sum_hybrid::reset_field() {
@@ -3201,7 +3296,7 @@ void Item_sum_sum::reset_field() {
   } else {
     DBUG_ASSERT(hybrid_type == REAL_RESULT);
     double nr = args[0]->val_real();  // Nulls also return 0
-    float8store(result_field->ptr, nr);
+    float8store(result_field->field_ptr(), nr);
   }
   if (args[0]->null_value)
     result_field->set_null();
@@ -3210,16 +3305,15 @@ void Item_sum_sum::reset_field() {
 }
 
 void Item_sum_count::reset_field() {
-  uchar *res = result_field->ptr;
   longlong nr = 0;
   DBUG_ASSERT(aggr->Aggrtype() != Aggregator::DISTINCT_AGGREGATOR);
 
   if (!args[0]->maybe_null || !args[0]->is_null()) nr = 1;
-  int8store(res, nr);
+  int8store(result_field->field_ptr(), nr);
 }
 
 void Item_sum_avg::reset_field() {
-  uchar *res = result_field->ptr;
+  uchar *res = result_field->field_ptr();
   DBUG_ASSERT(aggr->Aggrtype() != Aggregator::DISTINCT_AGGREGATOR);
   if (hybrid_type == DECIMAL_RESULT) {
     longlong tmp;
@@ -3271,7 +3365,7 @@ void Item_sum_bit::update_field() {
     // Add the current value to the previously determined one
     add();
     // Store the value in the result_field
-    result_field->store((char *)value_buff.ptr(), value_buff.length(),
+    result_field->store(value_buff.ptr(), value_buff.length(),
                         default_charset());
   }
 }
@@ -3281,7 +3375,7 @@ void Item_sum_bit::update_field() {
 */
 
 void Item_sum_sum::update_field() {
-  DBUG_ENTER("Item_sum_sum::update_field");
+  DBUG_TRACE;
   DBUG_ASSERT(aggr->Aggrtype() != Aggregator::DISTINCT_AGGREGATOR);
   if (hybrid_type == DECIMAL_RESULT) {
     my_decimal value, *arg_val = args[0]->val_decimal(&value);
@@ -3297,23 +3391,21 @@ void Item_sum_sum::update_field() {
       }
     }
   } else {
-    double old_nr, nr;
-    uchar *res = result_field->ptr;
+    uchar *res = result_field->field_ptr();
 
-    float8get(&old_nr, res);
-    nr = args[0]->val_real();
+    double old_nr = float8get(res);
+    double nr = args[0]->val_real();
     if (!args[0]->null_value) {
       old_nr += nr;
       result_field->set_notnull();
     }
     float8store(res, old_nr);
   }
-  DBUG_VOID_RETURN;
 }
 
 void Item_sum_count::update_field() {
   longlong nr;
-  uchar *res = result_field->ptr;
+  uchar *res = result_field->field_ptr();
 
   nr = sint8korr(res);
   if (!args[0]->maybe_null || !args[0]->is_null()) nr++;
@@ -3321,9 +3413,9 @@ void Item_sum_count::update_field() {
 }
 
 void Item_sum_avg::update_field() {
-  DBUG_ENTER("Item_sum_avg::update_field");
+  DBUG_TRACE;
   longlong field_count;
-  uchar *res = result_field->ptr;
+  uchar *res = result_field->field_ptr();
 
   DBUG_ASSERT(aggr->Aggrtype() != Aggregator::DISTINCT_AGGREGATOR);
 
@@ -3345,8 +3437,7 @@ void Item_sum_avg::update_field() {
 
     nr = args[0]->val_real();
     if (!args[0]->null_value) {
-      double old_nr;
-      float8get(&old_nr, res);
+      double old_nr = float8get(res);
       field_count = sint8korr(res + sizeof(double));
       old_nr += nr;
       float8store(res, old_nr);
@@ -3355,7 +3446,6 @@ void Item_sum_avg::update_field() {
       int8store(res, field_count);
     }
   }
-  DBUG_VOID_RETURN;
 }
 
 void Item_sum_hybrid::update_field() {
@@ -3363,6 +3453,8 @@ void Item_sum_hybrid::update_field() {
     case STRING_RESULT:
       if (args[0]->is_temporal())
         min_max_update_temporal_field();
+      else if (data_type() == MYSQL_TYPE_JSON)
+        min_max_update_json_field();
       else
         min_max_update_str_field();
       break;
@@ -3378,93 +3470,102 @@ void Item_sum_hybrid::update_field() {
 }
 
 void Item_sum_hybrid::min_max_update_temporal_field() {
-  longlong nr, old_nr;
-  old_nr = result_field->val_temporal_by_field_type();
-  nr = args[0]->val_temporal_by_field_type();
-  if (!args[0]->null_value) {
-    if (result_field->is_null())
-      old_nr = nr;
-    else {
-      bool res =
-          unsigned_flag ? (ulonglong)old_nr > (ulonglong)nr : old_nr > nr;
-      if ((cmp_sign > 0) ^ (!res)) old_nr = nr;
-    }
+  const longlong nr = args[0]->val_temporal_by_field_type();
+  if (args[0]->null_value) return;
+
+  if (result_field->is_null()) {
     result_field->set_notnull();
-  } else if (result_field->is_null())
-    result_field->set_null();
-  result_field->store_packed(old_nr);
+  } else {
+    const longlong old_nr = result_field->val_temporal_by_field_type();
+    if (!min_max_best_so_far(
+            unsigned_flag ? compare_numbers(ulonglong(nr), ulonglong(old_nr))
+                          : compare_numbers(nr, old_nr),
+            m_is_min))
+      return;
+  }
+
+  result_field->store_packed(nr);
+}
+
+void Item_sum_hybrid::min_max_update_json_field() {
+  Json_wrapper json1;
+  if (args[0]->val_json(&json1)) return;
+  if (args[0]->null_value) return;
+
+  Field_json *const json_field = down_cast<Field_json *>(result_field);
+  if (json_field->is_null()) {
+    json_field->set_notnull();
+  } else {
+    Json_wrapper json2;
+    if (json_field->val_json(&json2) ||
+        !min_max_best_so_far(json1.compare(json2), m_is_min))
+      return;
+  }
+
+  json_field->store_json(&json1);
 }
 
 void Item_sum_hybrid::min_max_update_str_field() {
   DBUG_ASSERT(cmp);
-  String *res_str = args[0]->val_str(&cmp->value1);
+  const String *const res_str = args[0]->val_str(&cmp->value1);
+  if (args[0]->null_value) return;
 
-  if (!args[0]->null_value) {
-    result_field->val_str(&cmp->value2);
-
-    if (result_field->is_null() ||
-        (cmp_sign * sortcmp(res_str, &cmp->value2, collation.collation)) < 0)
-      result_field->store(res_str->ptr(), res_str->length(),
-                          res_str->charset());
+  if (result_field->is_null())
     result_field->set_notnull();
-  }
+  else if (!min_max_best_so_far(
+               sortcmp(res_str, result_field->val_str(&cmp->value2),
+                       collation.collation),
+               m_is_min))
+    return;
+
+  result_field->store(res_str->ptr(), res_str->length(), res_str->charset());
 }
 
 void Item_sum_hybrid::min_max_update_real_field() {
-  double nr, old_nr;
+  const double nr = args[0]->val_real();
+  if (args[0]->null_value) return;
 
-  old_nr = result_field->val_real();
-  nr = args[0]->val_real();
-  if (!args[0]->null_value) {
-    if (result_field->is_null() || (cmp_sign > 0 ? old_nr > nr : old_nr < nr))
-      old_nr = nr;
+  if (result_field->is_null())
     result_field->set_notnull();
-  } else if (result_field->is_null())
-    result_field->set_null();
-  result_field->store(old_nr);
+  else if (!min_max_best_so_far(compare_numbers(nr, result_field->val_real()),
+                                m_is_min))
+    return;
+
+  result_field->store(nr);
 }
 
 void Item_sum_hybrid::min_max_update_int_field() {
-  longlong nr, old_nr;
+  const longlong nr = args[0]->val_int();
+  if (args[0]->null_value) return;
 
-  old_nr = result_field->val_int();
-  nr = args[0]->val_int();
-  if (!args[0]->null_value) {
-    if (result_field->is_null())
-      old_nr = nr;
-    else {
-      bool res =
-          (unsigned_flag ? (ulonglong)old_nr > (ulonglong)nr : old_nr > nr);
-      /* (cmp_sign > 0 && res) || (!(cmp_sign > 0) && !res) */
-      if ((cmp_sign > 0) ^ (!res)) old_nr = nr;
-    }
+  if (result_field->is_null()) {
     result_field->set_notnull();
-  } else if (result_field->is_null())
-    result_field->set_null();
-  result_field->store(old_nr, unsigned_flag);
+  } else {
+    const longlong old_nr = result_field->val_int();
+    if (!min_max_best_so_far(
+            unsigned_flag ? compare_numbers(ulonglong(nr), ulonglong(old_nr))
+                          : compare_numbers(nr, old_nr),
+            m_is_min))
+      return;
+  }
+
+  result_field->store(nr, unsigned_flag);
 }
 
-/**
-  @todo
-  optimize: do not get result_field in case of args[0] is NULL
-*/
 void Item_sum_hybrid::min_max_update_decimal_field() {
-  /* TODO: optimize: do not get result_field in case of args[0] is NULL */
-  my_decimal old_val, nr_val;
-  const my_decimal *old_nr = result_field->val_decimal(&old_val);
-  const my_decimal *nr = args[0]->val_decimal(&nr_val);
-  if (!args[0]->null_value) {
-    if (result_field->is_null())
-      old_nr = nr;
-    else {
-      bool res = my_decimal_cmp(old_nr, nr) > 0;
-      /* (cmp_sign > 0 && res) || (!(cmp_sign > 0) && !res) */
-      if ((cmp_sign > 0) ^ (!res)) old_nr = nr;
-    }
+  my_decimal nr_val;
+  const my_decimal *const nr = args[0]->val_decimal(&nr_val);
+  if (args[0]->null_value) return;
+
+  if (result_field->is_null()) {
     result_field->set_notnull();
-  } else if (result_field->is_null())
-    result_field->set_null();
-  result_field->store_decimal(old_nr);
+  } else {
+    my_decimal old_val;
+    const my_decimal *const old_nr = result_field->val_decimal(&old_val);
+    if (!min_max_best_so_far(my_decimal_cmp(nr, old_nr), m_is_min)) return;
+  }
+
+  result_field->store_decimal(nr);
 }
 
 Item_avg_field::Item_avg_field(Item_result res_type, Item_sum_avg *item) {
@@ -3473,7 +3574,7 @@ Item_avg_field::Item_avg_field(Item_result res_type, Item_sum_avg *item) {
   decimals = item->decimals;
   max_length = item->max_length;
   unsigned_flag = item->unsigned_flag;
-  field = item->result_field;
+  field = item->get_result_field();
   maybe_null = true;
   hybrid_type = res_type;
   set_data_type(hybrid_type == DECIMAL_RESULT ? MYSQL_TYPE_NEWDECIMAL
@@ -3488,14 +3589,13 @@ Item_avg_field::Item_avg_field(Item_result res_type, Item_sum_avg *item) {
 
 double Item_avg_field::val_real() {
   // fix_fields() never calls for this Item
-  double nr;
   longlong count;
   uchar *res;
 
   if (hybrid_type == DECIMAL_RESULT) return val_real_from_decimal();
 
-  float8get(&nr, field->ptr);
-  res = (field->ptr + sizeof(double));
+  double nr = float8get(field->field_ptr());
+  res = (field->field_ptr() + sizeof(double));
   count = sint8korr(res);
 
   if ((null_value = !count)) return 0.0;
@@ -3505,13 +3605,13 @@ double Item_avg_field::val_real() {
 my_decimal *Item_avg_field::val_decimal(my_decimal *dec_buf) {
   // fix_fields() never calls for this Item
   if (hybrid_type == REAL_RESULT) return val_decimal_from_real(dec_buf);
-  longlong count = sint8korr(field->ptr + dec_bin_size);
-  if ((null_value = !count)) return 0;
+  longlong count = sint8korr(field->field_ptr() + dec_bin_size);
+  if ((null_value = !count)) return nullptr;
 
   my_decimal dec_count, dec_field;
-  binary2my_decimal(E_DEC_FATAL_ERROR, field->ptr, &dec_field, f_precision,
-                    f_scale);
-  int2my_decimal(E_DEC_FATAL_ERROR, count, 0, &dec_count);
+  binary2my_decimal(E_DEC_FATAL_ERROR, field->field_ptr(), &dec_field,
+                    f_precision, f_scale);
+  int2my_decimal(E_DEC_FATAL_ERROR, count, false, &dec_count);
   my_decimal_div(E_DEC_FATAL_ERROR, dec_buf, &dec_field, &dec_count,
                  prec_increment);
   return dec_buf;
@@ -3531,7 +3631,7 @@ Item_sum_bit_field::Item_sum_bit_field(Item_result res_type, Item_sum_bit *item,
   decimals = item->decimals;
   max_length = item->max_length;
   unsigned_flag = item->unsigned_flag;
-  field = item->result_field;
+  field = item->get_result_field();
   maybe_null = false;
   hybrid_type = res_type;
   DBUG_ASSERT(hybrid_type == INT_RESULT || hybrid_type == STRING_RESULT);
@@ -3546,7 +3646,7 @@ Item_sum_bit_field::Item_sum_bit_field(Item_result res_type, Item_sum_bit *item,
 
 longlong Item_sum_bit_field::val_int() {
   if (hybrid_type == INT_RESULT)
-    return uint8korr(field->ptr);
+    return uint8korr(field->field_ptr());
   else {
     String *res;
     if (!(res = val_str(&str_value))) return 0;
@@ -3561,7 +3661,7 @@ longlong Item_sum_bit_field::val_int() {
 
 double Item_sum_bit_field::val_real() {
   if (hybrid_type == INT_RESULT) {
-    ulonglong result = uint8korr(field->ptr);
+    ulonglong result = uint8korr(field->field_ptr());
     return result;
   } else {
     String *res;
@@ -3593,8 +3693,7 @@ String *Item_sum_bit_field::val_str(String *str) {
     if (!non_nulls) {
       DBUG_EXECUTE_IF("simulate_sum_out_of_memory", { return nullptr; });
       if (res_str->alloc(max_length - 1)) return nullptr;
-      std::memset(const_cast<char *>(res_str->ptr()),
-                  static_cast<int>(reset_bits), max_length - 1);
+      std::memset(res_str->ptr(), static_cast<int>(reset_bits), max_length - 1);
       res_str->length(max_length - 1);
       res_str->set_charset(&my_charset_bin);
     } else
@@ -3638,7 +3737,7 @@ my_decimal *Item_std_field::val_decimal(my_decimal *dec_buf) {
   if (hybrid_type == REAL_RESULT) return val_decimal_from_real(dec_buf);
 
   dec = Item_variance_field::val_decimal(dec_buf);
-  if (!dec) return 0;
+  if (!dec) return nullptr;
   my_decimal2double(E_DEC_FATAL_ERROR, dec, &nr);
   DBUG_ASSERT(nr >= 0.0);
   nr = sqrt(nr);
@@ -3653,7 +3752,7 @@ Item_variance_field::Item_variance_field(Item_sum_variance *item) {
   decimals = item->decimals;
   max_length = item->max_length;
   unsigned_flag = item->unsigned_flag;
-  field = item->result_field;
+  field = item->get_result_field();
   maybe_null = true;
   sample = item->sample;
   hybrid_type = item->hybrid_type;
@@ -3665,10 +3764,8 @@ double Item_variance_field::val_real() {
   // fix_fields() never calls for this Item
   if (hybrid_type == DECIMAL_RESULT) return val_real_from_decimal();
 
-  double recurrence_s;
-  ulonglong count;
-  float8get(&recurrence_s, (field->ptr + sizeof(double)));
-  count = sint8korr(field->ptr + sizeof(double) * 2);
+  double recurrence_s = float8get(field->field_ptr() + sizeof(double));
+  ulonglong count = uint8korr(field->field_ptr() + sizeof(double) * 2);
 
   if ((null_value = (count <= sample))) return 0.0;
   return variance_fp_recurrence_result(recurrence_s, 0.0, count, sample, false);
@@ -3687,15 +3784,14 @@ bool Item_udf_sum::itemize(Parse_context *pc, Item **res) {
 }
 
 void Item_udf_sum::clear() {
-  DBUG_ENTER("Item_udf_sum::clear");
+  DBUG_TRACE;
   udf.clear();
-  DBUG_VOID_RETURN;
 }
 
 bool Item_udf_sum::add() {
-  DBUG_ENTER("Item_udf_sum::add");
+  DBUG_TRACE;
   udf.add(&null_value);
-  DBUG_RETURN(0);
+  return false;
 }
 
 void Item_udf_sum::cleanup() {
@@ -3724,10 +3820,10 @@ Item *Item_sum_udf_float::copy_or_same(THD *thd) {
 
 double Item_sum_udf_float::val_real() {
   DBUG_ASSERT(fixed == 1);
-  DBUG_ENTER("Item_sum_udf_float::val");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("result_type: %d  arg_count: %d", args[0]->result_type(),
                       arg_count));
-  DBUG_RETURN(udf.val(&null_value));
+  return udf.val_real(&null_value);
 }
 
 String *Item_sum_udf_float::val_str(String *str) {
@@ -3748,11 +3844,11 @@ longlong Item_sum_udf_decimal::val_int() { return val_int_from_decimal(); }
 
 my_decimal *Item_sum_udf_decimal::val_decimal(my_decimal *dec_buf) {
   DBUG_ASSERT(fixed == 1);
-  DBUG_ENTER("Item_func_udf_decimal::val_decimal");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("result_type: %d  arg_count: %d", args[0]->result_type(),
                       arg_count));
 
-  DBUG_RETURN(udf.val_decimal(&null_value, dec_buf));
+  return udf.val_decimal(&null_value, dec_buf);
 }
 
 Item *Item_sum_udf_decimal::copy_or_same(THD *thd) {
@@ -3765,10 +3861,10 @@ Item *Item_sum_udf_int::copy_or_same(THD *thd) {
 
 longlong Item_sum_udf_int::val_int() {
   DBUG_ASSERT(fixed == 1);
-  DBUG_ENTER("Item_sum_udf_int::val_int");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("result_type: %d  arg_count: %d", args[0]->result_type(),
                       arg_count));
-  DBUG_RETURN(udf.val_int(&null_value));
+  return udf.val_int(&null_value);
 }
 
 String *Item_sum_udf_int::val_str(String *str) {
@@ -3785,7 +3881,7 @@ bool Item_sum_udf_str::resolve_type(THD *) {
   set_data_type(MYSQL_TYPE_VARCHAR);
   max_length = 0;
   for (uint i = 0; i < arg_count; i++)
-    set_if_bigger(max_length, args[i]->max_length);
+    max_length = max(max_length, args[i]->max_length);
   return false;
 }
 
@@ -3799,10 +3895,10 @@ my_decimal *Item_sum_udf_str::val_decimal(my_decimal *dec) {
 
 String *Item_sum_udf_str::val_str(String *str) {
   DBUG_ASSERT(fixed == 1);
-  DBUG_ENTER("Item_sum_udf_str::str");
+  DBUG_TRACE;
   String *res = udf.val_str(str, &str_value);
   null_value = !res;
-  DBUG_RETURN(res);
+  return res;
 }
 
 /*****************************************************************************
@@ -3820,14 +3916,14 @@ String *Item_sum_udf_str::val_str(String *str) {
 
 /**
   Compares the values for fields in expr list of GROUP_CONCAT.
-  @note
 
+  @code
      GROUP_CONCAT([DISTINCT] expr [,expr ...]
               [ORDER BY {unsigned_integer | col_name | expr}
                   [ASC | DESC] [,col_name ...]]
               [SEPARATOR str_val])
+  @endcode
 
-  @return
   @retval -1 : key1 < key2
   @retval  0 : key1 = key2
   @retval  1 : key1 > key2
@@ -3835,8 +3931,9 @@ String *Item_sum_udf_str::val_str(String *str) {
 
 int group_concat_key_cmp_with_distinct(const void *arg, const void *key1,
                                        const void *key2) {
-  DBUG_ENTER("group_concat_key_cmp_with_distinct");
-  Item_func_group_concat *item_func = (Item_func_group_concat *)arg;
+  DBUG_TRACE;
+  const Item_func_group_concat *item_func =
+      static_cast<const Item_func_group_concat *>(arg);
   TABLE *table = item_func->table;
 
   for (uint i = 0; i < item_func->arg_count_field; i++) {
@@ -3856,10 +3953,11 @@ int group_concat_key_cmp_with_distinct(const void *arg, const void *key1,
     if (!field) continue;
 
     uint offset = field->offset(field->table->record[0]) - table->s->null_bytes;
-    int res = field->cmp((uchar *)key1 + offset, (uchar *)key2 + offset);
-    if (res) DBUG_RETURN(res);
+    int res = field->cmp(pointer_cast<const uchar *>(key1) + offset,
+                         pointer_cast<const uchar *>(key2) + offset);
+    if (res) return res;
   }
-  DBUG_RETURN(0);
+  return 0;
 }
 
 /**
@@ -3868,8 +3966,9 @@ int group_concat_key_cmp_with_distinct(const void *arg, const void *key1,
 
 int group_concat_key_cmp_with_order(const void *arg, const void *key1,
                                     const void *key2) {
-  DBUG_ENTER("group_concat_key_cmp_with_order");
-  const Item_func_group_concat *grp_item = (Item_func_group_concat *)arg;
+  DBUG_TRACE;
+  const Item_func_group_concat *grp_item =
+      static_cast<const Item_func_group_concat *>(arg);
   const ORDER *order_item, *end;
   TABLE *table = grp_item->table;
 
@@ -3892,15 +3991,16 @@ int group_concat_key_cmp_with_order(const void *arg, const void *key1,
 
     uint offset =
         (field->offset(field->table->record[0]) - table->s->null_bytes);
-    int res = field->cmp((uchar *)key1 + offset, (uchar *)key2 + offset);
-    if (res) DBUG_RETURN(((order_item)->direction == ORDER_ASC) ? res : -res);
+    int res = field->cmp(pointer_cast<const uchar *>(key1) + offset,
+                         pointer_cast<const uchar *>(key2) + offset);
+    if (res) return ((order_item)->direction == ORDER_ASC) ? res : -res;
   }
   /*
     We can't return 0 because in that case the tree class would remove this
     item as double value. This would cause problems for case-changes and
     if the returned values are not the same we do the sort on.
   */
-  DBUG_RETURN(1);
+  return 1;
 }
 
 /**
@@ -3909,7 +4009,7 @@ int group_concat_key_cmp_with_order(const void *arg, const void *key1,
 
 int dump_leaf_key(void *key_arg, element_count count MY_ATTRIBUTE((unused)),
                   void *item_arg) {
-  DBUG_ENTER("dump_leaf_key");
+  DBUG_TRACE;
   Item_func_group_concat *item = (Item_func_group_concat *)item_arg;
   TABLE *table = item->table;
   String tmp((char *)table->record[1], table->s->reclength,
@@ -3981,9 +4081,9 @@ int dump_leaf_key(void *key_arg, element_count count MY_ATTRIBUTE((unused)),
     */
     if (table && table->blob_storage)
       table->blob_storage->set_truncated_value(false);
-    DBUG_RETURN(1);
+    return 1;
   }
-  DBUG_RETURN(0);
+  return 0;
 }
 
 /**
@@ -4001,11 +4101,11 @@ Item_func_group_concat::Item_func_group_concat(
     const POS &pos, bool distinct_arg, PT_item_list *select_list,
     PT_order_list *opt_order_list, String *separator_arg, PT_window *w)
     : super(pos, w),
-      tmp_table_param(0),
+      tmp_table_param(nullptr),
       separator(separator_arg),
-      tree(0),
-      unique_filter(NULL),
-      table(0),
+      tree(nullptr),
+      unique_filter(nullptr),
+      table(nullptr),
       order_array(*THR_MALLOC),
       arg_count_order(opt_order_list ? opt_order_list->value.elements : 0),
       arg_count_field(select_list->elements()),
@@ -4014,15 +4114,16 @@ Item_func_group_concat::Item_func_group_concat(
       distinct(distinct_arg),
       warning_for_row(false),
       always_null(false),
-      force_copy_fields(0),
-      original(0) {
+      force_copy_fields(false),
+      original(nullptr) {
   Item *item_select;
   Item **arg_ptr;
 
-  quick_group = false;
+  allow_group_via_temp_table = false;
   arg_count = arg_count_field + arg_count_order;
 
-  if (!(args = (Item **)sql_alloc(sizeof(Item *) * arg_count))) return;
+  if (!(args = (Item **)(*THR_MALLOC)->Alloc(sizeof(Item *) * arg_count)))
+    return;
 
   if (order_array.reserve(arg_count_order)) return;
 
@@ -4032,14 +4133,14 @@ Item_func_group_concat::Item_func_group_concat(
   for (arg_ptr = args; (item_select = li++); arg_ptr++) *arg_ptr = item_select;
 
   if (arg_count_order) {
-    for (ORDER *order_item = opt_order_list->value.first; order_item != NULL;
+    for (ORDER *order_item = opt_order_list->value.first; order_item != nullptr;
          order_item = order_item->next) {
       order_array.push_back(*order_item);
       *arg_ptr = *order_item->item;
       order_array.back().item = arg_ptr++;
     }
     for (ORDER *ord = order_array.begin(); ord < order_array.end(); ++ord)
-      ord->next = ord != &order_array.back() ? ord + 1 : NULL;
+      ord->next = ord != &order_array.back() ? ord + 1 : nullptr;
   }
 }
 
@@ -4069,7 +4170,7 @@ Item_func_group_concat::Item_func_group_concat(THD *thd,
       always_null(item->always_null),
       force_copy_fields(item->force_copy_fields),
       original(item) {
-  quick_group = item->quick_group;
+  allow_group_via_temp_table = item->allow_group_via_temp_table;
   result.set_charset(collation.collation);
 
   /*
@@ -4092,12 +4193,12 @@ Item_func_group_concat::Item_func_group_concat(THD *thd,
   }
   if (arg_count_order) {
     for (ORDER *ord = order_array.begin(); ord < order_array.end(); ++ord)
-      ord->next = ord != &order_array.back() ? ord + 1 : NULL;
+      ord->next = ord != &order_array.back() ? ord + 1 : nullptr;
   }
 }
 
 void Item_func_group_concat::cleanup() {
-  DBUG_ENTER("Item_func_group_concat::cleanup");
+  DBUG_TRACE;
   Item_sum::cleanup();
 
   /*
@@ -4106,22 +4207,22 @@ void Item_func_group_concat::cleanup() {
   */
   if (!original) {
     destroy(tmp_table_param);
-    tmp_table_param = 0;
+    tmp_table_param = nullptr;
     if (table) {
       THD *thd = table->in_use;
       if (table->blob_storage) destroy(table->blob_storage);
       free_tmp_table(thd, table);
-      table = 0;
+      table = nullptr;
       if (tree) {
         delete_tree(tree);
-        tree = 0;
+        tree = nullptr;
       }
       if (unique_filter) {
         destroy(unique_filter);
-        unique_filter = NULL;
+        unique_filter = nullptr;
       }
     }
-    DBUG_ASSERT(tree == 0);
+    DBUG_ASSERT(tree == nullptr);
   }
   /*
    As the ORDER structures pointed to by the elements of the
@@ -4134,10 +4235,9 @@ void Item_func_group_concat::cleanup() {
     if (order_array[i].is_position)
       args[arg_count_field + i] = order_array[i].item_ptr;
   }
-  DBUG_VOID_RETURN;
 }
 
-Field *Item_func_group_concat::make_string_field(TABLE *table_arg) {
+Field *Item_func_group_concat::make_string_field(TABLE *table_arg) const {
   Field *field;
   DBUG_ASSERT(collation.collation);
   /*
@@ -4165,11 +4265,11 @@ Field *Item_func_group_concat::make_string_field(TABLE *table_arg) {
 }
 
 Item *Item_func_group_concat::copy_or_same(THD *thd) {
-  DBUG_ENTER("Item_func_group_concat::copy_or_same");
+  DBUG_TRACE;
   Item *result = m_is_window_function ? this
                                       : new (thd->mem_root)
                                             Item_func_group_concat(thd, this);
-  DBUG_RETURN(result);
+  return result;
 }
 
 void Item_func_group_concat::clear() {
@@ -4185,7 +4285,7 @@ void Item_func_group_concat::clear() {
 }
 
 bool Item_func_group_concat::add() {
-  if (always_null) return 0;
+  if (always_null) return false;
   if (copy_fields(tmp_table_param, table->in_use)) return true;
   if (copy_funcs(tmp_table_param, table->in_use)) return true;
 
@@ -4195,7 +4295,7 @@ bool Item_func_group_concat::add() {
 
     Field *field = show_item->get_tmp_table_field();
     if (field && field->is_null_in_record((const uchar *)table->record[0]))
-      return 0;  // Skip row if it contains null
+      return false;  // Skip row if it contains null
   }
 
   null_value = false;
@@ -4208,7 +4308,7 @@ bool Item_func_group_concat::add() {
     if (count == unique_filter->elements_in_tree()) row_eligible = false;
   }
 
-  TREE_ELEMENT *el = 0;  // Only for safety
+  TREE_ELEMENT *el = nullptr;  // Only for safety
   if (row_eligible && tree) {
     DBUG_EXECUTE_IF("trigger_OOM_in_gconcat_add",
                     DBUG_SET("+d,simulate_persistent_out_of_memory"););
@@ -4217,7 +4317,7 @@ bool Item_func_group_concat::add() {
     DBUG_EXECUTE_IF("trigger_OOM_in_gconcat_add",
                     DBUG_SET("-d,simulate_persistent_out_of_memory"););
     /* check if there was enough memory to insert the row */
-    if (!el) return 1;
+    if (!el) return true;
   }
   /*
     In case of GROUP_CONCAT with DISTINCT or ORDER BY (or both) don't dump the
@@ -4226,7 +4326,7 @@ bool Item_func_group_concat::add() {
   if (row_eligible && !warning_for_row && tree == nullptr && !distinct)
     dump_leaf_key(table->record[0] + table->s->null_bytes, 1, this);
 
-  return 0;
+  return false;
 }
 
 bool Item_func_group_concat::fix_fields(THD *thd, Item **ref) {
@@ -4234,9 +4334,9 @@ bool Item_func_group_concat::fix_fields(THD *thd, Item **ref) {
 
   if (init_sum_func_check(thd)) return true;
 
-  maybe_null = 1;
+  maybe_null = true;
 
-  Disable_semijoin_flattening DSF(thd->lex->current_select(), true);
+  Condition_context CCT(thd->lex->current_select());
 
   /*
     Fix fields for select list and ORDER clause
@@ -4251,11 +4351,11 @@ bool Item_func_group_concat::fix_fields(THD *thd, Item **ref) {
   /* skip charset aggregation for order columns */
   if (agg_item_charsets_for_string_result(collation, func_name(), args,
                                           arg_count - arg_count_order))
-    return 1;
+    return true;
 
   result.set_charset(collation.collation);
-  result_field = 0;
-  null_value = 1;
+  result_field = nullptr;
+  null_value = true;
   group_concat_max_len = thd->variables.group_concat_max_len;
   uint32 max_chars = group_concat_max_len / collation.collation->mbminlen;
   uint max_byte_length = max_chars * collation.collation->mbmaxlen;
@@ -4285,12 +4385,12 @@ bool Item_func_group_concat::fix_fields(THD *thd, Item **ref) {
 
   if (check_sum_func(thd, ref)) return true;
 
-  fixed = 1;
+  fixed = true;
   return false;
 }
 
 bool Item_func_group_concat::setup(THD *thd) {
-  DBUG_ENTER("Item_func_group_concat::setup");
+  DBUG_TRACE;
 
   List<Item> list;
   DBUG_ASSERT(thd->lex->current_select() == aggr_select);
@@ -4301,20 +4401,19 @@ bool Item_func_group_concat::setup(THD *thd) {
     Currently setup() can be called twice. Please add
     assertion here when this is fixed.
   */
-  if (table || tree) DBUG_RETURN(false);
+  if (table || tree) return false;
 
-  if (!(tmp_table_param = new (thd->mem_root) Temp_table_param))
-    DBUG_RETURN(true);
+  if (!(tmp_table_param = new (thd->mem_root) Temp_table_param)) return true;
 
   /* Push all not constant fields to the list and create a temp table */
-  always_null = 0;
+  always_null = false;
   for (uint i = 0; i < arg_count_field; i++) {
     Item *item = args[i];
-    if (list.push_back(item)) DBUG_RETURN(true);
+    if (list.push_back(item)) return true;
     if (item->const_item()) {
       if (item->is_null()) {
-        always_null = 1;
-        DBUG_RETURN(false);
+        always_null = true;
+        return false;
       }
     }
   }
@@ -4329,11 +4428,11 @@ bool Item_func_group_concat::setup(THD *thd) {
   if (arg_count_order &&
       setup_order(thd, Ref_item_array(args, arg_count), context->table_list,
                   list, all_fields, order_array.begin()))
-    DBUG_RETURN(true);
+    return true;
 
   count_field_types(aggr_select, tmp_table_param, all_fields, false, true);
   tmp_table_param->force_copy_fields = force_copy_fields;
-  DBUG_ASSERT(table == 0);
+  DBUG_ASSERT(table == nullptr);
   if (order_or_distinct) {
     /*
       Force the create_tmp_table() to convert BIT columns to INT
@@ -4358,12 +4457,12 @@ bool Item_func_group_concat::setup(THD *thd) {
     Note that in the table, we first have the ORDER BY fields, then the
     field list.
   */
-  if (!(table = create_tmp_table(thd, tmp_table_param, all_fields, NULL, false,
-                                 true, aggr_select->active_options(),
-                                 HA_POS_ERROR, (char *)"")))
-    DBUG_RETURN(true);
-  table->file->extra(HA_EXTRA_NO_ROWS);
-  table->no_rows = 1;
+  if (!(table = create_tmp_table(thd, tmp_table_param, all_fields, nullptr,
+                                 false, true, aggr_select->active_options(),
+                                 HA_POS_ERROR, "")))
+    return true;
+  table->file->ha_extra(HA_EXTRA_NO_ROWS);
+  table->no_rows = true;
 
   /**
     Initialize blob_storage if GROUP_CONCAT is used
@@ -4386,11 +4485,8 @@ bool Item_func_group_concat::setup(THD *thd) {
       syntax of this function). If there is no ORDER BY clause, we don't
       create this tree.
     */
-    init_tree(tree,
-              min(static_cast<ulong>(thd->variables.max_heap_table_size),
-                  thd->variables.sortbuff_size / 16),
-              0, tree_key_length, group_concat_key_cmp_with_order, 0, NULL,
-              (void *)this);
+    init_tree(tree, 0, tree_key_length, group_concat_key_cmp_with_order, false,
+              nullptr, this);
   }
 
   if (distinct)
@@ -4398,22 +4494,22 @@ bool Item_func_group_concat::setup(THD *thd) {
         Unique(group_concat_key_cmp_with_distinct, (void *)this,
                tree_key_length, ram_limitation(thd));
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /* This is used by rollup to create a separate usable copy of the function */
 
 void Item_func_group_concat::make_unique() {
-  tmp_table_param = 0;
-  table = 0;
-  original = 0;
-  force_copy_fields = 1;
-  tree = 0;
+  tmp_table_param = nullptr;
+  table = nullptr;
+  original = nullptr;
+  force_copy_fields = true;
+  tree = nullptr;
 }
 
 String *Item_func_group_concat::val_str(String *) {
   DBUG_ASSERT(fixed == 1);
-  if (null_value) return 0;
+  if (null_value) return nullptr;
 
   if (!m_result_finalized)  // Result yet to be written.
   {
@@ -4502,7 +4598,7 @@ bool Item_non_framing_wf::fix_fields(THD *thd, Item **items) {
 }
 
 longlong Item_row_number::val_int() {
-  DBUG_ENTER("Item_row_number::val_int");
+  DBUG_TRACE;
 
   if (m_window->at_partition_border() && !m_window->needs_buffering()) {
     clear();
@@ -4512,7 +4608,7 @@ longlong Item_row_number::val_int() {
 
   DBUG_PRINT("enter", ("Item_row_number::val_int  at border: %d ctr: %llu",
                        m_window->at_partition_border(), m_ctr));
-  DBUG_RETURN(m_ctr);
+  return m_ctr;
 }
 
 double Item_row_number::val_real() {
@@ -4532,19 +4628,18 @@ my_decimal *Item_row_number::val_decimal(my_decimal *buffer) {
 void Item_row_number::clear() { m_ctr = 0; }
 
 bool Item_rank::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                   Window::Evaluation_requirements *r
+                                   Window_evaluation_requirements *r
                                        MY_ATTRIBUTE((unused))) {
   const PT_order_list *order = m_window->effective_order_by();
   // SQL2015 6.10 <window function> SR 6.a: require ORDER BY; we don't.
   if (!order) return false;  // all rows in partition are peers
-  for (ORDER *o = order->value.first; o != NULL; o = o->next) {
+  for (ORDER *o = order->value.first; o != nullptr; o = o->next) {
     /*
       We need to access the value of the ORDER expression when evaluating
       RANK to determine equality or not, so we need a handle.
     */
-    Item_ref *ir =
-        new Item_ref(&select->context, o->item, (char *)"<no matter>",
-                     (char *)"<partition order>");
+    Item_ref *ir = new Item_ref(&select->context, o->item, "<no matter>",
+                                "<partition order>");
     if (ir == nullptr) return true;
 
     m_previous.push_back(new_Cached_item(thd, ir));
@@ -4553,7 +4648,7 @@ bool Item_rank::check_wf_semantics(THD *thd, SELECT_LEX *select,
 }
 
 longlong Item_rank::val_int() {
-  DBUG_ENTER("Item_rank::val_int");
+  DBUG_TRACE;
   if (m_window->at_partition_border() && !m_window->needs_buffering()) {
     clear();
   }
@@ -4580,7 +4675,7 @@ longlong Item_rank::val_int() {
     m_duplicates++;
   }
 
-  DBUG_RETURN(m_rank_ctr);
+  return m_rank_ctr;
 }
 
 double Item_rank::val_real() {
@@ -4624,7 +4719,7 @@ void Item_rank::cleanup() {
 }
 
 bool Item_cume_dist::check_wf_semantics(THD *, SELECT_LEX *,
-                                        Window::Evaluation_requirements *r) {
+                                        Window_evaluation_requirements *r) {
   // we need to know partition cardinality, so two passes
   r->needs_buffer = true;
   // Before we can compute for the current row we need the count of its peers
@@ -4634,23 +4729,23 @@ bool Item_cume_dist::check_wf_semantics(THD *, SELECT_LEX *,
 }
 
 double Item_cume_dist::val_real() {
-  DBUG_ENTER("Item_cume_dist::val_real");
+  DBUG_TRACE;
 
   if (!m_window->has_windowing_steps())
-    DBUG_RETURN(1.0);  // degenerate case, no real windowing
+    return 1.0;  // degenerate case, no real windowing
 
   double cume_dist = (double)m_window->last_rowno_in_peerset() /
                      m_window->last_rowno_in_cache();
 
-  DBUG_RETURN(cume_dist);
+  return cume_dist;
 }
 
 longlong Item_cume_dist::val_int() {
-  DBUG_ENTER("Item_cume_dist::val_int");
+  DBUG_TRACE;
 
   longlong result = (longlong)rint(val_real());
 
-  DBUG_RETURN(result);
+  return result;
 }
 
 String *Item_cume_dist::val_str(String *buff) {
@@ -4663,7 +4758,7 @@ my_decimal *Item_cume_dist::val_decimal(my_decimal *buffer) {
 }
 
 bool Item_percent_rank::check_wf_semantics(THD *, SELECT_LEX *,
-                                           Window::Evaluation_requirements *r) {
+                                           Window_evaluation_requirements *r) {
   // we need to know partition cardinality, so two passes
   r->needs_buffer = true;
   /*
@@ -4687,10 +4782,10 @@ bool Item_percent_rank::check_wf_semantics(THD *, SELECT_LEX *,
 }
 
 double Item_percent_rank::val_real() {
-  DBUG_ENTER("Item_percent_rank::val_real");
+  DBUG_TRACE;
 
   if (!m_window->has_windowing_steps())
-    DBUG_RETURN(0.0);  // degenerate case, no real windowing
+    return 0.0;  // degenerate case, no real windowing
 
   if (m_window->rowno_being_visited() == m_window->rowno_in_partition()) {
     if (m_last_peer_visited) {
@@ -4704,20 +4799,20 @@ double Item_percent_rank::val_real() {
     if (m_window->rowno_being_visited() == m_window->last_rowno_in_peerset())
       m_last_peer_visited = true;
 
-    if (m_rank_ctr == 1) DBUG_RETURN(0);
+    if (m_rank_ctr == 1) return 0;
   }
 
   double percent_rank =
       (double)(m_rank_ctr - 1) / (m_window->last_rowno_in_cache() - 1);
-  DBUG_RETURN(percent_rank);
+  return percent_rank;
 }
 
 longlong Item_percent_rank::val_int() {
-  DBUG_ENTER("Item_percent_rank::val_int");
+  DBUG_TRACE;
 
   longlong result = (longlong)rint(val_real());
 
-  DBUG_RETURN(result);
+  return result;
 }
 
 String *Item_percent_rank::val_str(String *buff) {
@@ -4819,7 +4914,7 @@ my_decimal *Item_ntile::val_decimal(my_decimal *buffer) {
 
 bool Item_ntile::check_wf_semantics(THD *thd MY_ATTRIBUTE((unused)),
                                     SELECT_LEX *select MY_ATTRIBUTE((unused)),
-                                    Window::Evaluation_requirements *r) {
+                                    Window_evaluation_requirements *r) {
   r->needs_buffer =
       true;  // we need to know partition cardinality, so two passes
   // SQL2015 6.10 <window function> SR 6.a: require ORDER BY; we don't.
@@ -4827,7 +4922,7 @@ bool Item_ntile::check_wf_semantics(THD *thd MY_ATTRIBUTE((unused)),
 }
 
 bool Item_first_last_value::check_wf_semantics(
-    THD *thd, SELECT_LEX *select, Window::Evaluation_requirements *r) {
+    THD *thd, SELECT_LEX *select, Window_evaluation_requirements *r) {
   if (super::check_wf_semantics(thd, select, r)) return true;
 
   r->opt_first_row = m_is_first;
@@ -4866,7 +4961,7 @@ bool Item_first_last_value::fix_fields(THD *thd, Item **items) {
 
   if (setup_first_last()) return true;
 
-  result_field = NULL;
+  result_field = nullptr;
 
   if (resolve_type(thd)) return true;
 
@@ -4886,7 +4981,7 @@ void Item_first_last_value::split_sum_func(THD *thd,
 
 bool Item_first_last_value::setup_first_last() {
   m_value = Item_cache::get_cache(args[0]);
-  if (m_value == NULL) return true;
+  if (m_value == nullptr) return true;
   /*
     After any split_sum_func, we will need to update the m_value::example,
     cf. Item_first_last_value::split_sum_func
@@ -4897,7 +4992,7 @@ bool Item_first_last_value::setup_first_last() {
 
 void Item_first_last_value::clear() {
   m_value->clear();
-  null_value = 1;
+  null_value = true;
   cnt = 0;
 }
 
@@ -5026,7 +5121,7 @@ bool Item_nth_value::fix_fields(THD *thd, Item **items) {
     m_n = args[1]->val_int();
   }
 
-  result_field = NULL;
+  result_field = nullptr;
 
   if (resolve_type(thd)) return true;
 
@@ -5051,7 +5146,7 @@ bool Item_nth_value::setup_nth() {
     cf. Item_nth_value::split_sum_func
   */
   m_value = Item_cache::get_cache(args[0]);
-  if (m_value == NULL) return true;
+  if (m_value == nullptr) return true;
   m_value->setup(args[0]);
   return false;
 }
@@ -5063,7 +5158,7 @@ void Item_nth_value::clear() {
 }
 
 bool Item_nth_value::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                        Window::Evaluation_requirements *r) {
+                                        Window_evaluation_requirements *r) {
   if (super::check_wf_semantics(thd, select, r)) return true;
 
   r->opt_nth_row.m_rowno = m_n;
@@ -5286,7 +5381,7 @@ bool Item_lead_lag::setup_lead_lag() {
 
 bool Item_lead_lag::check_wf_semantics(
     THD *thd MY_ATTRIBUTE((unused)), SELECT_LEX *select MY_ATTRIBUTE((unused)),
-    Window::Evaluation_requirements *r) {
+    Window_evaluation_requirements *r) {
   if (m_null_treatment == NT_IGNORE_NULLS) {
     my_error(ER_NOT_SUPPORTED_YET, MYF(0), "IGNORE NULLS");
     return true;
@@ -5427,8 +5522,18 @@ bool Item_lead_lag::compute() {
   return null_value || current_thd->is_error();
 }
 
+template <typename... Args>
+Item_sum_json::Item_sum_json(unique_ptr_destroy_only<Json_wrapper> wrapper,
+                             Args &&... parent_args)
+    : Item_sum(std::forward<Args>(parent_args)...),
+      m_wrapper(std::move(wrapper)) {
+  set_data_type_json();
+}
+
+Item_sum_json::~Item_sum_json() = default;
+
 bool Item_sum_json::check_wf_semantics(THD *thd, SELECT_LEX *select,
-                                       Window::Evaluation_requirements *reqs) {
+                                       Window_evaluation_requirements *reqs) {
   return Item_sum::check_wf_semantics(thd, select, reqs);
 }
 
@@ -5440,7 +5545,7 @@ bool Item_sum_json::fix_fields(THD *thd, Item **ref) {
 
   if (init_sum_func_check(thd)) return true;
 
-  Disable_semijoin_flattening DSF(thd->lex->current_select(), true);
+  Condition_context CCT(thd->lex->current_select());
 
   for (uint i = 0; i < arg_count; i++) {
     if ((!args[i]->fixed && args[i]->fix_fields(thd, args + i)) ||
@@ -5469,9 +5574,9 @@ String *Item_sum_json::val_str(String *str) {
     */
     if (add()) return str;
   }
-  if (null_value || m_wrapper.empty()) return nullptr;
+  if (null_value || m_wrapper->empty()) return nullptr;
   str->length(0);
-  if (m_wrapper.to_string(str, true, func_name())) return error_str();
+  if (m_wrapper->to_string(str, true, func_name())) return error_str();
 
   return str;
 }
@@ -5486,13 +5591,13 @@ bool Item_sum_json::val_json(Json_wrapper *wr) {
     */
     add();
   }
-  if (null_value || m_wrapper.empty()) return true;
+  if (null_value || m_wrapper->empty()) return true;
 
   /*
     val_* functions are called more than once in aggregates and
     by passing the dom some function will destroy it so a clone is needed.
   */
-  *wr = Json_wrapper(m_wrapper.clone_dom(current_thd));
+  *wr = Json_wrapper(m_wrapper->clone_dom(current_thd));
   return false;
 }
 
@@ -5506,9 +5611,9 @@ double Item_sum_json::val_real() {
     */
     add();
   }
-  if (null_value || m_wrapper.empty()) return 0.0;
+  if (null_value || m_wrapper->empty()) return 0.0;
 
-  return m_wrapper.coerce_real(func_name());
+  return m_wrapper->coerce_real(func_name());
 }
 
 longlong Item_sum_json::val_int() {
@@ -5521,9 +5626,9 @@ longlong Item_sum_json::val_int() {
     */
     add();
   }
-  if (null_value || m_wrapper.empty()) return 0;
+  if (null_value || m_wrapper->empty()) return 0;
 
-  return m_wrapper.coerce_int(func_name());
+  return m_wrapper->coerce_int(func_name());
 }
 
 my_decimal *Item_sum_json::val_decimal(my_decimal *decimal_value) {
@@ -5536,24 +5641,24 @@ my_decimal *Item_sum_json::val_decimal(my_decimal *decimal_value) {
     */
     add();
   }
-  if (null_value || m_wrapper.empty()) {
+  if (null_value || m_wrapper->empty()) {
     my_decimal_set_zero(decimal_value);
     return decimal_value;
   }
 
-  return m_wrapper.coerce_decimal(decimal_value, func_name());
+  return m_wrapper->coerce_decimal(decimal_value, func_name());
 }
 
 bool Item_sum_json::get_date(MYSQL_TIME *ltime, my_time_flags_t) {
-  if (null_value || m_wrapper.empty()) return true;
+  if (null_value || m_wrapper->empty()) return true;
 
-  return m_wrapper.coerce_date(ltime, func_name());
+  return m_wrapper->coerce_date(ltime, func_name());
 }
 
 bool Item_sum_json::get_time(MYSQL_TIME *ltime) {
-  if (null_value || m_wrapper.empty()) return true;
+  if (null_value || m_wrapper->empty()) return true;
 
-  return m_wrapper.coerce_time(ltime, func_name());
+  return m_wrapper->coerce_time(ltime, func_name());
 }
 
 void Item_sum_json::reset_field() {
@@ -5572,7 +5677,7 @@ void Item_sum_json::reset_field() {
   Field_json *json_result_field = down_cast<Field_json *>(result_field);
   json_result_field->set_notnull();
   // Store the container inside the field.
-  json_result_field->store_json(&m_wrapper);
+  json_result_field->store_json(m_wrapper.get());
   /* purecov: end */
 }
 
@@ -5586,39 +5691,67 @@ void Item_sum_json::update_field() {
   */
   Field_json *json_result_field = down_cast<Field_json *>(result_field);
   // Restore the container(m_wrapper) from the field
-  json_result_field->val_json(&m_wrapper);
+  json_result_field->val_json(m_wrapper.get());
 
   // Append elements to the container.
   add();
   // Store the container inside the field.
-  json_result_field->store_json(&m_wrapper);
+  json_result_field->store_json(m_wrapper.get());
   json_result_field->set_notnull();
   /* purecov: end */
 }
 
+Item_sum_json_array::Item_sum_json_array(
+    THD *thd, Item_sum *item, unique_ptr_destroy_only<Json_wrapper> wrapper,
+    unique_ptr_destroy_only<Json_array> array)
+    : Item_sum_json(std::move(wrapper), thd, item),
+      m_json_array(std::move(array)) {}
+
+Item_sum_json_array::Item_sum_json_array(
+    const POS &pos, Item *a, PT_window *w,
+    unique_ptr_destroy_only<Json_wrapper> wrapper,
+    unique_ptr_destroy_only<Json_array> array)
+    : Item_sum_json(std::move(wrapper), pos, a, w),
+      m_json_array(std::move(array)) {}
+
+Item_sum_json_array::~Item_sum_json_array() = default;
+
 void Item_sum_json_array::clear() {
   null_value = true;
-  m_json_array.clear();
+  m_json_array->clear();
 
-  // Set the array to the m_wrapper.
-  m_wrapper = Json_wrapper(&m_json_array);
-  // But let Item_sum_json_array keep the ownership.
-  m_wrapper.set_alias();
+  // Set the array to the m_wrapper, but let Item_sum_json_array keep the
+  // ownership.
+  *m_wrapper = Json_wrapper(m_json_array.get(), true);
 }
+
+Item_sum_json_object::Item_sum_json_object(
+    THD *thd, Item_sum *item, unique_ptr_destroy_only<Json_wrapper> wrapper,
+    unique_ptr_destroy_only<Json_object> object)
+    : Item_sum_json(std::move(wrapper), thd, item),
+      m_json_object(std::move(object)) {}
+
+Item_sum_json_object::Item_sum_json_object(
+    const POS &pos, Item *a, Item *b, PT_window *w,
+    unique_ptr_destroy_only<Json_wrapper> wrapper,
+    unique_ptr_destroy_only<Json_object> object)
+    : Item_sum_json(std::move(wrapper), pos, a, b, w),
+      m_json_object(std::move(object)) {}
+
+Item_sum_json_object::~Item_sum_json_object() = default;
 
 void Item_sum_json_object::clear() {
   null_value = true;
-  m_json_object.clear();
+  m_json_object->clear();
 
-  // Set the object to the m_wrapper.
-  m_wrapper = Json_wrapper(&m_json_object);
-  // But let Item_sum_json_object keep the ownership.
-  m_wrapper.set_alias();
+  // Set the object to the m_wrapper, but let Item_sum_json_object keep the
+  // ownership.
+  *m_wrapper = Json_wrapper(m_json_object.get(), true);
   m_key_map.clear();
 }
 
 bool Item_sum_json_object::check_wf_semantics(
-    THD *thd, SELECT_LEX *select, Window::Evaluation_requirements *r) {
+    THD *thd, SELECT_LEX *select, Window_evaluation_requirements *r) {
   Item_sum_json::check_wf_semantics(thd, select, r);
   /*
     As Json_object always stores only the last value for a key,
@@ -5633,7 +5766,7 @@ bool Item_sum_json_object::check_wf_semantics(
   const PT_order_list *order = m_window->effective_order_by();
   if (order != nullptr) {
     ORDER *o = order->value.first;
-    if (o->item_ptr->real_item()->eq(args[0]->real_item(), 0)) {
+    if (o->item_ptr->real_item()->eq(args[0]->real_item(), false)) {
       r->needs_last_peer_in_frame = true;
       m_optimize = true;
     }
@@ -5656,7 +5789,7 @@ bool Item_sum_json_array::add() {
   try {
     if (m_is_window_function) {
       if (m_window->do_inverse()) {
-        auto arr = down_cast<Json_array *>(m_wrapper.to_dom(thd));
+        auto arr = down_cast<Json_array *>(m_wrapper->to_dom(thd));
         arr->remove(0);  // Remove the first element from the array
         arr->size() == 0 ? null_value = true : null_value = false;
         return false;
@@ -5675,7 +5808,7 @@ bool Item_sum_json_array::add() {
       The m_wrapper always points to m_json_array or the result of
       deserializing the result_field in reset/update_field.
     */
-    const auto arr = down_cast<Json_array *>(m_wrapper.to_dom(thd));
+    const auto arr = down_cast<Json_array *>(m_wrapper->to_dom(thd));
     if (arr->append_alias(std::move(value_dom)))
       return error_json(); /* purecov: inspected */
 
@@ -5691,9 +5824,16 @@ bool Item_sum_json_array::add() {
 }
 
 Item *Item_sum_json_array::copy_or_same(THD *thd) {
-  return m_is_window_function ? this
-                              : new (thd->mem_root)
-                                    Item_sum_json_array(thd, this);
+  if (m_is_window_function) return this;
+
+  auto wrapper = make_unique_destroy_only<Json_wrapper>(thd->mem_root);
+  if (wrapper == nullptr) return nullptr;
+
+  unique_ptr_destroy_only<Json_array> array{::new (thd->mem_root) Json_array};
+  if (array == nullptr) return nullptr;
+
+  return new (thd->mem_root)
+      Item_sum_json_array(thd, this, std::move(wrapper), std::move(array));
 }
 
 bool Item_sum_json_object::add() {
@@ -5732,7 +5872,7 @@ bool Item_sum_json_object::add() {
         If the count is 0, remove the key/value pair from the Json_object.
       */
       if (m_window->do_inverse()) {
-        auto object = down_cast<Json_object *>(m_wrapper.to_dom(thd));
+        auto object = down_cast<Json_object *>(m_wrapper->to_dom(thd));
         if (m_optimize)  // Option 1
         {
           if (m_window->is_last_row_in_peerset_within_frame())
@@ -5742,7 +5882,12 @@ bool Item_sum_json_object::add() {
           auto it = m_key_map.find(key);
           if (it != m_key_map.end()) {
             int count = it->second - 1;
-            count > 0 ? it->second = count : object->remove(key);
+            if (count > 0) {
+              it->second = count;
+            } else {
+              m_key_map.erase(it);
+              object->remove(key);
+            }
           }
         }
         object->cardinality() == 0 ? null_value = true : null_value = false;
@@ -5759,7 +5904,7 @@ bool Item_sum_json_object::add() {
       The m_wrapper always points to m_json_object or the result of
       deserializing the result_field in reset/update_field.
     */
-    Json_object *object = down_cast<Json_object *>(m_wrapper.to_dom(thd));
+    Json_object *object = down_cast<Json_object *>(m_wrapper->to_dom(thd));
     if (object->add_alias(key, value_wrapper.to_dom(thd)))
       return error_json(); /* purecov: inspected */
     /*
@@ -5773,7 +5918,7 @@ bool Item_sum_json_object::add() {
         count = count + it->second;
         it->second = count;
       } else
-        m_key_map.emplace(key, 0).first->second = count;
+        m_key_map.emplace(std::make_pair(key, count));
     }
 
     null_value = false;
@@ -5790,9 +5935,17 @@ bool Item_sum_json_object::add() {
 }
 
 Item *Item_sum_json_object::copy_or_same(THD *thd) {
-  return m_is_window_function ? this
-                              : new (thd->mem_root)
-                                    Item_sum_json_object(thd, this);
+  if (m_is_window_function) return this;
+
+  auto wrapper = make_unique_destroy_only<Json_wrapper>(thd->mem_root);
+  if (wrapper == nullptr) return nullptr;
+
+  unique_ptr_destroy_only<Json_object> object{::new (thd->mem_root)
+                                                  Json_object};
+  if (object == nullptr) return nullptr;
+
+  return new (thd->mem_root)
+      Item_sum_json_object(thd, this, std::move(wrapper), std::move(object));
 }
 
 /**
@@ -5876,13 +6029,9 @@ longlong Item_func_grouping::val_int() {
     Item *real_item = args[i];
     while (real_item->type() == REF_ITEM)
       real_item = *((down_cast<Item_ref *>(real_item))->ref);
-    /*
-      Note: if the current input argument is an 'Item_null_result',
-      then we know it is generated by rollup handler to fill the
-      subtotal rows.
-    */
-    if (real_item->type() == NULL_RESULT_ITEM)
+    if (has_rollup_result(real_item)) {
       result += 1 << (arg_count - (i + 1));
+    }
   }
   return result;
 }
@@ -5924,4 +6073,107 @@ void Item_func_grouping::update_used_tables() {
     result always depends on ROLLUP result.
   */
   used_tables_cache |= current_thd->lex->current_select()->all_tables_map();
+}
+
+inline Item *Item_rollup_sum_switcher::current_arg() const {
+  DBUG_ASSERT(m_current_rollup_level >= 0 &&
+              m_current_rollup_level < m_num_levels);
+  return args[m_current_rollup_level];
+}
+
+bool Item_rollup_sum_switcher::get_date(MYSQL_TIME *ltime,
+                                        my_time_flags_t fuzzydate) {
+  DBUG_ASSERT(fixed);
+  return (null_value = current_arg()->get_date(ltime, fuzzydate));
+}
+
+bool Item_rollup_sum_switcher::get_time(MYSQL_TIME *ltime) {
+  DBUG_ASSERT(fixed);
+  return (null_value = current_arg()->get_time(ltime));
+}
+
+double Item_rollup_sum_switcher::val_real() {
+  DBUG_ASSERT(fixed);
+  double res = current_arg()->val_real();
+  if ((null_value = current_arg()->null_value)) return 0.0;
+  return res;
+}
+
+longlong Item_rollup_sum_switcher::val_int() {
+  DBUG_ASSERT(fixed);
+  longlong res = current_arg()->val_int();
+  if ((null_value = current_arg()->null_value)) return 0;
+  return res;
+}
+
+String *Item_rollup_sum_switcher::val_str(String *str) {
+  DBUG_ASSERT(fixed);
+  String *res = current_arg()->val_str(str);
+  if ((null_value = current_arg()->null_value)) return nullptr;
+  return res;
+}
+
+my_decimal *Item_rollup_sum_switcher::val_decimal(my_decimal *dec) {
+  DBUG_ASSERT(fixed);
+  my_decimal *res = current_arg()->val_decimal(dec);
+  if ((null_value = current_arg()->null_value)) return nullptr;
+  return res;
+}
+
+bool Item_rollup_sum_switcher::val_json(Json_wrapper *result) {
+  DBUG_ASSERT(fixed);
+  bool res = current_arg()->val_json(result);
+  null_value = current_arg()->null_value;
+  return res;
+}
+
+void Item_rollup_sum_switcher::print(const THD *thd, String *str,
+                                     enum_query_type query_type) const {
+  if (query_type & QT_HIDE_ROLLUP_FUNCTIONS) {
+    master()->print(thd, str, query_type);
+  } else {
+    Item_sum::print(thd, str, query_type);
+  }
+}
+
+Field *Item_rollup_sum_switcher::create_tmp_field(bool group, TABLE *table) {
+  return master()->create_tmp_field(group, table);
+}
+
+void Item_rollup_sum_switcher::clear() {
+  for (int i = 0; i < m_num_levels; ++i) {
+    child(i)->clear();
+  }
+}
+
+bool Item_rollup_sum_switcher::reset_and_add_for_rollup(
+    int last_unchanged_group_item_idx) {
+  for (int i = 0; i < m_num_levels; ++i) {
+    if (i >= last_unchanged_group_item_idx) {
+      if (child(i)->reset_and_add()) return true;
+    } else {
+      if (child(i)->aggregator_add()) return true;
+    }
+  }
+  return false;
+}
+
+int Item_rollup_sum_switcher::set_aggregator(
+    Aggregator::Aggregator_type aggregator) {
+  for (int i = 0; i < m_num_levels; ++i) {
+    int err = child(i)->set_aggregator(aggregator);
+    if (err != 0) {
+      return err;
+    }
+  }
+  return 0;
+}
+
+bool Item_rollup_sum_switcher::aggregator_setup(THD *thd) {
+  for (int i = 0; i < m_num_levels; ++i) {
+    if (child(i)->aggregator_setup(thd)) {
+      return true;
+    }
+  }
+  return false;
 }

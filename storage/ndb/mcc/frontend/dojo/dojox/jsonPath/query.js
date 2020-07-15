@@ -1,8 +1,6 @@
 //>>built
-define(["dijit","dojo","dojox"],function(_1,_2,_3){
-_2.provide("dojox.jsonPath.query");
-_3.jsonPath.query=function(_4,_5,_6){
-var re=_3.jsonPath._regularExpressions;
+define("dojox/jsonPath/query",["dojo/_base/kernel","dojo/_base/lang"],function(_1,_2){
+var _3=function(_4,_5,_6){
 if(!_6){
 _6={};
 }
@@ -10,14 +8,14 @@ var _7=[];
 function _8(i){
 return _7[i];
 };
-var _9;
+var _9=_8.name;
 if(_6.resultType=="PATH"&&_6.evalType=="RESULT"){
 throw Error("RESULT based evaluation not supported with PATH based results");
 }
 var P={resultType:_6.resultType||"VALUE",normalize:function(_a){
 var _b=[];
 _a=_a.replace(/'([^']|'')*'/g,function(t){
-return "_str("+(_7.push(eval(t))-1)+")";
+return _9+"("+(_7.push(eval(t))-1)+")";
 });
 var ll=-1;
 while(ll!=_b.length){
@@ -36,10 +34,11 @@ return _b[$1];
 }
 return _a.split(";");
 },asPaths:function(_c){
-for(var j=0;j<_c.length;j++){
-var p="$";
-var x=_c[j];
-for(var i=1,n=x.length;i<n;i++){
+var i,j,p,x,n;
+for(j=0;j<_c.length;j++){
+p="$";
+x=_c[j];
+for(i=1,n=x.length;i<n;i++){
 p+=/^[0-9*]+$/.test(x[i])?("["+x[i]+"]"):("['"+x[i]+"']");
 }
 _c[j]=p;
@@ -77,22 +76,23 @@ function _14(loc,val){
 if(val instanceof Array){
 var len=val.length,_15=0,end=len,_16=1;
 loc.replace(/^(-?[0-9]*):(-?[0-9]*):?(-?[0-9]*)$/g,function($0,$1,$2,$3){
-_15=parseInt($1||_15);
-end=parseInt($2||end);
-_16=parseInt($3||_16);
+_15=parseInt($1||_15,10);
+end=parseInt($2||end,10);
+_16=parseInt($3||_16,10);
 });
 _15=(_15<0)?Math.max(0,_15+len):Math.min(len,_15);
 end=(end<0)?Math.max(0,end+len):Math.min(len,end);
-for(var i=_15;i<end;i+=_16){
+var i;
+for(i=_15;i<end;i+=_16){
 add(val,i);
 }
 }
 };
-function _17(str){
+function _17(str,loc){
 var i=loc.match(/^_str\(([0-9]+)\)$/);
 return i?_7[i[1]]:str;
 };
-function _18(val){
+function _18(val,loc){
 if(/^\(.*?\)$/.test(loc)){
 add(val,P.eval(loc,val),rb);
 }else{
@@ -109,8 +109,9 @@ if(loc===".."){
 _12(val);
 }else{
 if(/,/.test(loc)){
-for(var s=loc.split(/'?,'?/),i=0,n=s.length;i<n;i++){
-add(val,_17(s[i]));
+var s,n,i;
+for(s=loc.split(/'?,'?/),i=0,n=s.length;i<n;i++){
+add(val,_17(s[i],loc));
 }
 }else{
 if(/^\?\(.*?\)$/.test(loc)){
@@ -123,7 +124,7 @@ add(val,i);
 if(/^(-?[0-9]*):(-?[0-9]*):?([0-9]*)$/.test(loc)){
 _14(loc,val);
 }else{
-loc=_17(loc);
+loc=_17(loc,loc);
 if(rb&&val instanceof Array&&!/^[0-9*]+$/.test(loc)){
 P.walk(val,function(i){
 add(val[i],loc);
@@ -138,60 +139,67 @@ add(val,loc,rb);
 }
 }
 };
+var loc,_19;
 while(_d.length){
-var loc=_d.shift();
+loc=_d.shift();
 if((_e=_10)===null||_e===undefined){
 return _e;
 }
 _10=[];
-var _19=_11;
+_19=_11;
 _11=[];
 if(rb){
-_18(_e);
+_18(_e,loc);
 }else{
 P.walk(_e,function(i){
 _f=_19[i]||_f;
-_18(_e[i]);
+_18(_e[i],loc);
 });
 }
 }
 if(P.resultType=="BOTH"){
 _11=P.asPaths(_11);
 var _1a=[];
-for(var i=0;i<_11.length;i++){
+var i;
+for(i=0;i<_11.length;i++){
 _1a.push({path:_11[i],value:_10[i]});
 }
 return _1a;
 }
 return P.resultType=="PATH"?P.asPaths(_11):_10;
 },walk:function(val,f){
+var i,n,m;
 if(val instanceof Array){
-for(var i=0,n=val.length;i<n;i++){
+for(i=0,n=val.length;i<n;i++){
 if(i in val){
 f(i);
 }
 }
 }else{
 if(typeof val==="object"){
-for(var m in val){
+for(m in val){
 if(val.hasOwnProperty(m)){
 f(m);
 }
 }
 }
 }
-},eval:function(x,_1b){
+},"eval":function(x,v){
 try{
-return $&&_1b&&eval(x.replace(/@/g,"_v"));
+return _4&&v&&eval(x.replace(/@/g,"v"));
 }
 catch(e){
-throw new SyntaxError("jsonPath: "+e.message+": "+x.replace(/@/g,"_v").replace(/\^/g,"_a"));
+throw new SyntaxError("jsonPath: "+e.message+": "+x.replace(/@/g,"v").replace(/\^/g,"_a"));
 }
 }};
-var $=_4;
 if(_5&&_4){
 return P.exec(P.normalize(_5).slice(1),_4,_6.evalType=="RESULT");
 }
 return false;
 };
+if(!_1.isAsync){
+var obj=_2.getObject("dojox.jsonPath",true);
+obj.query=_3;
+}
+return _3;
 });

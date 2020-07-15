@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -49,14 +49,14 @@ class THD;
 */
 class Thd_creator {
  public:
-  Thd_creator(THD *thd) : m_thd(thd), m_tmp_thd(0) {}
+  Thd_creator(THD *thd) : m_thd(thd), m_tmp_thd(nullptr) {}
 
   /**
     Returns a THD handle either by creating a new one or by returning a
     previously created THD.
   */
   THD *operator()() {
-    if (m_thd == 0 && m_tmp_thd == 0) {
+    if (m_thd == nullptr && m_tmp_thd == nullptr) {
       /*
         Initiate a THD without plugins,
         without attaching to the Global_THD_manager, and without setting
@@ -64,7 +64,7 @@ class Thd_creator {
       */
       m_tmp_thd = create_thd(false, true, false, PSI_NOT_INSTRUMENTED);
       return m_tmp_thd;
-    } else if (m_thd == 0) {
+    } else if (m_thd == nullptr) {
       return m_tmp_thd;
     }
     return m_thd;
@@ -74,7 +74,7 @@ class Thd_creator {
     Automatically frees any THD handle created by this class.
   */
   ~Thd_creator() {
-    if (m_thd == 0 && m_tmp_thd != 0) {
+    if (m_thd == nullptr && m_tmp_thd != nullptr) {
       destroy_thd(m_tmp_thd);
     }
   }
@@ -195,6 +195,7 @@ bool dynamic_privilege_init(void) {
       ret |= service->register_privilege(
           STRING_WITH_LEN("PERSIST_RO_VARIABLES_ADMIN"));
       ret |= service->register_privilege(STRING_WITH_LEN("BACKUP_ADMIN"));
+      ret |= service->register_privilege(STRING_WITH_LEN("CLONE_ADMIN"));
       ret |=
           service->register_privilege(STRING_WITH_LEN("RESOURCE_GROUP_ADMIN"));
       ret |=
@@ -210,6 +211,12 @@ bool dynamic_privilege_init(void) {
       ret |= service->register_privilege(STRING_WITH_LEN("SYSTEM_USER"));
       ret |= service->register_privilege(
           STRING_WITH_LEN("TABLE_ENCRYPTION_ADMIN"));
+      ret |= service->register_privilege(STRING_WITH_LEN("AUDIT_ADMIN"));
+      ret |=
+          service->register_privilege(STRING_WITH_LEN("REPLICATION_APPLIER"));
+      ret |= service->register_privilege(STRING_WITH_LEN("SHOW_ROUTINE"));
+      ret |= service->register_privilege(
+          STRING_WITH_LEN("INNODB_REDO_LOG_ENABLE"));
     }
   }  // exist scope
   mysql_plugin_registry_release(r);

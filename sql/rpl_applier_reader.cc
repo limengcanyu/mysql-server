@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -66,7 +66,7 @@ class Rpl_applier_reader::Stage_controller {
   }
 
   void enter_stage() {
-    DBUG_ASSERT(m_state = LOCKED);
+    DBUG_ASSERT(m_state == LOCKED);
     m_thd->ENTER_COND(m_cond, m_mutex, &m_new_stage, &m_old_stage);
     m_state = IN_STAGE;
   }
@@ -149,7 +149,7 @@ void Rpl_applier_reader::close() {
 }
 
 Log_event *Rpl_applier_reader::read_next_event() {
-  DBUG_ENTER("Rpl_applier_reader::read_next_event");
+  DBUG_TRACE;
   Log_event *ev = nullptr;
 
   /*
@@ -158,12 +158,17 @@ Log_event *Rpl_applier_reader::read_next_event() {
   */
   mysql_mutex_assert_owner(&m_rli->data_lock);
 
-  DBUG_EXECUTE_IF("force_sql_thread_error", DBUG_RETURN(nullptr););
+  DBUG_EXECUTE_IF("block_applier_updates", {
+    const char act[] =
+        "now SIGNAL applier_read_blocked WAIT_FOR resume_applier_read";
+    DBUG_ASSERT(!debug_sync_set_action(current_thd, STRING_WITH_LEN(act)));
+  });
+  DBUG_EXECUTE_IF("force_sql_thread_error", return nullptr;);
 
   if (m_reading_active_log &&
       m_relaylog_file_reader.position() >= m_log_end_pos) {
     while (true) {
-      if (sql_slave_killed(m_rli->info_thd, m_rli)) DBUG_RETURN(nullptr);
+      if (sql_slave_killed(m_rli->info_thd, m_rli)) return nullptr;
 
 #ifndef DBUG_OFF
       debug_print_next_event_positions();
@@ -197,7 +202,7 @@ Log_event *Rpl_applier_reader::read_next_event() {
           mts_checkpoint_routine(m_rli, false)) {
         m_errmsg = "Failed to compute mts checkpoint";
         mysql_mutex_lock(&m_rli->data_lock);
-        DBUG_RETURN(nullptr);
+        return nullptr;
       }
       mysql_mutex_lock(&m_rli->data_lock);
 
@@ -212,13 +217,12 @@ Log_event *Rpl_applier_reader::read_next_event() {
 
       reset_seconds_behind_master();
       /* It should be protected by relay_log.LOCK_binlog_end_pos */
-      if (m_rli->ign_master_log_name_end[0])
-        DBUG_RETURN(generate_rotate_event());
+      if (m_rli->ign_master_log_name_end[0]) return generate_rotate_event();
 
       stage_controller.enter_stage();
-      if (sql_slave_killed(m_rli->info_thd, m_rli)) DBUG_RETURN(nullptr);
+      if (sql_slave_killed(m_rli->info_thd, m_rli)) return nullptr;
 
-      if (wait_for_new_event()) DBUG_RETURN(nullptr);
+      if (wait_for_new_event()) return nullptr;
     }
   }
 
@@ -227,18 +231,18 @@ Log_event *Rpl_applier_reader::read_next_event() {
   if (ev != nullptr) {
     m_rli->set_future_event_relay_log_pos(m_relaylog_file_reader.position());
     ev->future_event_relay_log_pos = m_rli->get_future_event_relay_log_pos();
-    DBUG_RETURN(ev);
+    return ev;
   }
 
   if (m_relaylog_file_reader.get_error_type() == Binlog_read_error::READ_EOF &&
       !m_reading_active_log) {
-    if (!move_to_next_log()) DBUG_RETURN(read_next_event());
+    if (!move_to_next_log()) return read_next_event();
   }
 
   LogErr(ERROR_LEVEL, ER_RPL_SLAVE_ERROR_READING_RELAY_LOG_EVENTS,
          m_rli->get_for_channel_str(),
          m_errmsg ? m_errmsg : m_relaylog_file_reader.get_error_str());
-  DBUG_RETURN(nullptr);
+  return nullptr;
 }
 
 bool Rpl_applier_reader::read_active_log_end_pos() {
@@ -253,7 +257,7 @@ bool Rpl_applier_reader::read_active_log_end_pos() {
 }
 
 Rotate_log_event *Rpl_applier_reader::generate_rotate_event() {
-  DBUG_ENTER("Rpl_applier_reader::generate_rotate_event");
+  DBUG_TRACE;
   Rotate_log_event *ev = nullptr;
   ev = new Rotate_log_event(m_rli->ign_master_log_name_end, 0,
                             m_rli->ign_master_log_pos_end,
@@ -263,10 +267,10 @@ Rotate_log_event *Rpl_applier_reader::generate_rotate_event() {
     m_errmsg =
         "Slave SQL thread failed to create a Rotate event "
         "(out of memory?), SHOW SLAVE STATUS may be inaccurate";
-    DBUG_RETURN(nullptr);
+    return nullptr;
   }
   ev->server_id = 0;  // don't be ignored by slave SQL thread
-  DBUG_RETURN(ev);
+  return ev;
 }
 
 bool Rpl_applier_reader::wait_for_new_event() {
@@ -394,10 +398,10 @@ bool Rpl_applier_reader::move_to_next_log() {
 }
 
 bool Rpl_applier_reader::purge_applied_logs() {
-  DBUG_ENTER("purge_applied_logs");
+  DBUG_TRACE;
   mysql_mutex_assert_owner(&m_rli->data_lock);
 
-  if (!relay_log_purge) DBUG_RETURN(false);
+  if (!relay_log_purge) return false;
 
   Is_instance_backup_locked_result is_instance_locked =
       is_instance_backup_locked(m_rli->info_thd);
@@ -405,15 +409,15 @@ bool Rpl_applier_reader::purge_applied_logs() {
     m_errmsg =
         "Out of memory happened when checking if instance was locked for "
         "backup";
-    DBUG_RETURN(true);
+    return true;
   }
 
   if (is_instance_locked == Is_instance_backup_locked_result::LOCKED)
-    DBUG_RETURN(false);
+    return false;
 
   if (m_rli->flush_info(true)) {
     m_errmsg = "Error purging processed logs";
-    DBUG_RETURN(true);
+    return true;
   }
 
   m_rli->relay_log.lock_index();
@@ -441,7 +445,7 @@ bool Rpl_applier_reader::purge_applied_logs() {
   }
 
   m_rli->relay_log.unlock_index();
-  DBUG_RETURN(m_errmsg != nullptr);
+  return m_errmsg != nullptr;
 }
 
 /**
@@ -466,6 +470,9 @@ bool Rpl_applier_reader::purge_applied_logs() {
     controlled manner, until the next rotate.
 */
 void Rpl_applier_reader::disable_relay_log_space_limit_if_needed() {
+  // Skip the test if the flag is already true to avoid deadlocks
+  if (m_rli->sql_force_rotate_relay && m_rli->ignore_log_space_limit) return;
+
   mysql_mutex_lock(&m_rli->log_space_lock);
 
   /*
@@ -508,7 +515,10 @@ void Rpl_applier_reader::debug_print_next_event_positions() {
   DBUG_ASSERT(m_relaylog_file_reader.position() >= BIN_LOG_HEADER_SIZE);
   DBUG_ASSERT(m_relaylog_file_reader.position() ==
                   m_rli->get_event_relay_log_pos() ||
-              m_rli->is_parallel_exec());
+              (m_rli->is_parallel_exec() ||
+               // TODO: double check that this is safe:
+               (m_rli->info_thd != nullptr &&
+                m_rli->info_thd->variables.binlog_trx_compression)));
 
   DBUG_PRINT(
       "info",

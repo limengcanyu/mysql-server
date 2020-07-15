@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -64,27 +64,27 @@
 
   @see interval_type, interval_names
 */
-const LEX_STRING interval_type_to_name[INTERVAL_LAST] = {
-    {C_STRING_WITH_LEN("YEAR")},
-    {C_STRING_WITH_LEN("QUARTER")},
-    {C_STRING_WITH_LEN("MONTH")},
-    {C_STRING_WITH_LEN("WEEK")},
-    {C_STRING_WITH_LEN("DAY")},
-    {C_STRING_WITH_LEN("HOUR")},
-    {C_STRING_WITH_LEN("MINUTE")},
-    {C_STRING_WITH_LEN("SECOND")},
-    {C_STRING_WITH_LEN("MICROSECOND")},
-    {C_STRING_WITH_LEN("YEAR_MONTH")},
-    {C_STRING_WITH_LEN("DAY_HOUR")},
-    {C_STRING_WITH_LEN("DAY_MINUTE")},
-    {C_STRING_WITH_LEN("DAY_SECOND")},
-    {C_STRING_WITH_LEN("HOUR_MINUTE")},
-    {C_STRING_WITH_LEN("HOUR_SECOND")},
-    {C_STRING_WITH_LEN("MINUTE_SECOND")},
-    {C_STRING_WITH_LEN("DAY_MICROSECOND")},
-    {C_STRING_WITH_LEN("HOUR_MICROSECOND")},
-    {C_STRING_WITH_LEN("MINUTE_MICROSECOND")},
-    {C_STRING_WITH_LEN("SECOND_MICROSECOND")}};
+const LEX_CSTRING interval_type_to_name[INTERVAL_LAST] = {
+    {STRING_WITH_LEN("YEAR")},
+    {STRING_WITH_LEN("QUARTER")},
+    {STRING_WITH_LEN("MONTH")},
+    {STRING_WITH_LEN("WEEK")},
+    {STRING_WITH_LEN("DAY")},
+    {STRING_WITH_LEN("HOUR")},
+    {STRING_WITH_LEN("MINUTE")},
+    {STRING_WITH_LEN("SECOND")},
+    {STRING_WITH_LEN("MICROSECOND")},
+    {STRING_WITH_LEN("YEAR_MONTH")},
+    {STRING_WITH_LEN("DAY_HOUR")},
+    {STRING_WITH_LEN("DAY_MINUTE")},
+    {STRING_WITH_LEN("DAY_SECOND")},
+    {STRING_WITH_LEN("HOUR_MINUTE")},
+    {STRING_WITH_LEN("HOUR_SECOND")},
+    {STRING_WITH_LEN("MINUTE_SECOND")},
+    {STRING_WITH_LEN("DAY_MICROSECOND")},
+    {STRING_WITH_LEN("HOUR_MICROSECOND")},
+    {STRING_WITH_LEN("MINUTE_MICROSECOND")},
+    {STRING_WITH_LEN("SECOND_MICROSECOND")}};
 
 /**
   Convert a string to 8-bit representation,
@@ -183,6 +183,9 @@ bool str_to_datetime_with_warn(String *str, MYSQL_TIME *l_time,
                                      NullS))
       return true;
   }
+
+  adjust_time_zone_displacement(thd->time_zone(), l_time);
+
   return ret_val;
 }
 
@@ -288,7 +291,7 @@ bool my_double_to_datetime_with_warn(double nr, MYSQL_TIME *ltime,
   Convert longlong value to datetime value with a warning.
   @param       nr      The value to convert from.
   @param[out]  ltime   The variable to convert to.
-  @param       flags
+  @param       flags   Conversion flags
 
   @return False on success, true on error.
 */
@@ -415,7 +418,7 @@ bool my_longlong_to_time_with_warn(longlong nr, MYSQL_TIME *ltime) {
   @param  in_dst_time_gap - pointer to bool which is set to true if t represents
                             value which doesn't exists (falls into the spring
                             time-gap) or to false otherwise.
-  @return
+
   @retval  Number seconds in UTC since start of Unix Epoch corresponding to t.
   @retval  0 - t contains datetime value which is out of TIMESTAMP range.
 */
@@ -423,7 +426,7 @@ my_time_t TIME_to_timestamp(THD *thd, const MYSQL_TIME *t,
                             bool *in_dst_time_gap) {
   my_time_t timestamp;
 
-  *in_dst_time_gap = 0;
+  *in_dst_time_gap = false;
 
   timestamp = thd->time_zone()->TIME_to_gmt_sec(t, in_dst_time_gap);
   if (timestamp) {
@@ -544,17 +547,21 @@ bool datetime_to_timeval(THD *thd, const MYSQL_TIME *ltime, struct timeval *tm,
 bool str_to_time_with_warn(String *str, MYSQL_TIME *l_time) {
   MYSQL_TIME_STATUS status;
   my_time_flags_t flags = 0;
+  THD *thd = current_thd;
 
   if (current_thd->is_fsp_truncate_mode()) flags = TIME_FRAC_TRUNCATE;
 
   bool ret_val = propagate_datetime_overflow(
       current_thd, &status.warnings, str_to_time(str, l_time, flags, &status));
   if (ret_val || status.warnings) {
-    if (make_truncated_value_warning(current_thd, Sql_condition::SL_WARNING,
+    if (make_truncated_value_warning(thd, Sql_condition::SL_WARNING,
                                      ErrConvString(str), MYSQL_TIMESTAMP_TIME,
                                      NullS))
       return true;
   }
+
+  if (!ret_val) adjust_time_zone_displacement(thd->time_zone(), l_time);
+
   return ret_val;
 }
 
@@ -562,8 +569,8 @@ bool str_to_time_with_warn(String *str, MYSQL_TIME *l_time) {
   Convert time to datetime.
 
   The time value is added to the current datetime value.
-  @param thd
-  @param [in] ltime    Time value to convert from.
+  @param thd            Thread context
+  @param [in] ltime     Time value to convert from.
   @param [out] ltime2   Datetime value to convert to.
 */
 void time_to_datetime(THD *thd, const MYSQL_TIME *ltime, MYSQL_TIME *ltime2) {
@@ -578,10 +585,8 @@ void time_to_datetime(THD *thd, const MYSQL_TIME *ltime, MYSQL_TIME *ltime2) {
    Return format string according format name.
    If name is unknown, result is NULL
 
-   @param format
-   @param type
-
-   @return False on success, true on error.
+   @returns format string according format name.
+   @retval NULL if name is unknown.
 */
 const char *get_date_time_format_str(const Known_date_time_format *format,
                                      enum_mysql_timestamp_type type) {
@@ -623,8 +628,7 @@ const char *get_date_time_format_str(const Known_date_time_format *format,
 */
 void make_time(const Date_time_format *format MY_ATTRIBUTE((unused)),
                const MYSQL_TIME *l_time, String *str, uint dec) {
-  uint length = static_cast<uint>(
-      my_time_to_str(*l_time, const_cast<char *>(str->ptr()), dec));
+  uint length = static_cast<uint>(my_time_to_str(*l_time, str->ptr(), dec));
   str->length(length);
   str->set_charset(&my_charset_numeric);
 }
@@ -637,8 +641,7 @@ void make_time(const Date_time_format *format MY_ATTRIBUTE((unused)),
 */
 void make_date(const Date_time_format *format MY_ATTRIBUTE((unused)),
                const MYSQL_TIME *l_time, String *str) {
-  uint length = static_cast<uint>(
-      my_date_to_str(*l_time, const_cast<char *>(str->ptr())));
+  uint length = static_cast<uint>(my_date_to_str(*l_time, str->ptr()));
   str->length(length);
   str->set_charset(&my_charset_numeric);
 }
@@ -652,8 +655,7 @@ void make_date(const Date_time_format *format MY_ATTRIBUTE((unused)),
 */
 void make_datetime(const Date_time_format *format MY_ATTRIBUTE((unused)),
                    const MYSQL_TIME *l_time, String *str, uint dec) {
-  uint length = static_cast<uint>(
-      my_datetime_to_str(*l_time, const_cast<char *>(str->ptr()), dec));
+  uint length = static_cast<uint>(my_datetime_to_str(*l_time, str->ptr(), dec));
   str->length(length);
   str->set_charset(&my_charset_numeric);
 }
@@ -667,7 +669,7 @@ void make_datetime(const Date_time_format *format MY_ATTRIBUTE((unused)),
 bool my_TIME_to_str(const MYSQL_TIME *ltime, String *str, uint dec) {
   if (str->alloc(MAX_DATE_STRING_REP_LENGTH)) return true;
   str->set_charset(&my_charset_numeric);
-  str->length(my_TIME_to_str(*ltime, const_cast<char *>(str->ptr()), dec));
+  str->length(my_TIME_to_str(*ltime, str->ptr(), dec));
   return false;
 }
 
@@ -811,7 +813,7 @@ ulonglong gmt_time_to_local_time(ulonglong gmt_time) {
 MYSQL_TIME my_time_set(uint y, uint m, uint d, uint h, uint mi, uint s,
                        unsigned long ms, bool negative,
                        enum_mysql_timestamp_type type) {
-  return {y, m, d, h, mi, s, ms, negative, type};
+  return {y, m, d, h, mi, s, ms, negative, type, 0};
 }
 
 uint actual_decimals(const MYSQL_TIME *ts) {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -53,8 +53,8 @@ class FailHelper {
   void fail(const char *message) { FAIL() << message; }
 };
 
-LEX_STRING var_name1 = {C_STRING_WITH_LEN("var1")};
-LEX_STRING var_name2 = {C_STRING_WITH_LEN("var2")};
+LEX_CSTRING var_name1 = {STRING_WITH_LEN("var1")};
+LEX_CSTRING var_name2 = {STRING_WITH_LEN("var2")};
 
 class MockDiagInfoItem : public Diagnostics_information_item {
  public:
@@ -346,7 +346,7 @@ static Item *get_cond_info_item(THD *thd, uint number,
   Condition_information_item *diag_info_item;
   List<Condition_information_item> items;
   MEM_ROOT *mem_root = thd->mem_root;
-  LEX_STRING var_name = {C_STRING_WITH_LEN("get_cond_info_item")};
+  LEX_CSTRING var_name = {STRING_WITH_LEN("get_cond_info_item")};
 
   // Simulate GET DIAGNOSTICS as a new command
   thd->reset_for_next_command();
@@ -431,7 +431,7 @@ TEST_F(GetDiagnosticsTest, PushPopDiagnosticsArea) {
 
   thd()->pop_diagnostics_area();
   EXPECT_EQ(org_da, thd()->get_stmt_da());
-  EXPECT_TRUE(thd()->get_stacked_da() == NULL);
+  EXPECT_TRUE(thd()->get_stacked_da() == nullptr);
 }
 
 // Pop when there is just one diagnostics area = assert
@@ -489,7 +489,7 @@ TEST_F(GetDiagnosticsTest, PushDiagnosticsArea) {
   EXPECT_STREQ("ISO 9075", str.c_ptr_safe());
 
   thd()->pop_diagnostics_area();
-  EXPECT_TRUE(thd()->get_stacked_da() == NULL);
+  EXPECT_TRUE(thd()->get_stacked_da() == nullptr);
   EXPECT_TRUE(thd()->get_stmt_da()->cond_count() == 0);
 }
 

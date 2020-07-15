@@ -1,24 +1,20 @@
-//>>built
 define("dojox/editor/plugins/AutoUrlLink", [
 	"dojo",
 	"dijit",
 	"dojox",
-	"dijit/_editor/range",
-	"dijit/_editor/selection",
 	"dijit/_editor/_Plugin",
 	"dijit/form/Button",
-	"dojo/_base/connect",
 	"dojo/_base/declare",
 	"dojo/string"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, _Plugin) {
 
-dojo.declare("dojox.editor.plugins.AutoUrlLink", [dijit._editor._Plugin], {
-	//summary:
+var AutoUrlLink = dojo.declare("dojox.editor.plugins.AutoUrlLink", [_Plugin], {
+	// summary:
 	//		This plugin can recognize a URL like string
 	//		(such as http://www.website.com) and turn it into
 	//		a hyperlink that points to that URL.
 	
-	// _template [private] String
+	// _template: [private] String
 	//		The link template
 	_template: "<a _djrealurl='${url}' href='${url}'>${url}</a>",
 	
@@ -78,6 +74,7 @@ dojo.declare("dojox.editor.plugins.AutoUrlLink", [dijit._editor._Plugin], {
 			isEnter = args ? args.enter : false,
 			ed = this.editor,
 			selection = ed.window.getSelection();
+		console.log("_recognize: isEnter = ", isEnter, ", selection is ", selection,  selection.anchorNode, this._findLastEditingNode(selection.anchorNode))
 			if(selection){
 				var node = isEnter ? this._findLastEditingNode(selection.anchorNode) :
 								(this._saved || selection.anchorNode),
@@ -115,7 +112,7 @@ dojo.declare("dojox.editor.plugins.AutoUrlLink", [dijit._editor._Plugin], {
 					range.setEnd(bm, bmOff);
 					selection.removeAllRanges();
 					selection.addRange(range);
-					dojo.withGlobal(ed.window, "collapse", dijit._editor.selection, []);
+					ed._sCall("collapse", []);
 				}catch(e){}
 			}
 		}
@@ -123,9 +120,9 @@ dojo.declare("dojox.editor.plugins.AutoUrlLink", [dijit._editor._Plugin], {
 	
 	_inLink: function(/*DomNode*/ node){
 		// summary:
-		//		Check if the node is already embraced within a <a>...</a> tag.
+		//		Check if the node is already embraced within a `<a>...</a>` tag.
 		// node:
-		//		The node to be examed.
+		//		The node to be examined.
 		// tags:
 		//		private
 		var editNode = this.editor.editNode,
@@ -190,7 +187,7 @@ dojo.declare("dojox.editor.plugins.AutoUrlLink", [dijit._editor._Plugin], {
 		// summary:
 		//		Find the occurrace of the URL strings.
 		//		FF, Chrome && Safri have a behavior that when insertHTML is executed,
-		//		the orignal referrence to the text node will be the text node next to
+		//		the original referrence to the text node will be the text node next to
 		//		the inserted anchor automatically. So we have to re-caculate the index of
 		//		the following URL occurrence.
 		// value:
@@ -226,10 +223,10 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name.toLowerCase();
 	if(name ===  "autourllink"){
-		o.plugin = new dojox.editor.plugins.AutoUrlLink();
+		o.plugin = new AutoUrlLink();
 	}
 });
 
-return dojox.editor.plugins.AutoUrlLink;
+return AutoUrlLink;
 
 });

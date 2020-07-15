@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -251,9 +251,9 @@ static int write_row(PFS_engine_table *pfs_table, TABLE *table,
   table_plugin_table *temp = (table_plugin_table *)pfs_table;
 
   for (; (f = *fields); fields++) {
-    if (bitmap_is_set(table->write_set, f->field_index)) {
+    if (bitmap_is_set(table->write_set, f->field_index())) {
       result = temp->m_st_table->write_column_value(
-          temp->plugin_table_handle, (PSI_field *)f, f->field_index);
+          temp->plugin_table_handle, (PSI_field *)f, f->field_index());
       if (result) {
         return result;
       }
@@ -466,7 +466,7 @@ static int pfs_delete_tables_v1(PFS_engine_table_share_proxy **st_share_list,
     PFS_engine_table_share *temp_share =
         pfs_external_table_shares.find_share(temp_st_share->m_table_name, true);
 
-    if (temp_share != NULL) {
+    if (temp_share != nullptr) {
       /* If share found in global list,
        *  - Move it to purgatory.
        *  - Add it to the list of shares to be removed.
@@ -1187,6 +1187,15 @@ void set_field_timestamp_v1(PSI_field *f, const char *value, uint len) {
   }
 }
 
+void set_field_timestamp2_v1(PSI_field *f, ulonglong value) {
+  Field *f_ptr = reinterpret_cast<Field *>(f);
+  if (value > 0) {
+    set_field_timestamp(f_ptr, value);
+  } else {
+    f_ptr->set_null();
+  }
+}
+
 void get_field_timestamp_v1(PSI_field *f, char *val, uint *len) {
   Field *f_ptr = reinterpret_cast<Field *>(f);
 
@@ -1444,6 +1453,10 @@ END_SERVICE_IMPLEMENTATION();
 
 BEGIN_SERVICE_IMPLEMENTATION(performance_schema, pfs_plugin_column_timestamp_v1)
     set_field_timestamp_v1, get_field_timestamp_v1
+END_SERVICE_IMPLEMENTATION();
+
+BEGIN_SERVICE_IMPLEMENTATION(performance_schema, pfs_plugin_column_timestamp_v2)
+    set_field_timestamp_v1, set_field_timestamp2_v1, get_field_timestamp_v1
 END_SERVICE_IMPLEMENTATION();
 
 BEGIN_SERVICE_IMPLEMENTATION(performance_schema, pfs_plugin_column_year_v1)

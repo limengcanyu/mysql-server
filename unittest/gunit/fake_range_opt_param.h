@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -28,8 +28,8 @@
 #include "sql/opt_range.cc"
 #include "unittest/gunit/fake_table.h"
 
-using ::testing::Return;
 using ::testing::_;
+using ::testing::Return;
 
 class Fake_RANGE_OPT_PARAM : public RANGE_OPT_PARAM {
   KEY_PART m_key_parts[64];
@@ -61,7 +61,7 @@ class Fake_RANGE_OPT_PARAM : public RANGE_OPT_PARAM {
       table = &fake_table;
       current_table = table->pos_in_table_list->map();
     } else {
-      table = NULL;
+      table = nullptr;
       current_table = 1;
     }
 

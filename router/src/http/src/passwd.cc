@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -29,7 +29,9 @@
 #include <sstream>
 #include <vector>
 
+#include "common.h"  // make_file_private
 #include "mysql/harness/arg_handler.h"
+#include "mysql/harness/filesystem.h"
 #include "mysql/harness/utility/string.h"
 #include "mysqlrouter/utils.h"
 #include "print_version.h"             // build_version
@@ -64,13 +66,8 @@ void PasswdFrontend::init_from_arguments(
 
 PasswdFrontend::PasswdFrontend(const std::string &exe_name,
                                const std::vector<std::string> &args,
-                               std::istream &is, std::ostream &os,
-                               std::ostream &es)
-    : program_name_{exe_name},
-      arg_handler_{true},
-      cin_{is},
-      cout_{os},
-      cerr_{es} {
+                               std::ostream &os, std::ostream &es)
+    : program_name_{exe_name}, arg_handler_{true}, cout_{os}, cerr_{es} {
   init_from_arguments(args);
 }
 
@@ -333,6 +330,14 @@ int PasswdFrontend::run() {
             << std::endl;
       return EXIT_FAILURE;
     }
+
+    try {
+      mysql_harness::make_file_private(config_.filename);
+    } catch (const std::exception &e) {
+      cerr_ << e.what() << std::endl;
+      return EXIT_FAILURE;
+    }
+
     backend.to_stream(f);
     if (f.bad()) {
       cerr_ << "writing to '" << config_.filename << "' failed" << std::endl;
@@ -398,10 +403,10 @@ void PasswdFrontend::prepare_command_options() {
             throw UsageError("--work-factor is negative (must be positive)");
           }
           config_.cost = num;
-        } catch (const std::out_of_range &e) {
+        } catch (const std::out_of_range &) {
           throw UsageError("--work-factor is larger than " +
                            std::to_string(std::numeric_limits<long>::max()));
-        } catch (const std::invalid_argument &e) {
+        } catch (const std::invalid_argument &) {
           throw UsageError(
               "--work-factor is not an integer (must be an integer)");
         }

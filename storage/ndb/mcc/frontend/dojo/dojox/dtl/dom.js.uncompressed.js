@@ -1,4 +1,3 @@
-//>>built
 define("dojox/dtl/dom", [
 	"dojo/_base/lang",
 	"./_base",
@@ -11,10 +10,7 @@ define("dojox/dtl/dom", [
 	"dojo/_base/connect",
 	"dojo/_base/sniff"
 ], function(lang,dd,Tokenize,context,dom,domconstruct,html,array,connect,has){
-	/*=====
-		Tokenize = dojox.string.tokenize;
-		dd = dojox.dtl;
-	=====*/
+
 	dd.BOOLS = {checked: 1, disabled: 1, readonly: 1};
 	dd.TOKEN_CHANGE = -11;
 	dd.TOKEN_ATTR = -12;
@@ -98,7 +94,7 @@ define("dojox/dtl/dom", [
 										var replacement = "";
 										for(var p = 2, pl = pair.length; p < pl; p++){
 											if(p == 2){
-												replacement += "<" + tag + ' dtlinstruction="{% ' + token[k].replace('"', '\\"') + ' %}">';
+												replacement += "<" + tag + ' dtlinstruction="{% ' + token[k].replace(/"/g, '\\"') + ' %}">';
 											}else if(tag == pair[p]) {
 												continue;
 											}else{
@@ -227,9 +223,6 @@ define("dojox/dtl/dom", [
 					value = node.className || value;
 				}else if(key == "for"){
 					value = node.htmlFor || value;
-				}else if(key == "value" && node.value == node.innerHTML){
-					// Sometimes .value is set the same as the contents of the item (button)
-					continue;
 				}else if(node.getAttribute){
 					value = node.getAttribute(key, 2) || value;
 					if(key == "href" || key == "src"){
@@ -345,8 +338,9 @@ define("dojox/dtl/dom", [
 		}
 	};
 
-	dd.DomTemplate = lang.extend(function(/*String|DOMNode|dojo._Url*/ obj){
-		// summary: The template class for DOM templating.
+	dd.DomTemplate = lang.extend(function(/*String|DOMNode|dojo/Url*/ obj){
+		// summary:
+		//		The template class for DOM templating.
 		if(!obj.nodes){
 			var node = dom.byId(obj);
 			if(node && node.nodeType == 1){
@@ -376,19 +370,23 @@ define("dojox/dtl/dom", [
 		_count: 0,
 		_re: /\bdojo:([a-zA-Z0-9_]+)\b/g,
 		setClass: function(/*String*/str){
-			// summary: Sets the specified class name on the root node.
+			// summary:
+			//		Sets the specified class name on the root node.
 			this.getRootNode().className = str;
 		},
 		getRootNode: function(){
-			// summary: Returns the template root node.
+			// summary:
+			//		Returns the template root node.
 			return this.buffer.rootNode;
 		},
 		getBuffer: function(){
-			// summary: Returns a new buffer.
+			// summary:
+			//		Returns a new buffer.
 			return new dd.DomBuffer();
 		},
-		render: function(/*dojox.dtl.Context?*/context, /*concatenable?*/buffer){
-			// summary: Renders this template.
+		render: function(/*dojox/dtl/Context?*/context, /*concatenable?*/buffer){
+			// summary:
+			//		Renders this template.
 			buffer = this.buffer = buffer || this.getBuffer();
 			this.rootNode = null;
 			var output = this.nodelist.render(context || new dd.Context({}), buffer);
@@ -405,10 +403,13 @@ define("dojox/dtl/dom", [
 	});
 
 	dd.DomBuffer = lang.extend(function(/*Node*/ parent){
-		// summary: Allows the manipulation of DOM
+		// summary:
+		//		Allows the manipulation of DOM
 		// description:
 		//		Use this to append a child, change the parent, or
 		//		change the attribute of the current node.
+		// parent:
+		//		The parent node.
 		this._parent = parent;
 		this._cache = [];
 	},
@@ -561,30 +562,38 @@ define("dojox/dtl/dom", [
 		/*=====
 		,
 		onSetParent: function(node, up){
-			// summary: Stub called when setParent is used.
+			// summary:
+			//		Stub called when setParent is used.
 		},
 		onAddNode: function(node){
-			// summary: Stub called before new nodes are added
+			// summary:
+			//		Stub called before new nodes are added
 		},
 		onAddNodeComplete: function(node){
-			// summary: Stub called after new nodes are added
+			// summary:
+			//		Stub called after new nodes are added
 		},
 		onRemoveNode: function(node){
-			// summary: Stub called when nodes are removed
+			// summary:
+			//		Stub called when nodes are removed
 		},
 		onChangeAttribute: function(node, attribute, old, updated){
-			// summary: Stub called when an attribute is changed
+			// summary:
+			//		Stub called when an attribute is changed
 		},
 		onChangeData: function(node, old, updated){
-			// summary: Stub called when a data in a node is changed
+			// summary:
+			//		Stub called when a data in a node is changed
 		},
 		onClone: function(from, to){
-			// summary: Stub called when a node is duplicated
+			// summary:
+			//		Stub called when a node is duplicated
 			// from: DOMNode
 			// to: DOMNode
 		},
 		onAddEvent: function(node, type, description){
-			// summary: Stub to call when you're adding an event
+			// summary:
+			//		Stub to call when you're adding an event
 			// node: DOMNode
 			// type: String
 			// description: String
@@ -593,7 +602,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd._DomNode = lang.extend(function(node){
-		// summary: Places a node into DOM
+		// summary:
+		//		Places a node into DOM
 		this.contents = node;
 	},
 	{
@@ -614,7 +624,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd._DomNodeList = lang.extend(function(/*Node[]*/ nodes){
-		// summary: A list of any DOM-specific node objects
+		// summary:
+		//		A list of any DOM-specific node objects
 		// description:
 		//		Any object that's used in the constructor or added
 		//		through the push function much implement the
@@ -644,7 +655,8 @@ define("dojox/dtl/dom", [
 			return buffer;
 		},
 		dummyRender: function(context, buffer, asNode){
-			// summary: A really expensive way of checking to see how a rendering will look.
+			// summary:
+			//		A really expensive way of checking to see how a rendering will look.
 			//		Used in the ifchanged tag
 			var div = document.createElement("div");
 
@@ -732,7 +744,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd._DomVarNode = lang.extend(function(str){
-		// summary: A node to be processed as a variable
+		// summary:
+		//		A node to be processed as a variable
 		// description:
 		//		Will render an object that supports the render function
 		// 		and the getRootNode function
@@ -854,7 +867,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd.ChangeNode = lang.extend(function(node, /*Boolean?*/ up, /*Bookean*/ root){
-		// summary: Changes the parent during render/unrender
+		// summary:
+		//		Changes the parent during render/unrender
 		this.contents = node;
 		this.up = up;
 		this.root = root;
@@ -875,7 +889,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd.AttributeNode = lang.extend(function(key, value){
-		// summary: Works on attributes
+		// summary
+		//		Works on attributes
 		this.key = key;
 		this.value = value;
 		this.contents = value;
@@ -898,7 +913,7 @@ define("dojox/dtl/dom", [
 			if(dd.BOOLS[key]){
 				value = !(value == "false" || value == "undefined" || !value);
 			}
-			if(value !== this.contents){
+			if(value !== this.contents || value === ""){
 				this.contents = value;
 				return buffer.setAttribute(key, value);
 			}
@@ -914,7 +929,8 @@ define("dojox/dtl/dom", [
 	});
 
 	dd._DomTextNode = lang.extend(function(str){
-		// summary: Adds a straight text node without any processing
+		// summary
+		//		Adds a straight text node without any processing
 		this.contents = document.createTextNode(str);
 		this.upcoming = str;
 	},
@@ -943,10 +959,11 @@ define("dojox/dtl/dom", [
 	});
 
 	dd._DomParser = lang.extend(function(tokens){
-		// summary: Turn a simple array into a set of objects
+		// summary:
+		//		Turn a simple array into a set of objects
 		// description:
-		//	This is also used by all tags to move through
-		//	the list of nodes.
+		//		This is also used by all tags to move through
+		//		the list of nodes.
 		this.contents = tokens;
 	},
 	{
@@ -991,7 +1008,7 @@ define("dojox/dtl/dom", [
 					var fn = ddt.getTag("node:" + value.tagName.toLowerCase(), true);
 					if(fn){
 						// TODO: We need to move this to tokenization so that it's before the
-						// 				node and the parser can be passed here instead of null
+						//				node and the parser can be passed here instead of null
 						nodelist.push(fn(null, new dd.Token(type, value), value.tagName.toLowerCase()));
 					}
 					nodelist.push(new dd._DomNode(value));
@@ -1026,7 +1043,8 @@ define("dojox/dtl/dom", [
 			return nodelist;
 		},
 		next_token: function(){
-			// summary: Returns the next token in the list.
+			// summary:
+			//		Returns the next token in the list.
 			var token = this.contents[this.i++];
 			return new dd.Token(token[0], token[1]);
 		},
@@ -1046,5 +1064,6 @@ define("dojox/dtl/dom", [
 			return new dd.DomTemplate(ddh.getTemplate(loc));
 		}
 	});
-	return dojox.dtl.dom;
+
+	return ddh;
 });

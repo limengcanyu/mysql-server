@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -30,7 +30,8 @@
 #include "m_ctype.h"
 #include "m_string.h"
 #include "my_dbug.h"
-#include "mysql_com.h"
+#include "my_hostname.h"  // HOSTNAME_LENGTH
+#include "mysql_com.h"    // USERNAME_LENGTH
 #include "sql/auth/auth_common.h"
 #include "sql/auth/partial_revokes.h"
 #include "sql/sql_const.h"
@@ -41,6 +42,7 @@
 class Acl_map;
 class ACL_USER;
 class THD;
+struct TABLE;
 struct Grant_table_aggregate;
 
 /**
@@ -98,6 +100,10 @@ class Security_context {
                           const LEX_CSTRING &role_host);
   bool any_sp_acl(const LEX_CSTRING &db);
   bool any_table_acl(const LEX_CSTRING &db);
+
+  bool is_table_blocked(ulong priv, TABLE const *table);
+  bool has_column_access(ulong priv, TABLE const *table,
+                         std::vector<std::string> column);
 
   /**
     Getter method for member m_host.
@@ -261,7 +267,7 @@ class Security_context {
   void set_password_expired(bool password_expired);
 
   bool change_security_context(THD *thd, const LEX_CSTRING &definer_user,
-                               const LEX_CSTRING &definer_host, LEX_STRING *db,
+                               const LEX_CSTRING &definer_host, const char *db,
                                Security_context **backup, bool force = false);
 
   void restore_security_context(THD *thd, Security_context *backup);
@@ -293,6 +299,10 @@ class Security_context {
 
   void clear_db_restrictions();
 
+  void set_thd(THD *thd);
+
+  THD *get_thd();
+
  private:
   void init();
   void destroy();
@@ -302,6 +312,7 @@ class Security_context {
   std::pair<bool, bool> fetch_global_grant(const ACL_USER &acl_user,
                                            const std::string &privilege,
                                            bool cumulative = false);
+  bool has_table_access(ulong priv, TABLE_LIST *table);
 
  private:
   /**
@@ -329,13 +340,13 @@ class Security_context {
   char m_priv_user[USERNAME_LENGTH];
   size_t m_priv_user_length;
 
-  char m_proxy_user[USERNAME_LENGTH + MAX_HOSTNAME + 5];
+  char m_proxy_user[USERNAME_LENGTH + HOSTNAME_LENGTH + 6];
   size_t m_proxy_user_length;
 
   /**
     The host privilege we are using
   */
-  char m_priv_host[MAX_HOSTNAME];
+  char m_priv_host[HOSTNAME_LENGTH + 1];
   size_t m_priv_host_length;
 
   /**
@@ -387,16 +398,16 @@ class Security_context {
 inline LEX_CSTRING Security_context::host_or_ip() const {
   LEX_CSTRING host_or_ip;
 
-  DBUG_ENTER("Security_context::host_or_ip");
+  DBUG_TRACE;
 
   host_or_ip.str = m_host_or_ip.ptr();
   host_or_ip.length = m_host_or_ip.length();
 
-  DBUG_RETURN(host_or_ip);
+  return host_or_ip;
 }
 
 inline void Security_context::set_host_or_ip_ptr() {
-  DBUG_ENTER("Security_context::set_host_or_ip_ptr");
+  DBUG_TRACE;
 
   /*
   Set host_or_ip to either host or ip if they are available else set it to
@@ -406,28 +417,24 @@ inline void Security_context::set_host_or_ip_ptr() {
       m_host.length() ? m_host.ptr() : (m_ip.length() ? m_ip.ptr() : "");
 
   m_host_or_ip.set(host_or_ip, strlen(host_or_ip), system_charset_info);
-
-  DBUG_VOID_RETURN;
 }
 
 inline void Security_context::set_host_or_ip_ptr(
     const char *host_or_ip_arg, const int host_or_ip_arg_length) {
-  DBUG_ENTER("Security_context::set_host_or_ip_ptr");
+  DBUG_TRACE;
 
   m_host_or_ip.set(host_or_ip_arg, host_or_ip_arg_length, system_charset_info);
-
-  DBUG_VOID_RETURN;
 }
 
 inline LEX_CSTRING Security_context::external_user() const {
   LEX_CSTRING ext_user;
 
-  DBUG_ENTER("Security_context::external_user");
+  DBUG_TRACE;
 
   ext_user.str = m_external_user.ptr();
   ext_user.length = m_external_user.length();
 
-  DBUG_RETURN(ext_user);
+  return ext_user;
 }
 
 inline ulong Security_context::master_access() const { return m_master_access; }
@@ -437,10 +444,9 @@ inline const Restrictions Security_context::restrictions() const {
 }
 
 inline void Security_context::set_master_access(ulong master_access) {
-  DBUG_ENTER("set_master_access");
+  DBUG_TRACE;
   m_master_access = master_access;
   DBUG_PRINT("info", ("Cached master access is %lu", m_master_access));
-  DBUG_VOID_RETURN;
 }
 
 inline void Security_context::set_master_access(
@@ -450,7 +456,7 @@ inline void Security_context::set_master_access(
 }
 
 inline const char *Security_context::priv_host_name() const {
-  return (*m_priv_host ? m_priv_host : (char *)"%");
+  return (*m_priv_host ? m_priv_host : "%");
 }
 
 inline bool Security_context::has_account_assigned() const {
@@ -478,5 +484,9 @@ inline bool Security_context::is_skip_grants_user() {
 inline void Security_context::clear_db_restrictions() {
   m_restrictions.clear_db();
 }
+
+inline void Security_context::set_thd(THD *thd) { m_thd = thd; }
+
+inline THD *Security_context::get_thd() { return m_thd; }
 
 #endif /* SQL_SECURITY_CTX_INCLUDED */

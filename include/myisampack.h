@@ -33,9 +33,6 @@
 
 #include "my_config.h"
 
-#ifdef HAVE_ENDIAN_H
-#include <endian.h>
-#endif
 #include <sys/types.h>
 
 #include "my_inttypes.h"
@@ -178,15 +175,14 @@ static inline longlong mi_sint8korr(const uchar *A) {
     ((uchar *)(T))[3] = ((uchar *)&A)[3]; \
   }
 
-#define mi_float4get(V, M)                       \
-  {                                              \
-    float def_temp;                              \
-    ((uchar *)&def_temp)[0] = ((uchar *)(M))[0]; \
-    ((uchar *)&def_temp)[1] = ((uchar *)(M))[1]; \
-    ((uchar *)&def_temp)[2] = ((uchar *)(M))[2]; \
-    ((uchar *)&def_temp)[3] = ((uchar *)(M))[3]; \
-    (V) = def_temp;                              \
-  }
+static inline float mi_float4get(const uchar *M) {
+  float def_temp;
+  ((uchar *)&def_temp)[0] = M[0];
+  ((uchar *)&def_temp)[1] = M[1];
+  ((uchar *)&def_temp)[2] = M[2];
+  ((uchar *)&def_temp)[3] = M[3];
+  return def_temp;
+}
 
 #define mi_float8store(T, V)              \
   {                                       \
@@ -200,19 +196,18 @@ static inline longlong mi_sint8korr(const uchar *A) {
     ((uchar *)(T))[7] = ((uchar *)&V)[7]; \
   }
 
-#define mi_float8get(V, M)                       \
-  {                                              \
-    double def_temp;                             \
-    ((uchar *)&def_temp)[0] = ((uchar *)(M))[0]; \
-    ((uchar *)&def_temp)[1] = ((uchar *)(M))[1]; \
-    ((uchar *)&def_temp)[2] = ((uchar *)(M))[2]; \
-    ((uchar *)&def_temp)[3] = ((uchar *)(M))[3]; \
-    ((uchar *)&def_temp)[4] = ((uchar *)(M))[4]; \
-    ((uchar *)&def_temp)[5] = ((uchar *)(M))[5]; \
-    ((uchar *)&def_temp)[6] = ((uchar *)(M))[6]; \
-    ((uchar *)&def_temp)[7] = ((uchar *)(M))[7]; \
-    (V) = def_temp;                              \
-  }
+static inline double mi_float8get(const uchar *M) {
+  double def_temp;
+  ((uchar *)&def_temp)[0] = M[0];
+  ((uchar *)&def_temp)[1] = M[1];
+  ((uchar *)&def_temp)[2] = M[2];
+  ((uchar *)&def_temp)[3] = M[3];
+  ((uchar *)&def_temp)[4] = M[4];
+  ((uchar *)&def_temp)[5] = M[5];
+  ((uchar *)&def_temp)[6] = M[6];
+  ((uchar *)&def_temp)[7] = M[7];
+  return def_temp;
+}
 #else
 
 #define mi_float4store(T, A)              \
@@ -223,15 +218,14 @@ static inline longlong mi_sint8korr(const uchar *A) {
     ((uchar *)(T))[3] = ((uchar *)&A)[0]; \
   }
 
-#define mi_float4get(V, M)                       \
-  {                                              \
-    float def_temp;                              \
-    ((uchar *)&def_temp)[0] = ((uchar *)(M))[3]; \
-    ((uchar *)&def_temp)[1] = ((uchar *)(M))[2]; \
-    ((uchar *)&def_temp)[2] = ((uchar *)(M))[1]; \
-    ((uchar *)&def_temp)[3] = ((uchar *)(M))[0]; \
-    (V) = def_temp;                              \
-  }
+static inline float mi_float4get(const uchar *M) {
+  float def_temp;
+  ((uchar *)&def_temp)[0] = M[3];
+  ((uchar *)&def_temp)[1] = M[2];
+  ((uchar *)&def_temp)[2] = M[1];
+  ((uchar *)&def_temp)[3] = M[0];
+  return def_temp;
+}
 
 #if defined(__FLOAT_WORD_ORDER) && (__FLOAT_WORD_ORDER == __BIG_ENDIAN)
 #define mi_float8store(T, V)              \
@@ -246,19 +240,18 @@ static inline longlong mi_sint8korr(const uchar *A) {
     ((uchar *)(T))[7] = ((uchar *)&V)[4]; \
   }
 
-#define mi_float8get(V, M)                       \
-  {                                              \
-    double def_temp;                             \
-    ((uchar *)&def_temp)[0] = ((uchar *)(M))[3]; \
-    ((uchar *)&def_temp)[1] = ((uchar *)(M))[2]; \
-    ((uchar *)&def_temp)[2] = ((uchar *)(M))[1]; \
-    ((uchar *)&def_temp)[3] = ((uchar *)(M))[0]; \
-    ((uchar *)&def_temp)[4] = ((uchar *)(M))[7]; \
-    ((uchar *)&def_temp)[5] = ((uchar *)(M))[6]; \
-    ((uchar *)&def_temp)[6] = ((uchar *)(M))[5]; \
-    ((uchar *)&def_temp)[7] = ((uchar *)(M))[4]; \
-    (V) = def_temp;                              \
-  }
+static inline double mi_float8get(const uchar *M) {
+  double def_temp;
+  ((uchar *)&def_temp)[0] = M[3];
+  ((uchar *)&def_temp)[1] = M[2];
+  ((uchar *)&def_temp)[2] = M[1];
+  ((uchar *)&def_temp)[3] = M[0];
+  ((uchar *)&def_temp)[4] = M[7];
+  ((uchar *)&def_temp)[5] = M[6];
+  ((uchar *)&def_temp)[6] = M[5];
+  ((uchar *)&def_temp)[7] = M[4];
+  return def_temp;
+}
 
 #else
 #define mi_float8store(T, V)              \
@@ -273,38 +266,26 @@ static inline longlong mi_sint8korr(const uchar *A) {
     ((uchar *)(T))[7] = ((uchar *)&V)[0]; \
   }
 
-#define mi_float8get(V, M)                       \
-  {                                              \
-    double def_temp;                             \
-    ((uchar *)&def_temp)[0] = ((uchar *)(M))[7]; \
-    ((uchar *)&def_temp)[1] = ((uchar *)(M))[6]; \
-    ((uchar *)&def_temp)[2] = ((uchar *)(M))[5]; \
-    ((uchar *)&def_temp)[3] = ((uchar *)(M))[4]; \
-    ((uchar *)&def_temp)[4] = ((uchar *)(M))[3]; \
-    ((uchar *)&def_temp)[5] = ((uchar *)(M))[2]; \
-    ((uchar *)&def_temp)[6] = ((uchar *)(M))[1]; \
-    ((uchar *)&def_temp)[7] = ((uchar *)(M))[0]; \
-    (V) = def_temp;                              \
-  }
+static inline double mi_float8get(const uchar *M) {
+  double def_temp;
+  ((uchar *)&def_temp)[0] = M[7];
+  ((uchar *)&def_temp)[1] = M[6];
+  ((uchar *)&def_temp)[2] = M[5];
+  ((uchar *)&def_temp)[3] = M[4];
+  ((uchar *)&def_temp)[4] = M[3];
+  ((uchar *)&def_temp)[5] = M[2];
+  ((uchar *)&def_temp)[6] = M[1];
+  ((uchar *)&def_temp)[7] = M[0];
+  return def_temp;
+}
+
 #endif /* __FLOAT_WORD_ORDER */
 #endif /* WORDS_BIGENDIAN */
 
 #define mi_rowstore(T, A) mi_int8store(T, A)
 #define mi_rowkorr(T) mi_uint8korr(T)
 
-#if SIZEOF_OFF_T > 4
 #define mi_sizestore(T, A) mi_int8store(T, A)
 #define mi_sizekorr(T) mi_uint8korr(T)
-#else
-#define mi_sizestore(T, A)        \
-  {                               \
-    if ((A) == HA_OFFSET_ERROR)   \
-      memset((T), 255, 8);        \
-    else {                        \
-      mi_int4store((T), 0);       \
-      mi_int4store(((T) + 4), A); \
-    }                             \
-  }
-#define mi_sizekorr(T) mi_uint4korr((uchar *)(T) + 4)
-#endif
+
 #endif /* MYISAMPACK_INCLUDED */

@@ -1,7 +1,7 @@
 #ifndef ITEM_TIMEFUNC_INCLUDED
 #define ITEM_TIMEFUNC_INCLUDED
 
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -88,6 +88,7 @@ class Item_func_to_days final : public Item_int_func {
   Item_func_to_days(const POS &pos, Item *a) : Item_int_func(pos, a) {}
   longlong val_int() override;
   const char *func_name() const override { return "to_days"; }
+  enum Functype functype() const override { return TO_DAYS_FUNC; }
   bool resolve_type(THD *) override {
     fix_char_length(6);
     maybe_null = true;
@@ -120,7 +121,7 @@ class Item_func_to_seconds final : public Item_int_func {
     /* This function was introduced in 5.5 */
     int output_version = std::max(*input_version, 50500);
     *input_version = output_version;
-    return 0;
+    return false;
   }
 
   /* Only meaningful with date part and optional time part */
@@ -164,7 +165,7 @@ class Item_func_month final : public Item_func {
   }
   String *val_str(String *str) override {
     longlong nr = val_int();
-    if (null_value) return 0;
+    if (null_value) return nullptr;
     str->set(nr, collation.collation);
     return str;
   }
@@ -192,6 +193,7 @@ class Item_func_monthname final : public Item_str_func {
  public:
   Item_func_monthname(const POS &pos, Item *a) : Item_str_func(pos, a) {}
   const char *func_name() const override { return "monthname"; }
+  enum Functype functype() const override { return MONTHNAME_FUNC; }
   String *val_str(String *str) override;
   bool resolve_type(THD *thd) override;
   bool check_partition_func_processor(uchar *) override { return true; }
@@ -205,6 +207,7 @@ class Item_func_dayofyear final : public Item_int_func {
   Item_func_dayofyear(const POS &pos, Item *a) : Item_int_func(pos, a) {}
   longlong val_int() override;
   const char *func_name() const override { return "dayofyear"; }
+  enum Functype functype() const override { return DAYOFYEAR_FUNC; }
   bool resolve_type(THD *) override {
     fix_char_length(3);
     maybe_null = true;
@@ -255,6 +258,7 @@ class Item_func_quarter final : public Item_int_func {
   Item_func_quarter(const POS &pos, Item *a) : Item_int_func(pos, a) {}
   longlong val_int() override;
   const char *func_name() const override { return "quarter"; }
+  enum Functype functype() const override { return QUARTER_FUNC; }
   bool resolve_type(THD *) override {
     fix_char_length(1); /* 1..4 */
     maybe_null = true;
@@ -328,8 +332,7 @@ class Item_func_year final : public Item_int_func {
   enum_monotonicity_info get_monotonicity_info() const override;
   longlong val_int_endpoint(bool left_endp, bool *incl_endp) override;
   bool resolve_type(THD *) override {
-    fix_char_length(4); /* 9999 */
-    unsigned_flag = true;
+    fix_char_length(5); /* 9999 plus sign */
     maybe_null = true;
     return false;
   }
@@ -359,7 +362,7 @@ class Item_func_weekday : public Item_func {
   String *val_str(String *str) override {
     DBUG_ASSERT(fixed == 1);
     str->set(val_int(), &my_charset_bin);
-    return null_value ? 0 : str;
+    return null_value ? nullptr : str;
   }
   bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate) override {
     return get_date_from_int(ltime, fuzzydate);
@@ -390,8 +393,10 @@ class Item_func_dayname final : public Item_func_weekday {
   MY_LOCALE *locale;
 
  public:
-  Item_func_dayname(const POS &pos, Item *a) : Item_func_weekday(pos, a, 0) {}
+  Item_func_dayname(const POS &pos, Item *a)
+      : Item_func_weekday(pos, a, false) {}
   const char *func_name() const override { return "dayname"; }
+  enum Functype functype() const override { return DAYNAME_FUNC; }
   String *val_str(String *str) override;
   bool get_date(MYSQL_TIME *ltime, my_time_flags_t fuzzydate) override {
     return get_date_from_string(ltime, fuzzydate);
@@ -467,6 +472,7 @@ class Item_func_unix_timestamp final : public Item_timeval_func {
       set_data_type_decimal(11 + dec, dec);
     } else {
       set_data_type_longlong();
+      decimals = 0;
       max_length = 11;
     }
     return false;
@@ -533,7 +539,7 @@ class Item_temporal_func : public Item_func {
     return &my_charset_bin;
   }
   Field *tmp_table_field(TABLE *table) override {
-    return tmp_table_field_from_field_type(table, 0);
+    return tmp_table_field_from_field_type(table, false);
   }
   uint time_precision() override {
     DBUG_ASSERT(fixed);
@@ -585,7 +591,7 @@ class Item_temporal_hybrid_func : public Item_str_func {
                                             : &my_charset_bin;
   }
   Field *tmp_table_field(TABLE *table) override {
-    return tmp_table_field_from_field_type(table, 0);
+    return tmp_table_field_from_field_type(table, false);
   }
   longlong val_int() override { return val_int_from_decimal(); }
   double val_real() override { return val_real_from_decimal(); }
@@ -796,7 +802,8 @@ class MYSQL_TIME_cache {
   /**
     Set time and time_packed from a DATETIME value.
   */
-  void set_datetime(MYSQL_TIME *ltime, uint8 dec_arg);
+  void set_datetime(MYSQL_TIME *ltime, uint8 dec_arg,
+                    const Time_zone *tz = nullptr);
   /**
     Set time and time_packed according to DATE value
     in "struct timeval" representation and its time zone.
@@ -919,7 +926,7 @@ class Item_time_literal final : public Item_time_func {
     @param dec_arg  number of fractional digits in ltime.
   */
   Item_time_literal(MYSQL_TIME *ltime, uint dec_arg) {
-    set_data_type_time(MY_MIN(dec_arg, DATETIME_MAX_DECIMALS));
+    set_data_type_time(std::min(dec_arg, uint(DATETIME_MAX_DECIMALS)));
     cached_time.set_time(ltime, decimals);
     fixed = true;
   }
@@ -959,12 +966,14 @@ class Item_datetime_literal final : public Item_datetime_func {
  public:
   /**
     Constructor for Item_datetime_literal.
-    @param ltime    DATETIME value.
-    @param dec_arg  number of fractional digits in ltime.
+    @param ltime   DATETIME value.
+    @param dec_arg Number of fractional digits in ltime.
+    @param tz      The current time zone, used for converting literals with
+                   time zone upon storage.
   */
-  Item_datetime_literal(MYSQL_TIME *ltime, uint dec_arg) {
-    set_data_type_datetime(MY_MIN(dec_arg, DATETIME_MAX_DECIMALS));
-    cached_time.set_datetime(ltime, decimals);
+  Item_datetime_literal(MYSQL_TIME *ltime, uint dec_arg, const Time_zone *tz) {
+    set_data_type_datetime(std::min(dec_arg, uint{DATETIME_MAX_DECIMALS}));
+    cached_time.set_datetime(ltime, decimals, tz);
     fixed = true;
   }
   const char *func_name() const override { return "datetime_literal"; }
@@ -1280,7 +1289,9 @@ class Item_func_convert_tz final : public Item_datetime_func {
 
  public:
   Item_func_convert_tz(const POS &pos, Item *a, Item *b, Item *c)
-      : Item_datetime_func(pos, a, b, c), from_tz_cached(0), to_tz_cached(0) {}
+      : Item_datetime_func(pos, a, b, c),
+        from_tz_cached(false),
+        to_tz_cached(false) {}
   const char *func_name() const override { return "convert_tz"; }
   bool resolve_type(THD *) override;
   bool get_date(MYSQL_TIME *res, my_time_flags_t fuzzy_date) override;
@@ -1292,7 +1303,8 @@ class Item_func_sec_to_time final : public Item_time_func {
   Item_func_sec_to_time(const POS &pos, Item *item)
       : Item_time_func(pos, item) {}
   bool resolve_type(THD *) override {
-    set_data_type_time(MY_MIN(args[0]->decimals, DATETIME_MAX_DECIMALS));
+    set_data_type_time(
+        std::min(args[0]->decimals, uint8{DATETIME_MAX_DECIMALS}));
     maybe_null = true;
     return false;
   }
@@ -1327,6 +1339,7 @@ class Item_date_add_interval final : public Item_temporal_hybrid_func {
         int_type(type_arg),
         date_sub_interval(neg_arg) {}
   const char *func_name() const override { return "date_add_interval"; }
+  enum Functype functype() const override { return DATEADD_FUNC; }
   bool resolve_type(THD *) override;
   bool eq(const Item *item, bool binary_cmp) const override;
   void print(const THD *thd, String *str,
@@ -1385,11 +1398,16 @@ class Item_extract final : public Item_int_func {
   }
 };
 
-class Item_date_typecast final : public Item_date_func {
+class Item_typecast_date final : public Item_date_func {
+  bool m_explicit_cast{true};
+
  public:
-  Item_date_typecast(Item *a) : Item_date_func(a) { maybe_null = 1; }
-  Item_date_typecast(const POS &pos, Item *a) : Item_date_func(pos, a) {
-    maybe_null = 1;
+  Item_typecast_date(Item *a, bool explicit_cast)
+      : Item_date_func(a), m_explicit_cast(explicit_cast) {
+    maybe_null = true;
+  }
+  Item_typecast_date(const POS &pos, Item *a) : Item_date_func(pos, a) {
+    maybe_null = true;
   }
 
   void print(const THD *thd, String *str,
@@ -1400,18 +1418,19 @@ class Item_date_typecast final : public Item_date_func {
   const char *cast_type() const { return "date"; }
 };
 
-class Item_time_typecast final : public Item_time_func {
+class Item_typecast_time final : public Item_time_func {
   bool detect_precision_from_arg;
+  bool m_explicit_cast{true};
 
  public:
-  Item_time_typecast(Item *a) : Item_time_func(a) {
+  Item_typecast_time(Item *a) : Item_time_func(a) {
     detect_precision_from_arg = true;
   }
-  Item_time_typecast(const POS &pos, Item *a) : Item_time_func(pos, a) {
+  Item_typecast_time(const POS &pos, Item *a) : Item_time_func(pos, a) {
     detect_precision_from_arg = true;
   }
 
-  Item_time_typecast(const POS &pos, Item *a, uint8 dec_arg)
+  Item_typecast_time(const POS &pos, Item *a, uint8 dec_arg)
       : Item_time_func(pos, a) {
     detect_precision_from_arg = false;
     decimals = dec_arg;
@@ -1430,18 +1449,20 @@ class Item_time_typecast final : public Item_time_func {
   }
 };
 
-class Item_datetime_typecast final : public Item_datetime_func {
+class Item_typecast_datetime final : public Item_datetime_func {
   bool detect_precision_from_arg;
+  bool m_explicit_cast{true};
 
  public:
-  Item_datetime_typecast(Item *a) : Item_datetime_func(a) {
+  Item_typecast_datetime(Item *a, bool explicit_cast)
+      : Item_datetime_func(a), m_explicit_cast(explicit_cast) {
     detect_precision_from_arg = true;
   }
-  Item_datetime_typecast(const POS &pos, Item *a) : Item_datetime_func(pos, a) {
+  Item_typecast_datetime(const POS &pos, Item *a) : Item_datetime_func(pos, a) {
     detect_precision_from_arg = true;
   }
 
-  Item_datetime_typecast(const POS &pos, Item *a, uint8 dec_arg)
+  Item_typecast_datetime(const POS &pos, Item *a, uint8 dec_arg)
       : Item_datetime_func(pos, a) {
     detect_precision_from_arg = false;
     decimals = dec_arg;
@@ -1502,7 +1523,7 @@ class Item_func_timediff final : public Item_time_func {
   const char *func_name() const override { return "timediff"; }
   bool resolve_type(THD *) override {
     set_data_type_time(
-        MY_MAX(args[0]->time_precision(), args[1]->time_precision()));
+        std::max(args[0]->time_precision(), args[1]->time_precision()));
     maybe_null = true;
     return false;
   }
@@ -1516,7 +1537,8 @@ class Item_func_maketime final : public Item_time_func {
     maybe_null = true;
   }
   bool resolve_type(THD *) override {
-    set_data_type_time(MY_MIN(args[2]->decimals, DATETIME_MAX_DECIMALS));
+    set_data_type_time(
+        std::min(args[2]->decimals, uint8{DATETIME_MAX_DECIMALS}));
     return false;
   }
   const char *func_name() const override { return "maketime"; }
@@ -1547,6 +1569,8 @@ class Item_func_timestamp_diff final : public Item_int_func {
                            interval_type type_arg)
       : Item_int_func(pos, a, b), int_type(type_arg) {}
   const char *func_name() const override { return "timestampdiff"; }
+  enum Functype functype() const override { return TIMESTAMPDIFF_FUNC; }
+  interval_type intervaltype() const { return int_type; }
   longlong val_int() override;
   bool resolve_type(THD *) override {
     maybe_null = true;

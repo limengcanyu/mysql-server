@@ -1,6 +1,6 @@
 /***********************************************************************
 
-Copyright (c) 2010, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2010, 2020, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
 
 This program is free software; you can redistribute it and/or modify
@@ -139,10 +139,15 @@ enum monitor_id_t {
   /* Lock manager related counters */
   MONITOR_MODULE_LOCK,
   MONITOR_DEADLOCK,
+  MONITOR_DEADLOCK_FALSE_POSITIVES,
+  MONITOR_DEADLOCK_ROUNDS,
+  MONITOR_LOCK_THREADS_WAITING,
   MONITOR_TIMEOUT,
   MONITOR_LOCKREC_WAIT,
   MONITOR_TABLELOCK_WAIT,
   MONITOR_NUM_RECLOCK_REQ,
+  MONITOR_RECLOCK_RELEASE_ATTEMPTS,
+  MONITOR_RECLOCK_GRANT_ATTEMPTS,
   MONITOR_RECLOCK_CREATED,
   MONITOR_RECLOCK_REMOVED,
   MONITOR_NUM_RECLOCK,
@@ -154,6 +159,7 @@ enum monitor_id_t {
   MONITOR_OVLD_LOCK_MAX_WAIT_TIME,
   MONITOR_OVLD_ROW_LOCK_WAIT,
   MONITOR_OVLD_LOCK_AVG_WAIT_TIME,
+  MONITOR_SCHEDULE_REFRESHES,
 
   /* Buffer and I/O realted counters. */
   MONITOR_MODULE_BUFFER,
@@ -186,6 +192,7 @@ enum monitor_id_t {
   MONITOR_FLUSH_NEIGHBOR_COUNT,
   MONITOR_FLUSH_NEIGHBOR_PAGES,
   MONITOR_FLUSH_N_TO_FLUSH_REQUESTED,
+  MONITOR_FLUSH_N_TO_FLUSH_BY_DIRTY_PAGE,
 
   MONITOR_FLUSH_N_TO_FLUSH_BY_AGE,
   MONITOR_FLUSH_ADAPTIVE_AVG_TIME_SLOT,
@@ -324,11 +331,7 @@ enum monitor_id_t {
   /* Undo tablespace truncation */
   MONITOR_UNDO_TRUNCATE,
   MONITOR_UNDO_TRUNCATE_COUNT,
-  MONITOR_UNDO_TRUNCATE_SWEEP_COUNT,
-  MONITOR_UNDO_TRUNCATE_SWEEP_MICROSECOND,
   MONITOR_UNDO_TRUNCATE_START_LOGGING_COUNT,
-  MONITOR_UNDO_TRUNCATE_FLUSH_COUNT,
-  MONITOR_UNDO_TRUNCATE_FLUSH_MICROSECOND,
   MONITOR_UNDO_TRUNCATE_DONE_LOGGING_COUNT,
   MONITOR_UNDO_TRUNCATE_MICROSECOND,
 
@@ -469,6 +472,15 @@ enum monitor_id_t {
   MONITOR_OLVD_ROW_INSERTED,
   MONITOR_OLVD_ROW_DELETED,
   MONITOR_OLVD_ROW_UPDTATED,
+  MONITOR_OLVD_SYSTEM_ROW_READ,
+  MONITOR_OLVD_SYSTEM_ROW_INSERTED,
+  MONITOR_OLVD_SYSTEM_ROW_DELETED,
+  MONITOR_OLVD_SYSTEM_ROW_UPDATED,
+
+  /* Sampling related counters */
+  MONITOR_MODULE_SAMPLING_STATS,
+  MONITOR_SAMPLED_PAGES_READ,
+  MONITOR_SAMPLED_PAGES_SKIPPED,
 
   /* Data DDL related counters */
   MONITOR_MODULE_DDL_STATS,
@@ -501,6 +513,12 @@ enum monitor_id_t {
   MONITOR_PAGE_TRACK_PARTIAL_BLOCK_WRITES,
   MONITOR_PAGE_TRACK_FULL_BLOCK_WRITES,
   MONITOR_PAGE_TRACK_CHECKPOINT_PARTIAL_FLUSH_REQUEST,
+
+  MONITOR_MODULE_DBLWR,
+  MONITOR_DBLWR_ASYNC_REQUESTS,
+  MONITOR_DBLWR_SYNC_REQUESTS,
+  MONITOR_DBLWR_FLUSH_REQUESTS,
+  MONITOR_DBLWR_FLUSH_WAIT_EVENTS,
 
   /* This is used only for control system to turn
   on/off and reset all monitor counters */
@@ -753,7 +771,7 @@ monitor counter
   MONITOR_CHECK_DEFINED(value);                               \
   if (MONITOR_IS_ON(monitor)) {                               \
     uintmax_t old_time = (value);                             \
-    value = ut_time_us(NULL);                                 \
+    value = ut_time_monotonic_us();                           \
     MONITOR_VALUE(monitor) += (mon_type_t)(value - old_time); \
   }
 

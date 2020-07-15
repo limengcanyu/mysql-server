@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -190,7 +190,7 @@ int country_index_read(PSI_index_handle *index, PSI_key_reader *reader,
 /* Read the next indexed value */
 int country_index_next(PSI_table_handle *handle) {
   Country_Table_Handle *h = (Country_Table_Handle *)handle;
-  Country_index *i = NULL;
+  Country_index *i = nullptr;
 
   switch (h->index_num) {
     case 0:

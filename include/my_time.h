@@ -1,4 +1,4 @@
-/* Copyright (c) 2004, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2004, 2020, Oracle and/or its affiliates. All rights reserved.
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License, version 2.0,
@@ -99,6 +99,9 @@ constexpr const my_time_flags_t TIME_NO_ZERO_DATE = 32;
 /** Allow 2000-02-31 */
 constexpr const my_time_flags_t TIME_INVALID_DATES = 64;
 
+/** Allow only HH:MM:SS or MM:SS time formats */
+constexpr const my_time_flags_t TIME_STRICT_COLON = 128;
+
 /** Conversion warnings */
 constexpr const int MYSQL_TIME_WARN_TRUNCATED = 1;
 constexpr const int MYSQL_TIME_WARN_OUT_OF_RANGE = 2;
@@ -127,10 +130,25 @@ constexpr const int TIME_MAX_VALUE_SECONDS =
 
 constexpr const int DATETIME_MAX_DECIMALS = 6;
 
+constexpr const int SECS_PER_MIN = 60;
+constexpr const int MINS_PER_HOUR = 60;
+constexpr const int HOURS_PER_DAY = 24;
+constexpr const int DAYS_PER_WEEK = 7;
+constexpr const int DAYS_PER_NYEAR = 365;
+constexpr const int DAYS_PER_LYEAR = 366;
+constexpr const int SECS_PER_HOUR = (SECS_PER_MIN * MINS_PER_HOUR);
+constexpr const int SECS_PER_DAY = (SECS_PER_HOUR * HOURS_PER_DAY);
+constexpr const int MONS_PER_YEAR = 12;
+
+constexpr const int MAX_TIME_ZONE_HOURS = 14;
+
 /** Flags for calc_week() function.  */
 constexpr const unsigned int WEEK_MONDAY_FIRST = 1;
 constexpr const unsigned int WEEK_YEAR = 2;
 constexpr const unsigned int WEEK_FIRST_WEEKDAY = 4;
+
+/** Daynumber from year 0 to 9999-12-31 */
+constexpr const int64_t MAX_DAY_NUMBER = 3652424;
 
 /**
   Structure to return status from
@@ -164,7 +182,10 @@ long calc_daynr(unsigned int year, unsigned int month, unsigned int day);
 unsigned int calc_days_in_year(unsigned int year);
 unsigned int year_2000_handling(unsigned int year);
 
-void get_date_from_daynr(long daynr, unsigned int *year, unsigned int *month,
+bool time_zone_displacement_to_seconds(const char *str, size_t length,
+                                       int *result);
+
+void get_date_from_daynr(int64_t daynr, unsigned int *year, unsigned int *month,
                          unsigned int *day);
 int calc_weekday(long daynr, bool sunday_first_day_of_week);
 bool valid_period(long long int period);
@@ -309,7 +330,7 @@ void my_timestamp_from_binary(struct timeval *tm, const unsigned char *ptr,
                               unsigned int dec);
 
 bool str_to_time(const char *str, std::size_t length, MYSQL_TIME *l_time,
-                 MYSQL_TIME_STATUS *status);
+                 MYSQL_TIME_STATUS *status, my_time_flags_t flags = 0);
 
 bool check_time_mmssff_range(const MYSQL_TIME &my_time);
 bool check_time_range_quick(const MYSQL_TIME &my_time);
@@ -350,17 +371,19 @@ void set_max_hhmmss(MYSQL_TIME *tm);
   Required buffer length for my_time_to_str, my_date_to_str,
   my_datetime_to_str and TIME_to_string functions. Note, that the
   caller is still responsible to check that given TIME structure
-  has values in valid ranges, otherwise size of the buffer could
-  be not enough. We also rely on the fact that even wrong values
+  has values in valid ranges, otherwise size of the buffer might
+  well be insufficient. We also rely on the fact that even incorrect values
   sent using binary protocol fit in this buffer.
 */
-constexpr const std::size_t MAX_DATE_STRING_REP_LENGTH = 30;
+constexpr const std::size_t MAX_DATE_STRING_REP_LENGTH =
+    sizeof("YYYY-MM-DD AM HH:MM:SS.FFFFFF+HH:MM");
 
 int my_time_to_str(const MYSQL_TIME &my_time, char *to, unsigned int dec);
 int my_date_to_str(const MYSQL_TIME &my_time, char *to);
 int my_datetime_to_str(const MYSQL_TIME &my_time, char *to, unsigned int dec);
 int my_TIME_to_str(const MYSQL_TIME &my_time, char *to, unsigned int dec);
 
+void my_date_to_binary(const MYSQL_TIME *ltime, unsigned char *ptr);
 int my_timeval_to_str(const struct timeval *tm, char *to, unsigned int dec);
 
 /**

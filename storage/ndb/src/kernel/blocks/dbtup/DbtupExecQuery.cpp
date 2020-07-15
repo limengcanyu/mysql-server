@@ -45,14 +45,13 @@
 #define JAM_FILE_ID 422
 
 #define TUP_NO_TUPLE_FOUND 626
-#ifdef VM_TRACE
+#if (defined(VM_TRACE) || defined(ERROR_INSERT))
 //#define DEBUG_LCP 1
 //#define DEBUG_DELETE 1
 //#define DEBUG_DELETE_NR 1
 //#define DEBUG_LCP_LGMAN 1
 //#define DEBUG_LCP_SKIP_DELETE 1
 #endif
-//#define DEBUG_LCP_SKIP_DELETE 1
 
 #ifdef DEBUG_LCP
 #define DEB_LCP(arglist) do { g_eventLogger->info arglist ; } while (0)
@@ -124,8 +123,8 @@ void Dbtup::getStoredProcAttrInfo(Uint32 storedId,
 {
   jamDebug();
   StoredProcPtr storedPtr;
-  c_storedProcPool.getPtr(storedPtr, storedId);
-  ndbrequire(storedPtr.i != RNIL);
+  storedPtr.i = storedId;
+  ndbrequire(c_storedProcPool.getValidPtr(storedPtr));
   ndbrequire(((storedPtr.p->storedCode == ZSCAN_PROCEDURE) ||
                (storedPtr.p->storedCode == ZCOPY_PROCEDURE)));
   /* Setup OperationRec with stored procedure AttrInfo section */
@@ -309,7 +308,8 @@ Dbtup::insertActiveOpList(OperationrecPtr regOperPtr,
     return true;
   } else {
     jam();
-    req_struct->prevOpPtr.p= prevOpPtr.p= c_operation_pool.getPtr(prevOpPtr.i);
+    ndbrequire(c_operation_pool.getValidPtr(prevOpPtr));
+    req_struct->prevOpPtr.p = prevOpPtr.p;
     prevOpPtr.p->nextActiveOp= regOperPtr.i;
 
     regOperPtr.p->op_struct.bit_field.m_wait_log_buffer= 
@@ -414,7 +414,7 @@ Dbtup::setup_read(KeyReqStruct *req_struct,
     Uint32 savepointId= regOperPtr->savepointId;
     bool dirty= req_struct->dirty_op;
     
-    c_operation_pool.getPtr(currOpPtr);
+    ndbrequire(c_operation_pool.getValidPtr(currOpPtr));
     const bool sameTrans= c_lqh->is_same_trans(currOpPtr.p->userpointer,
                                                req_struct->trans_id1,
                                                req_struct->trans_id2);
@@ -501,7 +501,8 @@ Dbtup::load_diskpage(Signal* signal,
 {
   Ptr<Operationrec> operPtr;
 
-  c_operation_pool.getPtr(operPtr, opRec);
+  operPtr.i = opRec;
+  ndbrequire(c_operation_pool.getValidPtr(operPtr));
 
   Operationrec *  regOperPtr= operPtr.p;
   Fragrecord * regFragPtr= prepare_fragptr.p;
@@ -603,7 +604,8 @@ void
 Dbtup::disk_page_load_callback(Signal* signal, Uint32 opRec, Uint32 page_id)
 {
   Ptr<Operationrec> operPtr;
-  c_operation_pool.getPtr(operPtr, opRec);
+  operPtr.i = opRec;
+  ndbrequire(c_operation_pool.getValidPtr(operPtr));
   c_lqh->acckeyconf_load_diskpage_callback(signal, 
 					   operPtr.p->userpointer, page_id);
 }
@@ -611,11 +613,12 @@ Dbtup::disk_page_load_callback(Signal* signal, Uint32 opRec, Uint32 page_id)
 int
 Dbtup::load_diskpage_scan(Signal* signal,
 			  Uint32 opRec, Uint32 fragPtrI,
-			  Uint32 lkey1, Uint32 lkey2, Uint32 tux_flag)
+			  Uint32 lkey1, Uint32 lkey2, Uint32 tux_flag,
+                          Uint32 disk_flag)
 {
   Ptr<Operationrec> operPtr;
-
-  c_operation_pool.getPtr(operPtr, opRec);
+  operPtr.i = opRec;
+  ndbrequire(c_operation_pool.getValidPtr(operPtr));
 
   Operationrec *  regOperPtr= operPtr.p;
   Fragrecord * regFragPtr= prepare_fragptr.p;
@@ -666,7 +669,7 @@ Dbtup::load_diskpage_scan(Signal* signal,
       safe_cast(&Dbtup::disk_page_load_scan_callback);
     
     Page_cache_client pgman(this, c_pgman);
-    res= pgman.get_page(signal, req, 0);
+    res= pgman.get_page(signal, req, disk_flag);
   }
   return res;
 }
@@ -676,7 +679,8 @@ Dbtup::disk_page_load_scan_callback(Signal* signal,
 				    Uint32 opRec, Uint32 page_id)
 {
   Ptr<Operationrec> operPtr;
-  c_operation_pool.getPtr(operPtr, opRec);
+  operPtr.i = opRec;
+  ndbrequire(c_operation_pool.getValidPtr(operPtr));
   c_lqh->next_scanconf_load_diskpage_callback(signal, 
 					      operPtr.p->userpointer, page_id);
 }
@@ -815,17 +819,6 @@ void Dbtup::prepare_scan_tux_TUPKEYREQ(Uint32 page_id, Uint32 page_idx)
       NDB_PREFETCH_WRITE(tuple_ptr + i);
     }
   }
-}
-
-void Dbtup::prepare_op_pointer(Uint32 opPtrI)
-{
-  jamDebug();
-  Ptr<Operationrec> operPtr;
-  c_operation_pool.getPtr(operPtr, opPtrI);
-  Uint32 *op_ptr = (Uint32*)operPtr.p;
-  NDB_PREFETCH_WRITE(op_ptr);
-  NDB_PREFETCH_WRITE(op_ptr + 14);
-  prepare_oper_ptr = operPtr;
 }
 
 bool Dbtup::execTUPKEYREQ(Signal* signal) 
@@ -2105,14 +2098,14 @@ int Dbtup::handleInsertReq(Signal* signal,
   if (ERROR_INSERTED(4014))
   {
     dst = 0;
-    goto undo_buffer_error;
+    goto trans_mem_error;
   }
 
   dst= alloc_copy_tuple(regTabPtr, &regOperPtr.p->m_copy_tuple_location);
 
   if (unlikely(dst == 0))
   {
-    goto undo_buffer_error;
+    goto trans_mem_error;
   }
   tuple_ptr= req_struct->m_tuple_ptr= dst;
   set_change_mask_info(regTabPtr, get_change_mask_ptr(regTabPtr, dst));
@@ -2490,17 +2483,17 @@ size_change_error:
   jam();
   terrorCode = ZMEM_NOMEM_ERROR;
   goto exit_error;
-  
-undo_buffer_error:
+
+trans_mem_error:
   jam();
-  terrorCode= ZNO_UNDO_BUFFER_MEMORY_ERROR;
+  terrorCode= ZNO_COPY_TUPLE_MEMORY_ERROR;
   regOperPtr.p->m_undo_buffer_space = 0;
   if (mem_insert)
     regOperPtr.p->m_tuple_location.setNull();
   regOperPtr.p->m_copy_tuple_location.setNull();
   tupkeyErrorLab(req_struct);
   return -1;
-  
+
 null_check_error:
   jam();
   terrorCode= ZNO_ILLEGAL_NULL_ATTR;
@@ -3760,16 +3753,15 @@ int Dbtup::interpreterNextLab(Signal* signal,
 	  break;
 	}
 
+      case Interpreter::BRANCH_ATTR_OP_ATTR:
       case Interpreter::BRANCH_ATTR_OP_ARG_2:
       case Interpreter::BRANCH_ATTR_OP_ARG:{
-	jamDebug();
-	Uint32 cond = Interpreter::getBinaryCondition(theInstruction);
-	Uint32 ins2 = TcurrentProgram[TprogramCounter];
-	Uint32 attrId = Interpreter::getBranchCol_AttrId(ins2) << 16;
-	Uint32 argLen = Interpreter::getBranchCol_Len(ins2);
-        Uint32 step = argLen;
+        jamDebug();
+        const Uint32 ins2 = TcurrentProgram[TprogramCounter];
+        Uint32 attrId = Interpreter::getBranchCol_AttrId(ins2) << 16;
+        const Uint32 opCode = Interpreter::getOpCode(theInstruction);
 
-	if (tmpHabitant != attrId)
+        if (tmpHabitant != attrId)
         {
 	  Int32 TnoDataR = readAttributes(req_struct,
 					  &attrId, 1,
@@ -3784,33 +3776,54 @@ int Dbtup::interpreterNextLab(Signal* signal,
 	    return -1;
 	  }
 	  tmpHabitant= attrId;
-	}
+        }
 
         // get type
 	attrId >>= 16;
-	Uint32 TattrDescrIndex = req_struct->tablePtrP->tabDescriptor +
+	const Uint32 TattrDescrIndex = req_struct->tablePtrP->tabDescriptor +
 	  (attrId << ZAD_LOG_SIZE);
-	Uint32 TattrDesc1 = tableDescriptor[TattrDescrIndex].tabDescr;
-	Uint32 TattrDesc2 = tableDescriptor[TattrDescrIndex+1].tabDescr;
-	Uint32 typeId = AttributeDescriptor::getType(TattrDesc1);
-	void * cs = 0;
+	const Uint32 TattrDesc1 = tableDescriptor[TattrDescrIndex].tabDescr;
+	const Uint32 TattrDesc2 = tableDescriptor[TattrDescrIndex+1].tabDescr;
+	const Uint32 typeId = AttributeDescriptor::getType(TattrDesc1);
+	const CHARSET_INFO *cs = nullptr;
 	if (AttributeOffset::getCharsetFlag(TattrDesc2))
 	{
-	  Uint32 pos = AttributeOffset::getCharsetPos(TattrDesc2);
+	  const Uint32 pos = AttributeOffset::getCharsetPos(TattrDesc2);
 	  cs = req_struct->tablePtrP->charsetArray[pos];
 	}
 	const NdbSqlUtil::Type& sqlType = NdbSqlUtil::getType(typeId);
 
-        // get data
-	AttributeHeader ah(tmpArea[0]);
+        // get data for 1st argument, always an ATTR.
+        const AttributeHeader ah(tmpArea[0]);
         const char* s1 = (char*)&tmpArea[1];
-        const char* s2 = (char*)&TcurrentProgram[TprogramCounter+1];
         // fixed length in 5.0
-	Uint32 attrLen = AttributeDescriptor::getSizeInBytes(TattrDesc1);
-
-        if (Interpreter::getOpCode(theInstruction) ==
-            Interpreter::BRANCH_ATTR_OP_ARG_2)
+        Uint32 attrLen = AttributeDescriptor::getSizeInBytes(TattrDesc1);
+        if (unlikely(typeId == NDB_TYPE_BIT))
         {
+          /* Size in bytes for bit fields can be incorrect due to
+           * rounding down
+           */
+          Uint32 bitFieldAttrLen= (AttributeDescriptor::getArraySize(TattrDesc1)
+                                   + 7) / 8;
+          attrLen= bitFieldAttrLen;
+        }
+
+	// 2'nd argument, literal, parameter or another attribute
+        Uint32 argLen = 0;
+        Uint32 step = 0;
+        const char* s2 = nullptr;
+
+        if (likely(opCode == Interpreter::BRANCH_ATTR_OP_ARG))
+        {
+          // Compare ATTR with a literal value given by interpreter code
+          jamDebug();
+          argLen = Interpreter::getBranchCol_Len(ins2);
+          step = argLen;
+          s2 = (char*)&TcurrentProgram[TprogramCounter+1];
+        }
+        else if (opCode == Interpreter::BRANCH_ATTR_OP_ARG_2)
+        {
+          // Compare ATTR with a parameter
           jamDebug();
           Uint32 paramNo = Interpreter::getBranchCol_ParamNo(ins2);
           const Uint32 * paramptr = lookupInterpreterParameter(paramNo,
@@ -3828,19 +3841,57 @@ int Dbtup::interpreterNextLab(Signal* signal,
           step = 0;
           s2 = (char*)(paramptr + 1);
         }
-        
-        if (typeId == NDB_TYPE_BIT)
+        else if (opCode == Interpreter::BRANCH_ATTR_OP_ATTR)
         {
-          /* Size in bytes for bit fields can be incorrect due to
-           * rounding down
-           */
-          Uint32 bitFieldAttrLen= (AttributeDescriptor::getArraySize(TattrDesc1)
-                                   + 7) / 8;
-          attrLen= bitFieldAttrLen;
-        }
+          // Compare ATTR with another ATTR
+          jamDebug();
+          Uint32 attr2Id = Interpreter::getBranchCol_AttrId2(ins2) << 16;
 
-	bool r1_null = ah.isNULL();
-	bool r2_null = argLen == 0;
+          // Attr2 to be read into tmpArea[] after Attr1.
+          const Uint32 firstAttrWords = attrLen+1;
+          DBUG_ASSERT(tmpAreaSz >= 2*firstAttrWords);
+          Int32 TnoDataR = readAttributes(req_struct,
+                                          &attr2Id, 1,
+                                          &tmpArea[firstAttrWords],
+                                          tmpAreaSz-firstAttrWords,
+                                          false);
+          if (unlikely(TnoDataR < 0))
+          {
+            jam();
+            terrorCode = Uint32(-TnoDataR);
+            tupkeyErrorLab(req_struct);
+            return -1;
+          }
+
+          const AttributeHeader ah2(tmpArea[firstAttrWords]);
+          if (!ah2.isNULL())
+          {
+            // Get type
+            attr2Id >>= 16;
+            const Uint32 Tattr2DescrIndex = req_struct->tablePtrP->tabDescriptor +
+              (attr2Id << ZAD_LOG_SIZE);
+            const Uint32 Tattr2Desc1 = tableDescriptor[Tattr2DescrIndex].tabDescr;
+            const Uint32 type2Id = AttributeDescriptor::getType(Tattr2Desc1);
+
+            argLen = AttributeDescriptor::getSizeInBytes(Tattr2Desc1);
+            if (unlikely(type2Id == NDB_TYPE_BIT))
+            {
+              /* Size in bytes for bit fields can be incorrect due to
+               * rounding down
+               */
+              Uint32 bitFieldAttrLen= (AttributeDescriptor::getArraySize(Tattr2Desc1)
+                                       + 7) / 8;
+              argLen= bitFieldAttrLen;
+            }
+            s2 = (char*)&tmpArea[firstAttrWords+1];
+          }
+          step = 0;
+        } //!ah2.isNULL()
+
+	// Evaluate
+        const Uint32 cond = Interpreter::getBinaryCondition(theInstruction);
+	const bool r1_null = ah.isNULL();
+	const bool r2_null = argLen == 0;
 	int res1;
         if (cond <= Interpreter::GE)
         {
@@ -4641,7 +4692,8 @@ Dbtup::shrink_tuple(KeyReqStruct* req_struct, Uint32 sizes[2],
     {
       dst_ptr = shrink_dyn_part(dst, dst_ptr, tabPtrP, tabDesc,
                                 order, mm_dynvar, mm_dynfix, MM);
-      ndbassert((char*)dst_ptr <= ((char*)ptr) + 14140); // NDB_MAX_TUPLE_SIZE + header
+      ndbassert((Uint32*)dst_ptr <=
+                 ((Uint32*)ptr) + MAX_EXPANDED_TUPLE_SIZE_IN_WORDS);
       order += mm_dynfix + mm_dynvar;
     }
     
@@ -4741,7 +4793,9 @@ Dbtup::validate_page(Tablerec* regTabPtr, Var_page* p)
 	  }
 	  if(ptr->m_operation_ptr_i != RNIL)
 	  {
-	    c_operation_pool.getPtr(ptr->m_operation_ptr_i);
+            OperationrecPtr operPtr;
+            operPtr.i = ptr->m_operation_ptr_i;
+	    ndbrequire(c_operation_pool.getValidPtr(operPtr));
 	  }
 	} 
 	else if(!(idx & Var_page::FREE))
@@ -5011,11 +5065,12 @@ Dbtup::nr_read_pk(Uint32 fragPtrI,
   {
     if (bits & Tuple_header::ALLOC)
     {
-      Uint32 opPtrI= req_struct.m_tuple_ptr->m_operation_ptr_i;
-      Operationrec* opPtrP= c_operation_pool.getPtr(opPtrI);
-      ndbassert(!opPtrP->m_copy_tuple_location.isNull());
+      OperationrecPtr opPtr;
+      opPtr.i = req_struct.m_tuple_ptr->m_operation_ptr_i;
+      ndbrequire(c_operation_pool.getValidPtr(opPtr));
+      ndbassert(!opPtr.p->m_copy_tuple_location.isNull());
       req_struct.m_tuple_ptr=
-        get_copy_tuple(&opPtrP->m_copy_tuple_location);
+        get_copy_tuple(&opPtr.p->m_copy_tuple_location);
       copy = true;
     }
     req_struct.check_offset[MM]= tablePtr.p->get_check_offset(MM);
@@ -5130,7 +5185,8 @@ Dbtup::nr_delete(Signal* signal, Uint32 senderData,
      */
     jam();
     ScanOpPtr scanOp;
-    c_scanOpPool.getPtr(scanOp, lcpScan_ptr_i);
+    scanOp.i = lcpScan_ptr_i;
+    ndbrequire(c_scanOpPool.getValidPtr(scanOp));
     if (is_rowid_in_remaining_lcp_set(pagePtr.p,
                                       fragPtr.p,
                                       *key,
@@ -5276,10 +5332,11 @@ Dbtup::nr_delete(Signal* signal, Uint32 senderData,
       {
         goto timeslice;
       }
-      else if (unlikely(res == -1))
-      {
-        return -1;
-      }
+      /**
+       * We are processing node recovery and need to process a disk
+       * data page, if this fails we cannot proceed with node recovery.
+       */
+      ndbrequire(res > 0);
 
       /* Complete work on LGMAN before setting page to dirty */
       CallbackPtr cptr;

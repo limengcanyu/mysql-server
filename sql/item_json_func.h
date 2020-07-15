@@ -1,7 +1,7 @@
 #ifndef ITEM_JSON_FUNC_INCLUDED
 #define ITEM_JSON_FUNC_INCLUDED
 
-/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -24,11 +24,14 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <memory>
 #include <utility>  // std::forward
 
 #include "m_ctype.h"
+#include "my_alloc.h"
+#include "my_dbug.h"
 #include "my_inttypes.h"
 #include "my_time.h"
 #include "mysql/udf_registration_types.h"
@@ -38,6 +41,7 @@
 #include "sql/enum_query_type.h"
 #include "sql/field.h"
 #include "sql/item.h"
+#include "sql/item_cmpfunc.h"
 #include "sql/item_func.h"
 #include "sql/item_strfunc.h"    // Item_str_func
 #include "sql/json_path.h"       // Json_path
@@ -45,13 +49,18 @@
 #include "sql/parse_tree_node_base.h"
 #include "sql_string.h"
 
-class Item_func_like;
+class Json_schema_validator;
+class Json_array;
 class Json_dom;
 class Json_scalar_holder;
 class Json_wrapper;
 class PT_item_list;
 class THD;
 class my_decimal;
+enum Cast_target : unsigned char;
+enum class Json_on_response_type : uint16;
+struct Cast_type;
+struct TABLE;
 
 /** For use by JSON_CONTAINS_PATH() and JSON_SEARCH() */
 enum enum_one_or_all_type {
@@ -149,9 +158,6 @@ class Item_json_func : public Item_func {
 
   // Cache for constant path expressions
   Json_path_cache m_path_cache;
-
-  type_conversion_status save_in_field_inner(Field *field,
-                                             bool no_conversions) override;
 
   /**
     Target column for partial update, if this function is used in an
@@ -310,6 +316,58 @@ class Item_func_json_valid final : public Item_int_func {
 };
 
 /**
+  Represents the JSON function JSON_SCHEMA_VALID( <json schema>, <json doc> )
+*/
+class Item_func_json_schema_valid final : public Item_bool_func {
+ public:
+  Item_func_json_schema_valid(const POS &pos, Item *a, Item *b);
+  ~Item_func_json_schema_valid() override;
+
+  const char *func_name() const override { return "json_schema_valid"; }
+
+  bool val_bool() override;
+
+  longlong val_int() override { return val_bool() ? 1 : 0; }
+
+  bool fix_fields(THD *, Item **) override;
+
+  void cleanup() override;
+
+ private:
+  // Wrap the object in a unique_ptr so that the relevant rapidjson destructors
+  // are called.
+  unique_ptr_destroy_only<const Json_schema_validator>
+      m_cached_schema_validator;
+};
+
+/**
+  Represents the JSON function
+  JSON_SCHEMA_VALIDATION_REPORT( <json schema>, <json doc> )
+*/
+class Item_func_json_schema_validation_report final : public Item_json_func {
+ public:
+  Item_func_json_schema_validation_report(THD *thd, const POS &pos,
+                                          PT_item_list *a);
+  ~Item_func_json_schema_validation_report() override;
+
+  const char *func_name() const override {
+    return "json_schema_validation_report";
+  }
+
+  bool val_json(Json_wrapper *wr) override;
+
+  bool fix_fields(THD *, Item **) override;
+
+  void cleanup() override;
+
+ private:
+  // Wrap the object in a unique_ptr so that the relevant rapidjson destructors
+  // are called.
+  unique_ptr_destroy_only<const Json_schema_validator>
+      m_cached_schema_validator;
+};
+
+/**
   Represents the JSON function JSON_CONTAINS()
 */
 class Item_func_json_contains final : public Item_int_func {
@@ -321,6 +379,9 @@ class Item_func_json_contains final : public Item_int_func {
       : Item_int_func(pos, a), m_path_cache(thd, arg_count) {}
 
   const char *func_name() const override { return "json_contains"; }
+  enum Functype functype() const override { return JSON_CONTAINS; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_KEY; }
+  bool gc_subst_analyzer(uchar **) override { return true; }
 
   bool is_bool_func() const override { return true; }
 
@@ -333,6 +394,10 @@ class Item_func_json_contains final : public Item_int_func {
 
   /** Cleanup between executions of the statement */
   void cleanup() override;
+
+  enum_const_item_cache can_cache_json_arg(Item *arg) override {
+    return (arg == args[0] || arg == args[1]) ? CACHE_JSON_VALUE : CACHE_NONE;
+  }
 };
 
 /**
@@ -364,6 +429,10 @@ class Item_func_json_contains_path final : public Item_int_func {
 
   /** Cleanup between executions of the statement */
   void cleanup() override;
+
+  enum_const_item_cache can_cache_json_arg(Item *arg) override {
+    return (arg == args[0]) ? CACHE_JSON_VALUE : CACHE_NONE;
+  }
 };
 
 /**
@@ -385,9 +454,9 @@ class Item_func_json_type : public Item_str_func {
 /**
   Represents a "CAST( <value> AS JSON )" coercion.
 */
-class Item_json_typecast final : public Item_json_func {
+class Item_typecast_json final : public Item_json_func {
  public:
-  Item_json_typecast(THD *thd, const POS &pos, Item *a)
+  Item_typecast_json(THD *thd, const POS &pos, Item *a)
       : Item_json_func(thd, pos, a) {}
 
   void print(const THD *thd, String *str,
@@ -773,11 +842,202 @@ class Item_func_json_storage_free final : public Item_int_func {
 };
 
 /**
+  Class that represents CAST(<expr> AS <type> ARRAY)
+*/
+
+class Item_func_array_cast final : public Item_func {
+  /// Type to cast to
+  Cast_target cast_type;
+  /**
+    Whether use of CAST(.. AS .. ARRAY) is allowed
+
+    Currently use of CAST(.. AS .. ARRAY) is limited only to CREATE
+    TABLE/INDEX. In all other cases an error is thrown. This flag is set to
+    true only for allowed cases to ensure allowed function usage.
+  */
+  bool m_is_allowed{false};
+
+  /**
+    An array used by #save_in_field_inner() to store the result of an array cast
+    operation. It is cached in the Item in order to avoid the need for
+    reallocation on each row.
+  */
+  unique_ptr_destroy_only<Json_array> m_result_array;
+
+ public:
+  Item_func_array_cast(const POS &pos, Item *a, Cast_target type, uint len_arg,
+                       uint dec_arg, const CHARSET_INFO *cs_arg);
+  ~Item_func_array_cast() override;
+  const char *func_name() const override { return "cast_as_array"; }
+  enum Functype functype() const override { return TYPECAST_FUNC; }
+  bool returns_array() const override { return true; }
+  bool val_json(Json_wrapper *wr) override;
+  void print(const THD *thd, String *str,
+             enum_query_type query_type) const override;
+  enum Item_result result_type() const override;
+  bool resolve_type(THD *) override;
+  Field *tmp_table_field(TABLE *table) override;
+  bool fix_fields(THD *thd, Item **ref) override;
+  void allow_array_cast() override { m_is_allowed = true; }
+  type_conversion_status save_in_field_inner(Field *field,
+                                             bool no_conversions) override;
+  // Regular val_x() funcs shouldn't be called
+  /* purecov: begin inspected */
+  longlong val_int() override {
+    DBUG_ASSERT(false);
+    return 0;
+  }
+  String *val_str(String *) override {
+    DBUG_ASSERT(false);
+    return nullptr;
+  }
+  my_decimal *val_decimal(my_decimal *) override {
+    DBUG_ASSERT(false);
+    return nullptr;
+  }
+  double val_real() override {
+    DBUG_ASSERT(false);
+    return 0;
+  }
+  bool get_date(MYSQL_TIME *, my_time_flags_t) override {
+    DBUG_ASSERT(false);
+    return true;
+  }
+  bool get_time(MYSQL_TIME *) override {
+    DBUG_ASSERT(false);
+    return true;
+  }
+  /* purecov: end */
+};
+
+class Item_func_json_overlaps : public Item_bool_func {
+ public:
+  Item_func_json_overlaps(const POS &pos, Item *a, Item *b)
+      : Item_bool_func(pos, a, b) {}
+  const char *func_name() const override { return "json_overlaps"; }
+  enum Functype functype() const override { return JSON_OVERLAPS; }
+  bool gc_subst_analyzer(uchar **) override { return true; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_KEY; }
+  longlong val_int() override;
+  Item *key_item() const override;
+  enum_const_item_cache can_cache_json_arg(Item *arg) override {
+    return (arg == args[0] || arg == args[1]) ? CACHE_JSON_VALUE : CACHE_NONE;
+  }
+};
+
+class Item_func_member_of : public Item_bool_func {
+ public:
+  Item_func_member_of(const POS &pos, Item *a, Item *b)
+      : Item_bool_func(pos, a, b) {}
+  const char *func_name() const override { return "member of"; }
+  enum Functype functype() const override { return MEMBER_OF_FUNC; }
+  bool gc_subst_analyzer(uchar **) override { return true; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_KEY; }
+  longlong val_int() override;
+  void print(const THD *thd, String *str,
+             enum_query_type query_type) const override;
+  Item *key_item() const override { return args[1]; }
+  enum_const_item_cache can_cache_json_arg(Item *arg) override {
+    return (arg == args[1]) ? CACHE_JSON_VALUE
+                            : ((arg == args[0]) ? CACHE_JSON_ATOM : CACHE_NONE);
+  }
+};
+
+/**
+  Class implementing the JSON_VALUE function.
+
+  Functionality-wise it's a combination of CAST, JSON_UNQUOTE and JSON_EXTRACT,
+  but with additional functionality for flexible handling of empty values and
+  conversion errors.
+*/
+class Item_func_json_value final : public Item_func {
+ public:
+  Item_func_json_value(const POS &pos, Item *arg, Item *path,
+                       const Cast_type &cast_type, unsigned length,
+                       unsigned precision, Json_on_response_type on_empty_type,
+                       Item *on_empty_default,
+                       Json_on_response_type on_error_type,
+                       Item *on_error_default);
+  ~Item_func_json_value() override;
+  const char *func_name() const override { return "json_value"; }
+  enum Item_result result_type() const override;
+  bool resolve_type(THD *) override;
+  bool fix_fields(THD *thd, Item **ref) override;
+  void print(const THD *thd, String *str,
+             enum_query_type query_type) const override;
+  bool eq(const Item *item, bool binary_cmp) const override;
+  bool val_json(Json_wrapper *wr) override;
+  String *val_str(String *buffer) override;
+  double val_real() override;
+  longlong val_int() override;
+  my_decimal *val_decimal(my_decimal *value) override;
+  bool get_date(MYSQL_TIME *ltime, my_time_flags_t flags) override;
+  bool get_time(MYSQL_TIME *ltime) override;
+
+ private:
+  /// Represents a default value given in JSON_VALUE's DEFAULT xxx ON EMPTY or
+  /// DEFAULT xxx ON ERROR clause.
+  struct Default_value;
+
+  /// Parsed path.
+  Json_path m_path_json;
+  /// Type of the ON EMPTY clause.
+  Json_on_response_type m_on_empty;
+  /// Type of the ON ERROR clause.
+  Json_on_response_type m_on_error;
+  /// The default value for ON EMPTY (if not ERROR or NULL ON EMPTY).
+  unique_ptr_destroy_only<Default_value> m_default_empty;
+  /// The default value for ON EMPTY (if not ERROR or NULL ON EMPTY).
+  unique_ptr_destroy_only<Default_value> m_default_error;
+  /// The target data type.
+  Cast_target m_cast_target;
+
+  /**
+    Creates a Json_value_default object representing the default value given in
+    a DEFAULT xxx ON EMPTY clause or a DEFAULT xxx ON ERROR clause.
+
+    @param thd       the current session
+    @param item      the Item that represents the default value expression
+    @return a pointer to the created object on success, nullptr on error
+  */
+  unique_ptr_destroy_only<Default_value> create_json_value_default(THD *thd,
+                                                                   Item *item);
+
+  /**
+    Extracts the JSON value at the given path.
+
+    @param[out] json the extracted JSON value, if the path matched exactly
+      one value; empty otherwise
+    @param[out] return_default the default value to return if a
+      DEFAULT ... ON EMPTY or DEFAULT ... ON ERROR clause was invoked,
+      or nullptr if no DEFAULT clause was invoked
+    @return true if an error was raised, false otherwise
+  */
+  bool extract_json_value(Json_wrapper *json,
+                          const Default_value **return_default);
+
+  /// Implements val_int() for RETURNING SIGNED and RETURNING UNSIGNED.
+  int64_t extract_integer_value();
+  /// Implements get_date() for RETURNING DATE.
+  bool extract_date_value(MYSQL_TIME *ltime);
+  /// Implements get_time() for RETURNING TIME.
+  bool extract_time_value(MYSQL_TIME *ltime);
+  /// Implements get_date() for RETURNING DATETIME.
+  bool extract_datetime_value(MYSQL_TIME *ltime);
+  /// Implements val_decimal() for RETURNING DECIMAL.
+  my_decimal *extract_decimal_value(my_decimal *value);
+  /// Implements val_str() for RETURNING CHAR and RETURNING BINARY.
+  String *extract_string_value(String *buffer);
+  /// Implements val_real() for RETURNING FLOAT/REAL/DOUBLE.
+  double extract_real_value();
+};
+
+/**
   Turn a GEOMETRY value into a JSON value per the GeoJSON specification
   revison 1.0. This method is implemented in item_geofunc.cc.
 
   @param[in,out] wr The wrapper to be stuffed with the JSON value.
-  @param[in]     geometry_arg The source GEOMETRY value.
+  @param[in]     swkb The source GEOMETRY value.
   @param[in]     calling_function Name of user-invoked function (for errors)
   @param[in]     max_decimal_digits See the user documentation for ST_AsGeoJSON.
   @param[in]     add_bounding_box See the user documentation for ST_AsGeoJSON.
@@ -788,7 +1048,7 @@ class Item_func_json_storage_free final : public Item_int_func {
 
   @return false if the conversion succeeds, true otherwise
 */
-bool geometry_to_json(Json_wrapper *wr, Item *geometry_arg,
+bool geometry_to_json(Json_wrapper *wr, String *swkb,
                       const char *calling_function, int max_decimal_digits,
                       bool add_bounding_box, bool add_short_crs_urn,
                       bool add_long_crs_urn, uint32 *geometry_srid);
@@ -834,4 +1094,9 @@ using Json_dom_ptr = std::unique_ptr<Json_dom>;
 bool parse_json(const String &res, uint arg_idx, const char *func_name,
                 Json_dom_ptr *dom, bool require_str_or_json, bool *parse_error);
 
+typedef Prealloced_array<size_t, 16> Sorted_index_array;
+bool sort_and_remove_dups(const Json_wrapper &orig, Sorted_index_array *v);
+
+bool save_json_to_field(THD *thd, Field *field, const Json_wrapper *w,
+                        bool no_error);
 #endif /* ITEM_JSON_FUNC_INCLUDED */

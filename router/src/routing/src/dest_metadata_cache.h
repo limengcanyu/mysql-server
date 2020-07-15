@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -26,14 +26,18 @@
 #define ROUTING_DEST_METADATA_CACHE_INCLUDED
 
 #include "destination.h"
+
+#include <system_error>
+#include <thread>
+
+#include "mysql/harness/stdx/expected.h"
 #include "mysql_routing.h"
 #include "mysqlrouter/metadata_cache.h"
 #include "mysqlrouter/uri.h"
 
-#include <thread>
-
 #include "mysql/harness/logging/logging.h"
 #include "mysqlrouter/datatypes.h"
+#include "socket_operations.h"
 #include "tcp_address.h"
 
 class DestMetadataCacheGroup final
@@ -66,14 +70,16 @@ class DestMetadataCacheGroup final
   /** @brief Move assignment */
   DestMetadataCacheGroup &operator=(DestMetadataCacheGroup &&) = delete;
 
-  int get_server_socket(
-      std::chrono::milliseconds connect_timeout, int *error,
+  stdx::expected<mysql_harness::socket_t, std::error_code> get_server_socket(
+      std::chrono::milliseconds connect_timeout,
       mysql_harness::TCPAddress *address = nullptr) noexcept override;
 
   ~DestMetadataCacheGroup() override;
 
   void add(const std::string &, uint16_t) override {}
   void add(const mysql_harness::TCPAddress) override {}
+
+  AddrVector get_destinations() const override;
 
   /** @brief Returns whether there are destination servers
    *
@@ -141,15 +147,21 @@ class DestMetadataCacheGroup final
    *
    * This method gets the destinations using Metadata Cache information. It uses
    * the `metadata_cache::lookup_replicaset()` function to get a list of current
-   * managed servers.
+   * managed servers. Bool in the returned pair indicates if (in case of the
+   * round-robin-with-fallback routing strategy) the returned nodes are the
+   * primaries after the fallback (true) or secondaries (false).
    *
    */
-  AvailableDestinations get_available(
+  std::pair<AvailableDestinations, bool> get_available(
       const metadata_cache::LookupResult &managed_servers,
-      bool for_new_connections = true);
+      bool for_new_connections = true) const;
+
+  AvailableDestinations get_available_primaries(
+      const metadata_cache::LookupResult &managed_servers) const;
 
   size_t get_next_server(
-      const DestMetadataCacheGroup::AvailableDestinations &available);
+      const DestMetadataCacheGroup::AvailableDestinations &available,
+      size_t first_available = 0);
 
   routing::RoutingStrategy routing_strategy_;
 
@@ -169,7 +181,16 @@ class DestMetadataCacheGroup final
   void subscribe_for_metadata_cache_changes();
 
   void notify(const metadata_cache::LookupResult &instances,
-              const bool md_servers_reachable) noexcept override;
+              const bool md_servers_reachable,
+              const unsigned /*view_id*/) noexcept override;
+
+  stdx::expected<mysql_harness::socket_t, std::error_code> get_server_socket_gr(
+      std::chrono::milliseconds connect_timeout,
+      mysql_harness::TCPAddress *address = nullptr) noexcept;
+
+  stdx::expected<mysql_harness::socket_t, std::error_code> get_server_socket_rs(
+      std::chrono::milliseconds connect_timeout,
+      mysql_harness::TCPAddress *address = nullptr) noexcept;
 };
 
 #endif  // ROUTING_DEST_METADATA_CACHE_INCLUDED

@@ -1,21 +1,22 @@
-//>>built
-define("dojox/fx/scroll", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base/fx", "dojox/fx/_base","dojox/fx/_core","dojo/dom-geometry","dojo/_base/sniff"],
-	function (kernel, lang, baseFx, fxExt, Line, domGeom, has){
+define("dojox/fx/scroll", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base/fx", "dojo/_base/window", "dojox/fx/_base","dojox/fx/_core","dojo/dom-geometry","dojo/_base/sniff"],
+	function (kernel, lang, baseFx, win, fxExt, Line, domGeom, has){
 	kernel.experimental("dojox.fx.scroll");
 	var fx = lang.getObject("dojox.fx",true);
 	fxExt.smoothScroll = function(/* Object */args){
-		// summary: Returns an animation that will smooth-scroll to a node
-		// description: This implementation support either horizontal or vertical scroll, as well as
-		// both. In addition, element in iframe can be scrolled to correctly.
-		// offset: {x: int, y: int} this will be added to the target position
-		// duration: Duration of the animation in milliseconds.
-		// win: a node or window object to scroll
+		// summary:
+		//		Returns an animation that will smooth-scroll to a node
+		// description:
+		//		This implementation support either horizontal or vertical scroll, as well as
+		//		both. In addition, element in iframe can be scrolled to correctly.
+		// args:
+		//		- offset: {x: int, y: int} this will be added to the target position
+		//		- duration: Duration of the animation in milliseconds.
+		//		- win: a node or window object to scroll
 	
 		if(!args.target){ args.target = domGeom.position(args.node); }
 	
-		var isWindow = lang[(has("ie") ? "isObject" : "isFunction")](args["win"].scrollTo),
-			delta = { x: args.target.x, y: args.target.y }
-		;
+		var isWindow = args["win"] === win.global,
+			delta = { x: args.target.x, y: args.target.y };
 		if(!isWindow){
 			var winPos = domGeom.position(args.win);
 			delta.x -= winPos.x;

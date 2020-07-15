@@ -60,11 +60,8 @@
   Helper: Tell tracker (if any) that transaction ended.
 */
 void trans_track_end_trx(THD *thd) {
-  if (thd->variables.session_track_transaction_info > TX_TRACK_NONE) {
-    ((Transaction_state_tracker *)thd->session_tracker.get_tracker(
-         TRANSACTION_INFO_TRACKER))
-        ->end_trx(thd);
-  }
+  TX_TRACKER_GET(tst);
+  tst->end_trx(thd);
 }
 
 /**
@@ -73,10 +70,7 @@ void trans_track_end_trx(THD *thd) {
 */
 void trans_reset_one_shot_chistics(THD *thd) {
   if (thd->variables.session_track_transaction_info > TX_TRACK_NONE) {
-    Transaction_state_tracker *tst =
-        (Transaction_state_tracker *)thd->session_tracker.get_tracker(
-            TRANSACTION_INFO_TRACKER);
-
+    TX_TRACKER_GET(tst);
     tst->set_read_flags(thd, TX_READ_INHERIT);
     tst->set_isol_level(thd, TX_ISOL_INHERIT);
   }
@@ -96,7 +90,7 @@ void trans_reset_one_shot_chistics(THD *thd) {
 */
 
 bool trans_check_state(THD *thd) {
-  DBUG_ENTER("trans_check");
+  DBUG_TRACE;
 
   /*
     Always commit statement transaction before manipulating with
@@ -106,12 +100,12 @@ bool trans_check_state(THD *thd) {
 
   if (unlikely(thd->in_sub_stmt)) {
     my_error(ER_COMMIT_NOT_ALLOWED_IN_SF_OR_TRG, MYF(0));
-    DBUG_RETURN(true);
+    return true;
   }
 
-  if (thd->get_transaction()->xid_state()->check_in_xa(true)) DBUG_RETURN(true);
+  if (thd->get_transaction()->xid_state()->check_in_xa(true)) return true;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -129,15 +123,11 @@ bool trans_check_state(THD *thd) {
 
 bool trans_begin(THD *thd, uint flags) {
   bool res = false;
-  Transaction_state_tracker *tst = NULL;
+  DBUG_TRACE;
 
-  DBUG_ENTER("trans_begin");
+  if (trans_check_state(thd)) return true;
 
-  if (trans_check_state(thd)) DBUG_RETURN(true);
-
-  if (thd->variables.session_track_transaction_info > TX_TRACK_NONE)
-    tst = (Transaction_state_tracker *)thd->session_tracker.get_tracker(
-        TRANSACTION_INFO_TRACKER);
+  TX_TRACKER_GET(tst);
 
   thd->locked_tables_list.unlock_locked_tables(thd);
 
@@ -155,7 +145,7 @@ bool trans_begin(THD *thd, uint flags) {
   thd->variables.option_bits &= ~OPTION_BEGIN;
   thd->get_transaction()->reset_unsafe_rollback_flags(Transaction_ctx::SESSION);
 
-  if (res) DBUG_RETURN(true);
+  if (res) return true;
 
   /*
     Release transactional metadata locks only after the
@@ -176,7 +166,7 @@ bool trans_begin(THD *thd, uint flags) {
       Implicitly starting a RW transaction is allowed for backward
       compatibility.
     */
-    if (check_readonly(thd, true)) DBUG_RETURN(true);
+    if (check_readonly(thd, true)) return true;
     thd->tx_read_only = false;
     /*
       This flags that tx_read_only was set explicitly, rather than
@@ -203,26 +193,26 @@ bool trans_begin(THD *thd, uint flags) {
     res = ha_start_consistent_snapshot(thd);
   }
 
-    /*
-      Register transaction start in performance schema if not done already.
-      We handle explicitly started transactions here, implicitly started
-      transactions (and single-statement transactions in autocommit=1 mode)
-      are handled in trans_register_ha().
-      We can't handle explicit transactions in the same way as implicit
-      because we want to correctly attribute statements which follow
-      BEGIN but do not touch any transactional tables.
-    */
+  /*
+    Register transaction start in performance schema if not done already.
+    We handle explicitly started transactions here, implicitly started
+    transactions (and single-statement transactions in autocommit=1 mode)
+    are handled in trans_register_ha().
+    We can't handle explicit transactions in the same way as implicit
+    because we want to correctly attribute statements which follow
+    BEGIN but do not touch any transactional tables.
+  */
 #ifdef HAVE_PSI_TRANSACTION_INTERFACE
-  if (thd->m_transaction_psi == NULL) {
+  if (thd->m_transaction_psi == nullptr) {
     thd->m_transaction_psi =
-        MYSQL_START_TRANSACTION(&thd->m_transaction_state, NULL, NULL,
+        MYSQL_START_TRANSACTION(&thd->m_transaction_state, nullptr, nullptr,
                                 thd->tx_isolation, thd->tx_read_only, false);
     DEBUG_SYNC(thd, "after_set_transaction_psi_before_set_transaction_gtid");
     gtid_set_performance_schema_values(thd);
   }
 #endif
 
-  DBUG_RETURN(res);
+  return res;
 }
 
 /**
@@ -241,9 +231,14 @@ bool trans_begin(THD *thd, uint flags) {
 
 bool trans_commit(THD *thd, bool ignore_global_read_lock) {
   int res;
-  DBUG_ENTER("trans_commit");
+  DBUG_TRACE;
 
-  if (trans_check_state(thd)) DBUG_RETURN(true);
+  DBUG_EXECUTE_IF(
+      "crash_on_transactional_ddl_commit",
+      if (thd->m_transactional_ddl.inited() &&
+          thd->lex->sql_command == SQLCOM_COMMIT) { DBUG_SUICIDE(); });
+
+  if (trans_check_state(thd)) return true;
 
   thd->server_status &=
       ~(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY);
@@ -272,7 +267,7 @@ bool trans_commit(THD *thd, bool ignore_global_read_lock) {
   thd->lex->start_transaction_opt = 0;
 
   /* The transaction should be marked as complete in P_S. */
-  DBUG_ASSERT(thd->m_transaction_psi == NULL);
+  DBUG_ASSERT(thd->m_transaction_psi == nullptr);
 
   thd->tx_priority = 0;
 
@@ -298,7 +293,9 @@ bool trans_commit(THD *thd, bool ignore_global_read_lock) {
 
   thd->locked_tables_list.adjust_renamed_tablespace_mdls(&thd->mdl_context);
 
-  DBUG_RETURN(res);
+  thd->m_transactional_ddl.post_ddl();
+
+  return res;
 }
 
 /**
@@ -320,7 +317,7 @@ bool trans_commit(THD *thd, bool ignore_global_read_lock) {
 
 bool trans_commit_implicit(THD *thd, bool ignore_global_read_lock) {
   bool res = false;
-  DBUG_ENTER("trans_commit_implicit");
+  DBUG_TRACE;
 
   /*
     Ensure that trans_check_state() was called before trans_commit_implicit()
@@ -351,7 +348,7 @@ bool trans_commit_implicit(THD *thd, bool ignore_global_read_lock) {
   thd->get_transaction()->reset_unsafe_rollback_flags(Transaction_ctx::SESSION);
 
   /* The transaction should be marked as complete in P_S. */
-  DBUG_ASSERT(thd->m_transaction_psi == NULL);
+  DBUG_ASSERT(thd->m_transaction_psi == nullptr);
 
   /*
     Upon implicit commit, reset the current transaction
@@ -382,7 +379,7 @@ bool trans_commit_implicit(THD *thd, bool ignore_global_read_lock) {
   }
 
   thd->locked_tables_list.adjust_renamed_tablespace_mdls(&thd->mdl_context);
-  DBUG_RETURN(res);
+  return res;
 }
 
 /**
@@ -396,9 +393,11 @@ bool trans_commit_implicit(THD *thd, bool ignore_global_read_lock) {
 
 bool trans_rollback(THD *thd) {
   int res;
-  DBUG_ENTER("trans_rollback");
+  DBUG_TRACE;
 
-  if (trans_check_state(thd)) DBUG_RETURN(true);
+  if (trans_check_state(thd)) return true;
+
+  thd->m_transactional_ddl.rollback();
 
   thd->server_status &=
       ~(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY);
@@ -409,7 +408,7 @@ bool trans_rollback(THD *thd) {
   thd->lex->start_transaction_opt = 0;
 
   /* The transaction should be marked as complete in P_S. */
-  DBUG_ASSERT(thd->m_transaction_psi == NULL);
+  DBUG_ASSERT(thd->m_transaction_psi == nullptr);
 
   thd->tx_priority = 0;
 
@@ -427,7 +426,9 @@ bool trans_rollback(THD *thd) {
 
   thd->locked_tables_list.discard_renamed_tablespace_mdls();
 
-  DBUG_RETURN(res);
+  thd->m_transactional_ddl.post_ddl();
+
+  return res;
 }
 
 /**
@@ -447,7 +448,7 @@ bool trans_rollback(THD *thd) {
 
 bool trans_rollback_implicit(THD *thd) {
   int res;
-  DBUG_ENTER("trans_rollback_implict");
+  DBUG_TRACE;
 
   /*
     Always commit/rollback statement transaction before manipulating
@@ -468,7 +469,7 @@ bool trans_rollback_implicit(THD *thd) {
   /* Rollback should clear transaction_rollback_request flag. */
   DBUG_ASSERT(!thd->transaction_rollback_request);
   /* The transaction should be marked as complete in P_S. */
-  DBUG_ASSERT(thd->m_transaction_psi == NULL);
+  DBUG_ASSERT(thd->m_transaction_psi == nullptr);
 
   trans_track_end_trx(thd);
 
@@ -484,7 +485,7 @@ bool trans_rollback_implicit(THD *thd) {
 
   thd->locked_tables_list.discard_renamed_tablespace_mdls();
 
-  DBUG_RETURN(res);
+  return res;
 }
 
 /**
@@ -509,7 +510,7 @@ bool trans_rollback_implicit(THD *thd) {
 */
 
 bool trans_commit_stmt(THD *thd, bool ignore_global_read_lock) {
-  DBUG_ENTER("trans_commit_stmt");
+  DBUG_TRACE;
   int res = false;
   /*
     We currently don't invoke commit/rollback at end of
@@ -539,11 +540,11 @@ bool trans_commit_stmt(THD *thd, bool ignore_global_read_lock) {
       LogErr(WARNING_LEVEL, ER_TRX_GTID_COLLECT_REJECT);
   /* In autocommit=1 mode the transaction should be marked as complete in P_S */
   DBUG_ASSERT(thd->in_active_multi_stmt_transaction() ||
-              thd->m_transaction_psi == NULL);
+              thd->m_transaction_psi == nullptr);
 
   thd->get_transaction()->reset(Transaction_ctx::STMT);
 
-  DBUG_RETURN(res);
+  return res;
 }
 
 /**
@@ -555,7 +556,7 @@ bool trans_commit_stmt(THD *thd, bool ignore_global_read_lock) {
   @retval true   Failure
 */
 bool trans_rollback_stmt(THD *thd) {
-  DBUG_ENTER("trans_rollback_stmt");
+  DBUG_TRACE;
 
   /*
     We currently don't invoke commit/rollback at end of
@@ -580,7 +581,7 @@ bool trans_rollback_stmt(THD *thd) {
   } else if (tc_log)
     tc_log->rollback(thd, false);
 
-  if (!thd->owned_gtid.is_empty() && !thd->in_active_multi_stmt_transaction()) {
+  if (!thd->owned_gtid_is_empty() && !thd->in_active_multi_stmt_transaction()) {
     /*
       To a failed single statement transaction on auto-commit mode,
       we roll back its owned gtid if it does not modify
@@ -612,13 +613,13 @@ bool trans_rollback_stmt(THD *thd) {
 
   /* In autocommit=1 mode the transaction should be marked as complete in P_S */
   DBUG_ASSERT(thd->in_active_multi_stmt_transaction() ||
-              thd->m_transaction_psi == NULL ||
+              thd->m_transaction_psi == nullptr ||
               /* Todo: BUG#20488921 is in the way. */
               DBUG_EVALUATE_IF("simulate_xa_commit_log_failure", true, false));
 
   thd->get_transaction()->reset(Transaction_ctx::STMT);
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -634,7 +635,7 @@ bool trans_rollback_stmt(THD *thd) {
   @retval True  - Failure
 */
 bool trans_commit_attachable(THD *thd) {
-  DBUG_ENTER("trans_commit_attachable");
+  DBUG_TRACE;
   int res = 0;
 
   /* This function only handles attachable transactions. */
@@ -654,11 +655,11 @@ bool trans_commit_attachable(THD *thd) {
     res = ha_commit_attachable(thd);
   }
 
-  DBUG_ASSERT(thd->m_transaction_psi == NULL);
+  DBUG_ASSERT(thd->m_transaction_psi == nullptr);
 
   thd->get_transaction()->reset(Transaction_ctx::STMT);
 
-  DBUG_RETURN(res);
+  return res;
 }
 
 /* Find a named savepoint in the current transaction. */
@@ -687,14 +688,14 @@ static SAVEPOINT **find_savepoint(THD *thd, LEX_STRING name) {
 
 bool trans_savepoint(THD *thd, LEX_STRING name) {
   SAVEPOINT **sv, *newsv;
-  DBUG_ENTER("trans_savepoint");
+  DBUG_TRACE;
 
   if (!(thd->in_multi_stmt_transaction_mode() || thd->in_sub_stmt) ||
       !opt_using_transactions)
-    DBUG_RETURN(false);
+    return false;
 
   if (thd->get_transaction()->xid_state()->check_has_uncommitted_xa())
-    DBUG_RETURN(true);
+    return true;
 
   sv = find_savepoint(thd, name);
 
@@ -703,13 +704,13 @@ bool trans_savepoint(THD *thd, LEX_STRING name) {
     newsv = *sv;
     if (ha_release_savepoint(thd, *sv)) {
       DBUG_ASSERT(thd->is_error() || thd->is_killed());
-      DBUG_RETURN(true);
+      return true;
     }
     *sv = (*sv)->prev;
   } else if ((newsv = (SAVEPOINT *)thd->get_transaction()->allocate_memory(
-                  savepoint_alloc_size)) == NULL) {
+                  savepoint_alloc_size)) == nullptr) {
     my_error(ER_OUT_OF_RESOURCES, MYF(0));
-    DBUG_RETURN(true);
+    return true;
   }
 
   newsv->name = thd->get_transaction()->strmake(name.str, name.length);
@@ -720,7 +721,7 @@ bool trans_savepoint(THD *thd, LEX_STRING name) {
     we'll lose a little bit of memory in transaction mem_root, but it'll
     be free'd when transaction ends anyway
   */
-  if (ha_savepoint(thd, newsv)) DBUG_RETURN(true);
+  if (ha_savepoint(thd, newsv)) return true;
 
   newsv->prev = thd->get_transaction()->m_savepoints;
   thd->get_transaction()->m_savepoints = newsv;
@@ -741,7 +742,7 @@ bool trans_savepoint(THD *thd, LEX_STRING name) {
         name.str);
   }
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -764,15 +765,15 @@ bool trans_savepoint(THD *thd, LEX_STRING name) {
 bool trans_rollback_to_savepoint(THD *thd, LEX_STRING name) {
   int res = false;
   SAVEPOINT *sv = *find_savepoint(thd, name);
-  DBUG_ENTER("trans_rollback_to_savepoint");
+  DBUG_TRACE;
 
-  if (sv == NULL) {
+  if (sv == nullptr) {
     my_error(ER_SP_DOES_NOT_EXIST, MYF(0), "SAVEPOINT", name.str);
-    DBUG_RETURN(true);
+    return true;
   }
 
   if (thd->get_transaction()->xid_state()->check_has_uncommitted_xa())
-    DBUG_RETURN(true);
+    return true;
 
   if (ha_rollback_to_savepoint(thd, sv))
     res = true;
@@ -812,7 +813,7 @@ bool trans_rollback_to_savepoint(THD *thd, LEX_STRING name) {
         ->rollback_to_savepoint(name.str);
   }
 
-  DBUG_RETURN(res);
+  return res;
 }
 
 /**
@@ -832,15 +833,15 @@ bool trans_rollback_to_savepoint(THD *thd, LEX_STRING name) {
 bool trans_release_savepoint(THD *thd, LEX_STRING name) {
   int res = false;
   SAVEPOINT *sv = *find_savepoint(thd, name);
-  DBUG_ENTER("trans_release_savepoint");
+  DBUG_TRACE;
 
-  if (sv == NULL) {
+  if (sv == nullptr) {
     my_error(ER_SP_DOES_NOT_EXIST, MYF(0), "SAVEPOINT", name.str);
-    DBUG_RETURN(true);
+    return true;
   }
 
   if (thd->get_transaction()->xid_state()->check_has_uncommitted_xa())
-    DBUG_RETURN(true);
+    return true;
 
   if (ha_release_savepoint(thd, sv)) res = true;
 
@@ -851,5 +852,5 @@ bool trans_release_savepoint(THD *thd, LEX_STRING name) {
         name.str);
   }
 
-  DBUG_RETURN(res);
+  return res;
 }

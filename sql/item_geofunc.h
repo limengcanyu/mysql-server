@@ -1,7 +1,7 @@
 #ifndef ITEM_GEOFUNC_INCLUDED
 #define ITEM_GEOFUNC_INCLUDED
 
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -77,7 +77,7 @@ class BG_result_buf_mgr {
   typedef Prealloced_array<void *, 64> Prealloced_buffers;
 
  public:
-  BG_result_buf_mgr() : bg_result_buf(NULL), bg_results(PSI_INSTRUMENT_ME) {}
+  BG_result_buf_mgr() : bg_result_buf(nullptr), bg_results(PSI_INSTRUMENT_ME) {}
 
   ~BG_result_buf_mgr() {
     free_intermediate_result_buffers();
@@ -87,7 +87,7 @@ class BG_result_buf_mgr {
   void add_buffer(void *buf) { bg_results.insert_unique(buf); }
 
   void forget_buffer(void *buf) {
-    if (bg_result_buf == buf) bg_result_buf = NULL;
+    if (bg_result_buf == buf) bg_result_buf = nullptr;
     bg_results.erase_unique(buf);
   }
 
@@ -103,7 +103,7 @@ class BG_result_buf_mgr {
   // Free the final result buffer, should be called after the result used.
   void free_result_buffer() {
     gis_wkb_raw_free(bg_result_buf);
-    bg_result_buf = NULL;
+    bg_result_buf = nullptr;
   }
 
   void set_result_buffer(void *buf) {
@@ -166,6 +166,14 @@ class BG_geometry_collection {
   size_t num_isolated() const { return m_num_isolated; }
 
   Gis_geometry_collection *as_geometry_collection(String *geodata) const;
+  /**
+    Merge all components as appropriate so that the object contains only
+    components that don't overlap.
+
+    @tparam Coordsys Coordinate system type, specified using those defined in
+            boost::geometry::cs.
+    @param[out] pnull_value takes back null_value set during the operation.
+   */
   template <typename Coordsys>
   void merge_components(bool *pnull_value);
 
@@ -1001,7 +1009,7 @@ class Item_func_spatial_relation : public Item_bool_func2 {
     @param[out] result Result of the relational operation.
     @param[out] null True if the function should return NULL, false otherwise.
 
-    @retval true An error has occured and has been reported with my_error.
+    @retval true An error has occurred and has been reported with my_error.
     @retval false Success.
   */
   virtual bool eval(const dd::Spatial_reference_system *srs,
@@ -1381,7 +1389,7 @@ class Item_func_isempty : public Item_bool_func {
  public:
   Item_func_isempty(const POS &pos, Item *a) : Item_bool_func(pos, a) {}
   longlong val_int() override;
-  optimize_type select_optimize() const override { return OPTIMIZE_NONE; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_NONE; }
   const char *func_name() const override { return "st_isempty"; }
   bool resolve_type(THD *) override {
     maybe_null = true;
@@ -1400,7 +1408,7 @@ class Item_func_isclosed : public Item_bool_func {
  public:
   Item_func_isclosed(const POS &pos, Item *a) : Item_bool_func(pos, a) {}
   longlong val_int() override;
-  optimize_type select_optimize() const override { return OPTIMIZE_NONE; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_NONE; }
   const char *func_name() const override { return "st_isclosed"; }
   bool resolve_type(THD *) override {
     maybe_null = true;
@@ -1412,7 +1420,7 @@ class Item_func_isvalid : public Item_bool_func {
  public:
   Item_func_isvalid(const POS &pos, Item *a) : Item_bool_func(pos, a) {}
   longlong val_int() override;
-  optimize_type select_optimize() const override { return OPTIMIZE_NONE; }
+  optimize_type select_optimize(const THD *) override { return OPTIMIZE_NONE; }
   const char *func_name() const override { return "st_isvalid"; }
 };
 

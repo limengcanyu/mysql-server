@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -60,8 +60,8 @@ int completion_hash_init(HashTable *ht, uint nSize) {
   return SUCCESS;
 }
 
-int completion_hash_update(HashTable *ht, char *arKey, uint nKeyLength,
-                           char *str) {
+int completion_hash_update(HashTable *ht, const char *arKey, uint nKeyLength,
+                           const char *str) {
   uint h, nIndex;
 
   Bucket *p;
@@ -78,8 +78,7 @@ int completion_hash_update(HashTable *ht, char *arKey, uint nKeyLength,
       if (!memcmp(p->arKey, arKey, nKeyLength)) {
         entry *n;
 
-        if (!(n = (entry *)alloc_root(&ht->mem_root, sizeof(entry))))
-          return FAILURE;
+        if (!(n = (entry *)ht->mem_root.Alloc(sizeof(entry)))) return FAILURE;
         n->pNext = p->pData;
         n->str = str;
         p->pData = n;
@@ -91,18 +90,16 @@ int completion_hash_update(HashTable *ht, char *arKey, uint nKeyLength,
     p = p->pNext;
   }
 
-  if (!(p = (Bucket *)alloc_root(&ht->mem_root, sizeof(Bucket))))
-    return FAILURE;
+  if (!(p = (Bucket *)ht->mem_root.Alloc(sizeof(Bucket)))) return FAILURE;
 
   p->arKey = arKey;
   p->nKeyLength = nKeyLength;
   p->h = h;
 
-  if (!(p->pData = (entry *)alloc_root(&ht->mem_root, sizeof(entry))))
-    return FAILURE;
+  if (!(p->pData = (entry *)ht->mem_root.Alloc(sizeof(entry)))) return FAILURE;
 
   p->pData->str = str;
-  p->pData->pNext = 0;
+  p->pData->pNext = nullptr;
   p->count = 1;
 
   p->pNext = ht->arBuckets[nIndex];
@@ -128,7 +125,7 @@ static Bucket *completion_hash_find(HashTable *ht, const char *arKey,
     }
     p = p->pNext;
   }
-  return (Bucket *)0;
+  return (Bucket *)nullptr;
 }
 
 int completion_hash_exists(HashTable *ht, char *arKey, uint nKeyLength) {
@@ -157,7 +154,7 @@ Bucket *find_all_matches(HashTable *ht, const char *str, uint length,
   b = completion_hash_find(ht, str, length);
   if (!b) {
     *res_length = 0;
-    return (Bucket *)0;
+    return (Bucket *)nullptr;
   } else {
     *res_length = length;
     return b;
@@ -167,14 +164,14 @@ Bucket *find_all_matches(HashTable *ht, const char *str, uint length,
 Bucket *find_longest_match(HashTable *ht, char *str, uint length,
                            uint *res_length) {
   Bucket *b, *return_b;
-  char *s;
+  const char *s;
   uint count;
   uint lm;
 
   b = completion_hash_find(ht, str, length);
   if (!b) {
     *res_length = 0;
-    return (Bucket *)0;
+    return (Bucket *)nullptr;
   }
 
   count = b->count;
@@ -204,8 +201,8 @@ void completion_hash_free(HashTable *ht) {
   my_free(ht->arBuckets);
 }
 
-void add_word(HashTable *ht, char *str) {
+void add_word(HashTable *ht, const char *str) {
   int i;
-  char *pos = str;
+  const char *pos = str;
   for (i = 1; *pos; i++, pos++) completion_hash_update(ht, str, i, str);
 }

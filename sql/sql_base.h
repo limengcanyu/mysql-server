@@ -30,6 +30,7 @@
 
 #include "lex_string.h"
 #include "map_helpers.h"
+#include "mem_root_deque.h"
 #include "my_base.h"  // ha_extra_function
 #include "my_inttypes.h"
 #include "mysql/components/services/mysql_mutex_bits.h"
@@ -196,11 +197,10 @@ void close_tables_for_reopen(THD *thd, TABLE_LIST **tables,
 TABLE *find_temporary_table(THD *thd, const char *db, const char *table_name);
 TABLE *find_temporary_table(THD *thd, const TABLE_LIST *tl);
 void close_thread_tables(THD *thd);
-bool fill_record_n_invoke_before_triggers(THD *thd, COPY_INFO *optype_info,
-                                          List<Item> &fields,
-                                          List<Item> &values, TABLE *table,
-                                          enum enum_trigger_event_type event,
-                                          int num_fields);
+bool fill_record_n_invoke_before_triggers(
+    THD *thd, COPY_INFO *optype_info, List<Item> &fields, List<Item> &values,
+    TABLE *table, enum enum_trigger_event_type event, int num_fields,
+    bool raise_autoinc_has_expl_non_null_val, bool *is_row_changed);
 bool fill_record_n_invoke_before_triggers(THD *thd, Field **field,
                                           List<Item> &values, TABLE *table,
                                           enum enum_trigger_event_type event,
@@ -213,9 +213,11 @@ bool setup_fields(THD *thd, Ref_item_array ref_item_array, List<Item> &item,
                   ulong privilege, List<Item> *sum_func_list,
                   bool allow_sum_func, bool column_update);
 bool fill_record(THD *thd, TABLE *table, List<Item> &fields, List<Item> &values,
-                 MY_BITMAP *bitmap, MY_BITMAP *insert_into_fields_bitmap);
+                 MY_BITMAP *bitmap, MY_BITMAP *insert_into_fields_bitmap,
+                 bool raise_autoinc_has_expl_non_null_val);
 bool fill_record(THD *thd, TABLE *table, Field **field, List<Item> &values,
-                 MY_BITMAP *bitmap, MY_BITMAP *insert_into_fields_bitmap);
+                 MY_BITMAP *bitmap, MY_BITMAP *insert_into_fields_bitmap,
+                 bool raise_autoinc_has_expl_non_null_val);
 
 bool check_record(THD *thd, Field **ptr);
 
@@ -248,7 +250,8 @@ Field *find_field_in_table_sef(TABLE *table, const char *name);
 Item **find_item_in_list(THD *thd, Item *item, List<Item> &items, uint *counter,
                          find_item_error_report_type report_error,
                          enum_resolution_type *resolution);
-bool setup_natural_join_row_types(THD *thd, List<TABLE_LIST> *from_clause,
+bool setup_natural_join_row_types(THD *thd,
+                                  mem_root_deque<TABLE_LIST *> *from_clause,
                                   Name_resolution_context *context);
 bool wait_while_table_is_used(THD *thd, TABLE *table,
                               enum ha_extra_function function);
@@ -291,7 +294,6 @@ bool rename_temporary_table(THD *thd, TABLE *table, const char *new_db,
                             const char *table_name);
 bool open_temporary_tables(THD *thd, TABLE_LIST *tl_list);
 bool open_temporary_table(THD *thd, TABLE_LIST *tl);
-bool is_equal(const LEX_STRING *a, const LEX_STRING *b);
 
 /* Functions to work with system tables. */
 bool open_trans_system_tables_for_read(THD *thd, TABLE_LIST *table_list);
@@ -454,6 +456,23 @@ inline bool open_and_lock_tables(THD *thd, TABLE_LIST *tables, uint flags) {
 
   return open_and_lock_tables(thd, tables, flags, &prelocking_strategy);
 }
+
+/**
+  Get an existing table definition from the table definition cache.
+
+  Search the table definition cache for a share with the given key.
+  If the share exists or if it is in the process of being opened
+  by another thread (m_open_in_progress flag is true) return share.
+  Do not wait for share opening to finish.
+
+  @param db         database name.
+  @param table_name table name.
+
+  @retval nulltpr      a share for the table does not exist in the cache
+  @retval != nulltpr   pointer to existing share in the cache
+*/
+
+TABLE_SHARE *get_cached_table_share(const char *db, const char *table_name);
 
 /**
   A context of open_tables() function, used to recover

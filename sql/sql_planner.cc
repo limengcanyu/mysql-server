@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -46,6 +46,7 @@
 #include "my_bitmap.h"
 #include "my_compiler.h"
 #include "my_dbug.h"
+#include "my_double2ulonglong.h"
 #include "my_macros.h"
 #include "sql/enum_query_type.h"
 #include "sql/field.h"
@@ -101,7 +102,7 @@ static uint cache_record_length(JOIN *join, uint idx) {
       uint used_fields, used_blobs;
       bool used_null_fields, used_uneven_bit_fields;
       /*
-        (1) keep_current_rowid: we don't know if Duplicate Weedout may be
+        (1) needs_rowid: we don't know if Duplicate Weedout may be
         used, length will thus be inaccurate, this is acceptable.
       */
       calc_used_field_length(join_tab->table(),
@@ -128,7 +129,7 @@ Optimize_table_order::Optimize_table_order(THD *thd_arg, JOIN *join_arg,
           (emb_sjm_nest ? (join->all_table_map & ~emb_sjm_nest->sj_inner_tables)
                         : 0) |
           (join->allow_outer_refs ? 0 : OUTER_REF_TABLE_BIT)),
-      has_sj(!(join->select_lex->sj_nests.is_empty() || emb_sjm_nest)),
+      has_sj(!(join->select_lex->sj_nests.empty() || emb_sjm_nest)),
       test_all_ref_keys(false),
       found_plan_with_allowed_sj(false),
       got_final_plan(false) {}
@@ -179,10 +180,10 @@ Key_use *Optimize_table_order::find_best_ref(
     const double prefix_rowcount, bool *found_condition,
     table_map *ref_depend_map, uint *used_key_parts) {
   // Skip finding best_ref if quick object is forced by hint.
-  if (tab->quick() && tab->quick()->forced_by_hint) return NULL;
+  if (tab->quick() && tab->quick()->forced_by_hint) return nullptr;
 
   // Return value - will point to Key_use of the index with cheapest ref access
-  Key_use *best_ref = NULL;
+  Key_use *best_ref = nullptr;
 
   /*
     Cost of using best_ref; used to determine if ref access on another
@@ -213,6 +214,10 @@ Key_use *Optimize_table_order::find_best_ref(
     key_part_map found_part = 0;
     // Bitmap of keyparts where the ref access is over 'keypart=const'
     key_part_map const_part = 0;
+    // Keyparts where ref access will not match on NULL values.
+    // Used for unique indexes on nullable columns to decide whether
+    // a specific key may match on (multiple) NULL valued rows.
+    key_part_map null_rejecting_part = 0;
     /*
       Cost of ref access on current index. Calculated as follows:
       cost_ref_for_one_value * prefix_rowcount
@@ -282,6 +287,14 @@ Key_use *Optimize_table_order::find_best_ref(
              (keyuse->optimize & KEY_OPTIMIZE_REF_OR_NULL)))  // 3b)
           continue;
 
+        if (keypart != FT_KEYPART) {
+          const bool keyinfo_maybe_null =
+              keyinfo->key_part[keypart].field->is_nullable() ||
+              tab->table()->is_nullable();
+          if (keyuse->null_rejecting || !keyuse->val->maybe_null ||
+              !keyinfo_maybe_null)
+            null_rejecting_part |= keyuse->keypart_map;
+        }
         found_part |= keyuse->keypart_map;
         if (!(keyuse->used_tables & ~join->const_table_map))
           const_part |= keyuse->keypart_map;
@@ -322,12 +335,18 @@ Key_use *Optimize_table_order::find_best_ref(
 
       const bool all_key_parts_covered =
           (found_part == LOWER_BITS(key_part_map, actual_key_parts(keyinfo)));
+      const bool all_key_parts_non_null =
+          (ref_or_null_part == 0 &&
+           null_rejecting_part ==
+               LOWER_BITS(key_part_map, actual_key_parts(keyinfo)));
       /*
         check for the current key type.
         If we find a key with all the keyparts having equality predicates and
         --> if it is a clustered primary key, current key type is set to
             CLUSTERED_PK.
         --> if it is non-nullable unique key, it is set as UNIQUE.
+        --> If none of the specified key parts may result in NULL value(s)
+            being matched, it is set as UNIQUE.
         --> otherwise its a NOT_UNIQUE keytype.
       */
       if (all_key_parts_covered && (keyinfo->flags & HA_NOSAME)) {
@@ -335,6 +354,8 @@ Key_use *Optimize_table_order::find_best_ref(
             table->file->primary_key_is_clustered())
           cur_keytype = CLUSTERED_PK;
         else if ((keyinfo->flags & HA_NULL_PART_KEY) == 0)
+          cur_keytype = UNIQUE;
+        else if (all_key_parts_non_null)
           cur_keytype = UNIQUE;
       }
 
@@ -362,7 +383,9 @@ Key_use *Optimize_table_order::find_best_ref(
       if (all_key_parts_covered && !ref_or_null_part) /* use eq key */
       {
         cur_used_keyparts = (uint)~0;
-        if ((keyinfo->flags & (HA_NOSAME | HA_NULL_PART_KEY)) == HA_NOSAME) {
+        if (keyinfo->flags & HA_NOSAME &&
+            ((keyinfo->flags & HA_NULL_PART_KEY) == 0 ||
+             all_key_parts_non_null)) {
           cur_read_cost = prev_record_reads(join, idx, table_deps) *
                           table->cost_model()->page_read_cost(1.0);
           cur_fanout = 1.0;
@@ -444,9 +467,10 @@ Key_use *Optimize_table_order::find_best_ref(
                             min(table->cost_model()->page_read_cost(tmp_fanout),
                                 tab->worst_seeks);
         }
-      } else if ((found_part & 1) && (!(table->file->index_flags(key, 0, 0) &
-                                        HA_ONLY_WHOLE_INDEX) ||
-                                      all_key_parts_covered)) {
+      } else if ((found_part & 1) &&
+                 (!(table->file->index_flags(key, 0, false) &
+                    HA_ONLY_WHOLE_INDEX) ||
+                  all_key_parts_covered)) {
         /*
           Use as many key-parts as possible and a unique key is better
           than a not unique key.
@@ -495,9 +519,10 @@ Key_use *Optimize_table_order::find_best_ref(
           (C3) "range optimizer used (have ref_or_null?2:1) intervals"
         */
         double tmp_fanout = 0.0;
-        if (table->quick_keys.is_set(key) && !table_deps &&               //(C1)
-            table->quick_key_parts[key] == cur_used_keyparts &&           //(C2)
-            table->quick_n_ranges[key] == 1 + MY_TEST(ref_or_null_part))  //(C3)
+        if (table->quick_keys.is_set(key) && !table_deps &&      //(C1)
+            table->quick_key_parts[key] == cur_used_keyparts &&  //(C2)
+            table->quick_n_ranges[key] ==
+                1 + (ref_or_null_part ? 1 : 0))  //(C3)
         {
           tmp_fanout = cur_fanout = (double)table->quick_rows[key];
         } else {
@@ -573,7 +598,7 @@ Key_use *Optimize_table_order::find_best_ref(
                     (keyinfo->user_defined_key_parts - 1);
               else
                 tmp_fanout = a;
-              set_if_bigger(tmp_fanout, 1.0);
+              tmp_fanout = std::max(tmp_fanout, 1.0);
             }
             cur_fanout = (ulong)tmp_fanout;
           }
@@ -600,14 +625,15 @@ Key_use *Optimize_table_order::find_best_ref(
               table->quick_key_parts[key] <= cur_used_keyparts &&
               const_part & ((key_part_map)1 << table->quick_key_parts[key]) &&
               table->quick_n_ranges[key] ==
-                  1 + MY_TEST(ref_or_null_part & const_part) &&
+                  1 + ((ref_or_null_part & const_part) ? 1 : 0) &&
               cur_fanout > (double)table->quick_rows[key]) {
             tmp_fanout = cur_fanout = (double)table->quick_rows[key];
           }
         }
 
         // Limit the number of matched rows
-        set_if_smaller(tmp_fanout, (double)thd->variables.max_seeks_for_key);
+        tmp_fanout =
+            std::min(tmp_fanout, double(thd->variables.max_seeks_for_key));
         if (table->covering_keys.is_set(key)) {
           // We can use only index tree
           const Cost_estimate index_read_cost =
@@ -747,7 +773,7 @@ double Optimize_table_order::calculate_scan_cost(
   */
   if (thd->optimizer_switch_flag(OPTIMIZER_SWITCH_COND_FANOUT_FILTER)) {
     const float const_cond_filter = calculate_condition_filter(
-        tab, NULL, 0, static_cast<double>(tab->found_records), !disable_jbuf,
+        tab, nullptr, 0, static_cast<double>(tab->found_records), !disable_jbuf,
         true, *trace_access_scan);
 
     /*
@@ -854,10 +880,9 @@ double Optimize_table_order::calculate_scan_cost(
                                        tab->records() - *rows_after_filtering));
 
       trace_access_scan->add("using_join_cache", true);
-      trace_access_scan->add("buffers_needed",
-                             buffer_count >= std::numeric_limits<ulong>::max()
-                                 ? std::numeric_limits<ulong>::max()
-                                 : static_cast<ulong>(buffer_count));
+      trace_access_scan->add(
+          "buffers_needed",
+          static_cast<ulonglong>(std::min(buffer_count, ULLONG_MAX_DOUBLE)));
     }
   }
 
@@ -969,13 +994,13 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
                         BNL_HINT_ENUM, OPTIMIZER_SWITCH_BNL) ||
       join->deps_of_remaining_lateral_derived_tables & ~remaining_tables;  // 3
 
-  DBUG_ENTER("Optimize_table_order::best_access_path");
+  DBUG_TRACE;
 
   Opt_trace_object trace_wrapper(trace, "best_access_path");
   Opt_trace_array trace_paths(trace, "considered_access_paths");
 
   // The 'ref' access method with lowest cost as found by find_best_ref()
-  Key_use *best_ref = NULL;
+  Key_use *best_ref = nullptr;
 
   table_map ref_depend_map = 0;
   uint used_key_parts = 0;
@@ -1122,7 +1147,7 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
     trace_access_scan.add("resulting_rows", rows_after_filtering);
     trace_access_scan.add("cost", scan_total_cost);
 
-    if (best_ref == NULL ||
+    if (best_ref == nullptr ||
         (scan_total_cost <
          best_read_cost +
              cost_model->row_evaluate_cost(prefix_rowcount * rows_fetched))) {
@@ -1142,18 +1167,18 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
           therefore 'false'.
         */
         const float full_filter = calculate_condition_filter(
-            tab, NULL, ~remaining_tables & ~excluded_tables,
+            tab, nullptr, ~remaining_tables & ~excluded_tables,
             static_cast<double>(tab->found_records), false, false,
             trace_access_scan);
         filter_effect = static_cast<float>(std::min(
             1.0, tab->found_records * full_filter / rows_after_filtering));
       }
-      best_ref = NULL;
+      best_ref = nullptr;
       best_uses_jbuf = !disable_jbuf;
       ref_depend_map = 0;
     }
 
-    trace_access_scan.add("chosen", best_ref == NULL);
+    trace_access_scan.add("chosen", best_ref == nullptr);
   }
 
   /*
@@ -1194,8 +1219,6 @@ void Optimize_table_order::best_access_path(JOIN_TAB *tab,
     trace_access_scan.add("use_tmp_table", true);
     join->sort_by_table = (TABLE *)1;  // Must use temporary table
   }
-
-  DBUG_VOID_RETURN;
 }
 
 float calculate_condition_filter(const JOIN_TAB *const tab,
@@ -1251,9 +1274,9 @@ float calculate_condition_filter(const JOIN_TAB *const tab,
         (is_join_buffering ||                        // 2a
          remaining_tables != 0 ||                    // 2b
          tab->join()->select_lex->master_unit()->outer_select() !=
-             NULL ||                                       // 2c
-         !tab->join()->select_lex->sj_nests.is_empty() ||  // 2d
-         ((tab->join()->order || tab->join()->group_list) &&
+             nullptr ||                                 // 2c
+         !tab->join()->select_lex->sj_nests.empty() ||  // 2d
+         ((!tab->join()->order.empty() || !tab->join()->group_list.empty()) &&
           tab->join()->unit->select_limit_cnt != HA_POS_ERROR) ||  // 2e
          thd->lex->is_explain())))                                 // 2f
     return COND_FILTER_ALLPASS;
@@ -1301,7 +1324,7 @@ float calculate_condition_filter(const JOIN_TAB *const tab,
         over the next 'actual_key_parts' works.
       */
       for (uint i = 0; i < key->actual_key_parts; i++)
-        bitmap_set_bit(&table->tmp_set, key->key_part[i].field->field_index);
+        bitmap_set_bit(&table->tmp_set, key->key_part[i].field->field_index());
     } else {
       const Key_use *curr_ku = keyuse;
 
@@ -1338,7 +1361,7 @@ float calculate_condition_filter(const JOIN_TAB *const tab,
              curr_ku->keypart_map & keyuse->bound_keyparts)  // 2)
       {
         bitmap_set_bit(&table->tmp_set,
-                       key->key_part[curr_ku->keypart].field->field_index);
+                       key->key_part[curr_ku->keypart].field->field_index());
         curr_ku++;
       }
     }
@@ -1370,12 +1393,12 @@ float calculate_condition_filter(const JOIN_TAB *const tab,
       if (table->quick_keys.is_set(keyno)) {
         // The range optimizer made a row estimate for this index
 
-        bitmap_init(&fields_current_quick, bitbuf, table->s->fields, false);
+        bitmap_init(&fields_current_quick, bitbuf, table->s->fields);
 
         const KEY *key = table->key_info + keyno;
         for (uint i = 0; i < table->quick_key_parts[keyno]; i++)
           bitmap_set_bit(&fields_current_quick,
-                         key->key_part[i].field->field_index);
+                         key->key_part[i].field->field_index());
 
         /*
           If any of the fields used to get the rows estimate for this
@@ -1767,7 +1790,7 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
         pos->read_cost = cost;
         pos->rows_fetched = rowcount;
         pos->loosescan_parts = max_keypart + 1;
-        pos->key = NULL;
+        pos->key = nullptr;
         trace_cov_scan.add("chosen", true);
       }
     } else
@@ -1787,7 +1810,7 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
       // this is ok because idx == join->const_tables
       pos->rows_fetched = rows2double(tab->quick()->records);
       pos->loosescan_parts = quick_max_keypart + 1;
-      pos->key = NULL;
+      pos->key = nullptr;
       trace_range.add("chosen", true);
     }
   }
@@ -1804,6 +1827,85 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 
   // @todo need ref_depend_map ?
 }
+
+bool Join_tab_compare_default::operator()(const JOIN_TAB *jt1,
+                                          const JOIN_TAB *jt2) const {
+  // Sorting distinct tables, so a table should not be compared with itself
+  DBUG_ASSERT(jt1 != jt2);
+
+  if (jt1->dependent & jt2->table_ref->map()) return false;
+  if (jt2->dependent & jt1->table_ref->map()) return true;
+
+  const bool jt1_keydep_jt2 = jt1->key_dependent & jt2->table_ref->map();
+  const bool jt2_keydep_jt1 = jt2->key_dependent & jt1->table_ref->map();
+
+  if (jt1_keydep_jt2 && !jt2_keydep_jt1) return false;
+  if (jt2_keydep_jt1 && !jt1_keydep_jt2) return true;
+
+  if (jt1->found_records > jt2->found_records) return false;
+  if (jt1->found_records < jt2->found_records) return true;
+
+  return jt1 < jt2;
+}
+
+namespace {
+
+/**
+  "Less than" comparison function object used to compare two JOIN_TAB
+  objects that are joined using STRAIGHT JOIN. For STRAIGHT JOINs,
+  the join order is dictated by the relative order of the tables in the
+  query which is reflected in JOIN_TAB::dependent. Table size and key
+  dependencies are ignored here.
+*/
+class Join_tab_compare_straight {
+ public:
+  bool operator()(const JOIN_TAB *jt1, const JOIN_TAB *jt2) const {
+    // Sorting distinct tables, so a table should not be compared with itself
+    DBUG_ASSERT(jt1 != jt2);
+
+    /*
+      We don't do subquery flattening if the parent or child select has
+      STRAIGHT_JOIN modifier. It is complicated to implement and the semantics
+      is hardly useful.
+    */
+    DBUG_ASSERT(!jt1->emb_sj_nest);
+    DBUG_ASSERT(!jt2->emb_sj_nest);
+
+    if (jt1->dependent & jt2->table_ref->map()) return false;
+    if (jt2->dependent & jt1->table_ref->map()) return true;
+
+    return jt1 < jt2;
+  }
+};
+
+/*
+  Same as Join_tab_compare_default but tables from within the given
+  semi-join nest go first. Used when optimizing semi-join
+  materialization nests.
+*/
+class Join_tab_compare_embedded_first {
+ private:
+  const TABLE_LIST *emb_nest;
+
+ public:
+  explicit Join_tab_compare_embedded_first(const TABLE_LIST *nest)
+      : emb_nest(nest) {}
+
+  bool operator()(const JOIN_TAB *jt1, const JOIN_TAB *jt2) const {
+    // Sorting distinct tables, so a table should not be compared with itself
+    DBUG_ASSERT(jt1 != jt2);
+
+    if (jt1->emb_sj_nest == emb_nest && jt2->emb_sj_nest != emb_nest)
+      return true;
+    if (jt1->emb_sj_nest != emb_nest && jt2->emb_sj_nest == emb_nest)
+      return false;
+
+    Join_tab_compare_default cmp;
+    return cmp(jt1, jt2);
+  }
+};
+
+}  // namespace
 
 /**
   Selects and invokes a search strategy for an optimal query join order.
@@ -1823,7 +1925,7 @@ bool Optimize_table_order::semijoin_loosescan_fill_driving_table_position(
 */
 
 bool Optimize_table_order::choose_table_order() {
-  DBUG_ENTER("Optimize_table_order::choose_table_order");
+  DBUG_TRACE;
 
   got_final_plan = false;
 
@@ -1838,7 +1940,7 @@ bool Optimize_table_order::choose_table_order() {
     join->best_read = 1.0;
     join->best_rowcount = 1;
     got_final_plan = true;
-    DBUG_RETURN(false);
+    return false;
   }
 
   join->select_lex->reset_nj_counters();
@@ -1890,7 +1992,7 @@ bool Optimize_table_order::choose_table_order() {
       best_access_path() et al. when no filtering effect is possible.
     */
     join->where_cond->walk(&Item::add_field_to_cond_set_processor,
-                           enum_walk::POSTFIX, NULL);
+                           enum_walk::POSTFIX, nullptr);
   }
 
   Deps_of_remaining_lateral_derived_tables deps_lateral(join, ~excluded_tables);
@@ -1899,7 +2001,7 @@ bool Optimize_table_order::choose_table_order() {
   if (straight_join)
     optimize_straight_join(join_tables);
   else {
-    if (greedy_search(join_tables)) DBUG_RETURN(true);
+    if (greedy_search(join_tables)) return true;
   }
 
   deps_lateral.assert_unchanged();
@@ -1907,12 +2009,12 @@ bool Optimize_table_order::choose_table_order() {
   got_final_plan = true;
 
   // Remaining part of this function not needed when processing semi-join nests.
-  if (emb_sjm_nest) DBUG_RETURN(false);
+  if (emb_sjm_nest) return false;
 
   // Fix semi-join strategies and perform final cost calculation.
-  if (fix_semijoin_strategies()) DBUG_RETURN(true);
+  if (fix_semijoin_strategies()) return true;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -1995,7 +2097,7 @@ void Optimize_table_order::optimize_straight_join(table_map join_tables) {
   const Cost_model_server *const cost_model = join->cost_model();
 
   // resolve_subquery() disables semijoin if STRAIGHT_JOIN
-  DBUG_ASSERT(join->select_lex->sj_nests.is_empty());
+  DBUG_ASSERT(join->select_lex->sj_nests.empty());
 
   Deps_of_remaining_lateral_derived_tables deps_lateral(join, ~excluded_tables);
 
@@ -2202,7 +2304,7 @@ bool Optimize_table_order::greedy_search(table_map remaining_tables) {
   uint best_idx;
   POSITION best_pos;
   JOIN_TAB *best_table;  // the next plan node to be added to the curr QEP
-  DBUG_ENTER("Optimize_table_order::greedy_search");
+  DBUG_TRACE;
 
   /* Number of tables that we are optimizing */
   const uint n_tables = my_count_bits(remaining_tables);
@@ -2216,7 +2318,7 @@ bool Optimize_table_order::greedy_search(table_map remaining_tables) {
     join->best_rowcount = HA_POS_ERROR;
     found_plan_with_allowed_sj = false;
     if (best_extension_by_limited_search(remaining_tables, idx, search_depth))
-      DBUG_RETURN(true);
+      return true;
     /*
       'best_read < DBL_MAX' means that optimizer managed to find
       some plan and updated 'best_positions' array accordingly.
@@ -2235,7 +2337,7 @@ bool Optimize_table_order::greedy_search(table_map remaining_tables) {
                      idx ? join->best_positions[idx - 1].prefix_cost : 0.0,
                      idx ? join->best_positions[idx - 1].prefix_cost : 0.0,
                      "optimal"););
-      DBUG_RETURN(false);
+      return false;
     }
 
     /* select the first table in the optimal extension as most promising */
@@ -2269,7 +2371,7 @@ bool Optimize_table_order::greedy_search(table_map remaining_tables) {
     best_idx = idx;
     JOIN_TAB *pos = join->best_ref[best_idx];
     while (pos && best_table != pos) pos = join->best_ref[++best_idx];
-    DBUG_ASSERT((pos != NULL));  // should always find 'best_table'
+    DBUG_ASSERT((pos != nullptr));  // should always find 'best_table'
     /*
       Maintain '#rows-sorted' order of 'best_ref[]':
        - Shift 'best_ref[]' to make first position free.
@@ -2353,8 +2455,8 @@ static const handlerton *secondary_engine_handlerton(const THD *thd) {
 */
 bool Optimize_table_order::consider_plan(uint idx,
                                          Opt_trace_object *trace_obj) {
-  double sort_cost = join->sort_cost;
   double cost = join->positions[idx].prefix_cost;
+  double sort_cost = 0;
   double windowing_cost = 0;
   /*
     We may have to make a temp table, note that this is only a
@@ -2370,10 +2472,9 @@ bool Optimize_table_order::consider_plan(uint idx,
   if (join->sort_by_table &&
       join->sort_by_table !=
           join->positions[join->const_tables].table->table()) {
-    cost += join->positions[idx].prefix_rowcount;
-    trace_obj->add("sort_cost", join->positions[idx].prefix_rowcount)
-        .add("new_cost_for_plan", cost);
     sort_cost = join->positions[idx].prefix_rowcount;
+    cost += sort_cost;
+    trace_obj->add("sort_cost", sort_cost).add("new_cost_for_plan", cost);
   }
 
   /*
@@ -2449,10 +2550,8 @@ bool Optimize_table_order::consider_plan(uint idx,
       (Similar code in best_extension_by_li...)
     */
     join->best_read = cost - 0.001;
-    join->best_rowcount = join->positions[idx].prefix_rowcount >=
-                                  std::numeric_limits<ha_rows>::max()
-                              ? std::numeric_limits<ha_rows>::max()
-                              : (ha_rows)join->positions[idx].prefix_rowcount;
+    join->best_rowcount = static_cast<ha_rows>(
+        std::min(join->positions[idx].prefix_rowcount, ULLONG_MAX_DOUBLE));
     join->sort_cost = sort_cost;
     join->windowing_cost = windowing_cost;
     found_plan_with_allowed_sj = plan_uses_allowed_sj;
@@ -2594,11 +2693,11 @@ bool Optimize_table_order::consider_plan(uint idx,
 
 bool Optimize_table_order::best_extension_by_limited_search(
     table_map remaining_tables, uint idx, uint current_search_depth) {
-  DBUG_ENTER("Optimize_table_order::best_extension_by_limited_search");
+  DBUG_TRACE;
 
   DBUG_EXECUTE_IF("bug13820776_2", thd->killed = THD::KILL_QUERY;);
   if (thd->killed)  // Abort
-    DBUG_RETURN(true);
+    return true;
 
   const Cost_model_server *const cost_model = join->cost_model();
   Opt_trace_context *const trace = &thd->opt_trace;
@@ -2655,7 +2754,7 @@ bool Optimize_table_order::best_extension_by_limited_search(
       POSITION *const position = join->positions + idx;
 
       // If optimizing a sj-mat nest, tables in this plan must be in nest:
-      DBUG_ASSERT(emb_sjm_nest == NULL || emb_sjm_nest == s->emb_sj_nest);
+      DBUG_ASSERT(emb_sjm_nest == nullptr || emb_sjm_nest == s->emb_sj_nest);
 
       deps_lateral.restore();  // as we "popped" the previously-tried table
 
@@ -2743,7 +2842,7 @@ bool Optimize_table_order::best_extension_by_limited_search(
             3) and, There is a 1::1 relation between those tables
         */
         if (prune_level == 1 &&             // 1)
-            position->key != NULL &&        // 2)
+            position->key != nullptr &&     // 2)
             position->rows_fetched <= 1.0)  // 3)
         {
           /*
@@ -2760,7 +2859,7 @@ bool Optimize_table_order::best_extension_by_limited_search(
                 real_table_bit |
                 eq_ref_extension_by_limited_search(
                     remaining_tables_after, idx + 1, current_search_depth - 1);
-            if (eq_ref_extended == ~(table_map)0) DBUG_RETURN(true);  // Failed
+            if (eq_ref_extended == ~(table_map)0) return true;  // Failed
 
             backout_nj_state(remaining_tables, s);
 
@@ -2783,10 +2882,10 @@ bool Optimize_table_order::best_extension_by_limited_search(
         Opt_trace_array trace_rest(trace, "rest_of_plan");
         if (best_extension_by_limited_search(remaining_tables_after, idx + 1,
                                              current_search_depth - 1))
-          DBUG_RETURN(true);
+          return true;
       } else  // if ((current_search_depth > 1) && ...
       {
-        if (consider_plan(idx, &trace_one_table)) DBUG_RETURN(true);
+        if (consider_plan(idx, &trace_one_table)) return true;
         /*
           If plan is complete, there should be no "open" outer join nest, and
           all semi join nests should be handled by a strategy:
@@ -2804,7 +2903,7 @@ done:
   // Restore previous #rows sorted best_ref[]
   memcpy(join->best_ref + idx, saved_refs,
          sizeof(JOIN_TAB *) * (join->tables - idx));
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -2942,9 +3041,9 @@ static inline bool almost_equal(double left, double right) {
 
 table_map Optimize_table_order::eq_ref_extension_by_limited_search(
     table_map remaining_tables, uint idx, uint current_search_depth) {
-  DBUG_ENTER("Optimize_table_order::eq_ref_extension_by_limited_search");
+  DBUG_TRACE;
 
-  if (remaining_tables == 0) DBUG_RETURN(0);
+  if (remaining_tables == 0) return 0;
 
   /*
     The section below adds 'eq_ref' joinable tables to the QEP in the order
@@ -2993,7 +3092,7 @@ table_map Optimize_table_order::eq_ref_extension_by_limited_search(
       }
       POSITION *const position = join->positions + idx;
 
-      DBUG_ASSERT(emb_sjm_nest == NULL || emb_sjm_nest == s->emb_sj_nest);
+      DBUG_ASSERT(emb_sjm_nest == nullptr || emb_sjm_nest == s->emb_sj_nest);
 
       deps_lateral.restore();
 
@@ -3068,7 +3167,7 @@ table_map Optimize_table_order::eq_ref_extension_by_limited_search(
           eq_ref_ext |= eq_ref_extension_by_limited_search(
               remaining_tables_after, idx + 1, current_search_depth - 1);
         } else {
-          if (consider_plan(idx, &trace_one_table)) DBUG_RETURN(~(table_map)0);
+          if (consider_plan(idx, &trace_one_table)) return ~(table_map)0;
           DBUG_ASSERT((remaining_tables_after != 0) ||
                       ((cur_embedding_map == 0) &&
                        (join->positions[idx].dups_producing_tables == 0)));
@@ -3076,7 +3175,7 @@ table_map Optimize_table_order::eq_ref_extension_by_limited_search(
         backout_nj_state(remaining_tables, s);
         memcpy(join->best_ref + idx, saved_refs,
                sizeof(JOIN_TAB *) * (join->tables - idx));
-        DBUG_RETURN(eq_ref_ext);
+        return eq_ref_ext;
       }  // if (added_to_eq_ref_extension)
 
       backout_nj_state(remaining_tables, s);
@@ -3094,9 +3193,9 @@ table_map Optimize_table_order::eq_ref_extension_by_limited_search(
   DBUG_ASSERT(!eq_ref_ext);
   if (best_extension_by_limited_search(remaining_tables, idx,
                                        current_search_depth))
-    DBUG_RETURN(~(table_map)0);
+    return ~(table_map)0;
 
-  DBUG_RETURN(eq_ref_ext);
+  return eq_ref_ext;
 }
 
 /*
@@ -3237,9 +3336,9 @@ bool Optimize_table_order::fix_semijoin_strategies() {
   table_map remaining_tables = 0;
   table_map handled_tables = 0;
 
-  DBUG_ENTER("Optimize_table_order::fix_semijoin_strategies");
+  DBUG_TRACE;
 
-  if (join->select_lex->sj_nests.is_empty()) DBUG_RETURN(false);
+  if (join->select_lex->sj_nests.empty()) return false;
 
   Opt_trace_context *const trace = &thd->opt_trace;
 
@@ -3306,8 +3405,6 @@ bool Optimize_table_order::fix_semijoin_strategies() {
 
     } else if (pos->sj_strategy == SJ_OPT_FIRST_MATCH) {
       first = pos->first_firstmatch_table;
-      join->best_positions[first].sj_strategy = SJ_OPT_FIRST_MATCH;
-      join->best_positions[first].n_sj_tables = tableno - first + 1;
 
       Opt_trace_object trace_final_strategy(trace);
       trace_final_strategy.add_alnum("final_semijoin_strategy", "FirstMatch");
@@ -3316,6 +3413,18 @@ bool Optimize_table_order::fix_semijoin_strategies() {
       double rowcount, cost;
       (void)semijoin_firstmatch_loosescan_access_paths(
           first, tableno, remaining_tables, false, &rowcount, &cost);
+
+      if (pos->table->emb_sj_nest->is_aj_nest()) {
+        /*
+          Antijoin doesn't use the execution logic of FirstMatch. So we
+          won't set it up; and we won't either have the incompatibilities of
+          FirstMatch with outer join. Declare that we don't use it:
+        */
+        pos->sj_strategy = SJ_OPT_NONE;
+      } else {
+        join->best_positions[first].sj_strategy = SJ_OPT_FIRST_MATCH;
+        join->best_positions[first].n_sj_tables = tableno - first + 1;
+      }
     } else if (pos->sj_strategy == SJ_OPT_LOOSE_SCAN) {
       first = pos->first_loosescan_table;
 
@@ -3360,7 +3469,7 @@ bool Optimize_table_order::fix_semijoin_strategies() {
   DBUG_ASSERT(remaining_tables ==
               (join->all_table_map & ~join->const_table_map));
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -3473,7 +3582,6 @@ bool Optimize_table_order::check_interleaving_with_nj(JOIN_TAB *tab) {
 
     next_emb->nested_join->nj_counter++;
     cur_embedding_map |= next_emb->nested_join->nj_map;
-
     if (next_emb->nested_join->nj_total != next_emb->nested_join->nj_counter)
       break;
 
@@ -3533,8 +3641,7 @@ bool Optimize_table_order::check_interleaving_with_nj(JOIN_TAB *tab) {
 bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
     uint first_tab, uint last_tab, table_map remaining_tables, bool loosescan,
     double *newcount, double *newcost) {
-  DBUG_ENTER(
-      "Optimize_table_order::semijoin_firstmatch_loosescan_access_paths");
+  DBUG_TRACE;
   double cost;                // Contains running estimate of calculated cost.
   double rowcount;            // Rowcount of join prefix (ie before first_tab).
   double outer_fanout = 1.0;  // Fanout contributed by outer tables in range.
@@ -3564,7 +3671,7 @@ bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
     // LooseScan: May use join buffering for all tables after last inner table.
     for (no_jbuf_before = last_tab; no_jbuf_before > first_tab;
          no_jbuf_before--) {
-      if (positions[no_jbuf_before].table->emb_sj_nest != NULL)
+      if (positions[no_jbuf_before].table->emb_sj_nest != nullptr)
         break;  // Encountered the last inner table.
     }
     no_jbuf_before++;
@@ -3615,7 +3722,7 @@ bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
               rows * dst_pos->filter_effect);
         } else {
           DBUG_ASSERT(!got_final_plan);
-          DBUG_RETURN(false);
+          return false;
         }
       }
       pos = dst_pos;
@@ -3628,7 +3735,7 @@ bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
      */
     if (pos->read_cost == DBL_MAX) {
       DBUG_ASSERT(loosescan && !got_final_plan);
-      DBUG_RETURN(false);
+      return false;
     }
 
     remaining_tables &= ~tab->table_ref->map();
@@ -3648,7 +3755,7 @@ bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
   *newcount = rowcount * outer_fanout;
   *newcost = cost;
 
-  DBUG_RETURN(true);
+  return true;
 }
 
 /**
@@ -3674,7 +3781,7 @@ bool Optimize_table_order::semijoin_firstmatch_loosescan_access_paths(
 void Optimize_table_order::semijoin_mat_scan_access_paths(
     uint last_inner_tab, uint last_outer_tab, table_map remaining_tables,
     TABLE_LIST *sjm_nest, double *newcount, double *newcost) {
-  DBUG_ENTER("Optimize_table_order::semijoin_mat_scan_access_paths");
+  DBUG_TRACE;
 
   const Cost_model_server *const cost_model = join->cost_model();
   Opt_trace_context *const trace = &thd->opt_trace;
@@ -3734,8 +3841,6 @@ void Optimize_table_order::semijoin_mat_scan_access_paths(
 
   *newcount = rowcount * outer_fanout;
   *newcost = cost;
-
-  DBUG_VOID_RETURN;
 }
 
 /**
@@ -3756,7 +3861,7 @@ void Optimize_table_order::semijoin_mat_scan_access_paths(
 
 void Optimize_table_order::semijoin_mat_lookup_access_paths(
     uint last_inner, TABLE_LIST *sjm_nest, double *newcount, double *newcost) {
-  DBUG_ENTER("Optimize_table_order::semijoin_mat_lookup_access_paths");
+  DBUG_TRACE;
 
   const uint inner_count = my_count_bits(sjm_nest->sj_inner_tables);
   double rowcount, cost;
@@ -3775,8 +3880,6 @@ void Optimize_table_order::semijoin_mat_lookup_access_paths(
 
   *newcount = rowcount;
   *newcost = cost;
-
-  DBUG_VOID_RETURN;
 }
 
 /**
@@ -3805,7 +3908,7 @@ void Optimize_table_order::semijoin_dupsweedout_access_paths(uint first_tab,
                                                              uint last_tab,
                                                              double *newcount,
                                                              double *newcost) {
-  DBUG_ENTER("Optimize_table_order::semijoin_dupsweedout_access_paths");
+  DBUG_TRACE;
 
   const Cost_model_server *const cost_model = join->cost_model();
   double cost, rowcount;
@@ -3889,12 +3992,22 @@ void Optimize_table_order::semijoin_dupsweedout_access_paths(uint first_tab,
 
   *newcount = rowcount * outer_fanout;
   *newcost = cost;
-
-  DBUG_VOID_RETURN;
 }
 
 /**
   Do semi-join optimization step after we've added a new tab to join prefix
+
+  This function cannot work with nested SJ nests, for two reasons:
+  (a) QEP_TAB::emb_sj_nest points to the most inner SJ nest, and this
+  function looks only at it, so misses to do any SJ strategy choice for
+  outer nests
+  (b) POSITION has only one set of SJ-info (e.g. first_firstmatch_table): so
+  planning for two nested nests would require more info than we have.
+  And indeed, SJ nests cannot be nested, because:
+  (c) a SJ nest is not nested in another SJ or anti SJ nest (it would have been
+  dissolved into the outer nest by simplify_joins()).
+  (d) an anti SJ nest is not nested inside another SJ or anti SJ nest (this case
+  is blocked by resolve_subquery()).
 
   @param remaining_tables Tables not in the join prefix
   @param new_join_tab     Join tab that we are adding to the join prefix
@@ -3966,7 +4079,7 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
     within a semi-join nest have emb_sj_nest != NULL, which triggers several
     of the actions inside this function.
   */
-  DBUG_ASSERT(emb_sjm_nest == NULL);
+  DBUG_ASSERT(emb_sjm_nest == nullptr);
 
   // remaining_tables include the current one:
   DBUG_ASSERT(remaining_tables & new_join_tab->table_ref->map());
@@ -3975,11 +4088,12 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
   // And add the current table to the join prefix:
   remaining_tables &= ~new_join_tab->table_ref->map();
 
-  DBUG_ENTER("Optimize_table_order::advance_sj_state");
+  DBUG_TRACE;
 
   Opt_trace_array trace_choices(trace, "semijoin_strategy_choice");
 
   /* Initialize the state or copy it from prev. tables */
+  pos->cur_embedding_map = cur_embedding_map;
   if (idx == join->const_tables) {
     pos->dups_producing_tables = 0;
     pos->first_firstmatch_table = MAX_TABLES;
@@ -4032,6 +4146,17 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
     Intertwined tables: ot - FM(it11 - it21 - it12 - it22)
     Grouped tables: ot - FM(it11 - it12) - FM(it21 - it22)
   */
+
+  if (pos->first_firstmatch_table != MAX_TABLES) {
+    const TABLE_LIST *first_emb_sj_nest =
+        join->positions[pos->first_firstmatch_table].table->emb_sj_nest;
+    if (emb_sj_nest != first_emb_sj_nest) {
+      // Can't handle interleaving between tables from the
+      // semi-join that FirstMatch is handling and any other tables.
+      pos->first_firstmatch_table = MAX_TABLES;
+    }
+  }
+
   if (emb_sj_nest && emb_sj_nest->nested_join->sj_enabled_strategies &
                          OPTIMIZER_SWITCH_FIRSTMATCH) {
     const table_map outer_corr_tables = emb_sj_nest->nested_join->sj_depends_on;
@@ -4068,30 +4193,48 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
         */
         pos->first_firstmatch_table = MAX_TABLES;
       } else if (!(pos->firstmatch_need_tables & remaining_tables)) {
-        // Got a complete FirstMatch range. Calculate access paths and cost
-        double cost, rowcount;
-        /* We use the same FirstLetterUpcase as in EXPLAIN */
-        Opt_trace_object trace_one_strategy(trace);
-        trace_one_strategy.add_alnum("strategy", "FirstMatch");
-        (void)semijoin_firstmatch_loosescan_access_paths(
-            pos->first_firstmatch_table, idx, remaining_tables, false,
-            &rowcount, &cost);
-        /*
-          We don't yet know what are the other strategies, so pick FirstMatch.
+        // Got a complete FirstMatch range.
 
-          We ought to save the alternate POSITIONs produced by
-          semijoin_firstmatch_loosescan_access_paths() but the problem is that
-          providing save space uses too much space.
-          Instead, we will re-calculate the alternate POSITIONs after we've
-          picked the best QEP.
-        */
-        sj_strategy = SJ_OPT_FIRST_MATCH;
-        best_cost = cost;
-        best_rowcount = rowcount;
-        trace_one_strategy.add("cost", best_cost).add("rows", best_rowcount);
-        handled_by_fm_or_ls = pos->firstmatch_need_tables;
+        // We cannot FirstMatch to a different embedding nest,
+        // e.g., for B LEFT JOIN (C SEMIJOIN D ON B.X=D.Y) and table order
+        // B-D-C we cannot jump from D to B. This would cause non-hierarchical
+        // joins. So we check that the jump won't leave from a still-open
+        // nest: cur_embedding_map at the last table of this firstmatch range
+        // must be included in cur_embedding_map at the target of the jump.
+        nested_join_map cur_embedding_map_at_jump_target =
+            pos->first_firstmatch_table > join->const_tables
+                ? join->positions[pos->first_firstmatch_table - 1]
+                      .cur_embedding_map
+                : 0;
+        if ((cur_embedding_map_at_jump_target & cur_embedding_map) !=
+            cur_embedding_map) {
+          pos->first_firstmatch_table = MAX_TABLES;
+        } else {
+          // Calculate access paths and cost
+          double cost, rowcount;
+          /* We use the same FirstLetterUpcase as in EXPLAIN */
+          Opt_trace_object trace_one_strategy(trace);
+          trace_one_strategy.add_alnum("strategy", "FirstMatch");
+          (void)semijoin_firstmatch_loosescan_access_paths(
+              pos->first_firstmatch_table, idx, remaining_tables, false,
+              &rowcount, &cost);
+          /*
+            We don't yet know what are the other strategies, so pick FirstMatch.
 
-        trace_one_strategy.add("chosen", true);
+            We ought to save the alternate POSITIONs produced by
+            semijoin_firstmatch_loosescan_access_paths() but the problem is that
+            providing save space uses too much space.
+            Instead, we will re-calculate the alternate POSITIONs after we've
+            picked the best QEP.
+          */
+          sj_strategy = SJ_OPT_FIRST_MATCH;
+          best_cost = cost;
+          best_rowcount = rowcount;
+          trace_one_strategy.add("cost", best_cost).add("rows", best_rowcount);
+          handled_by_fm_or_ls = pos->firstmatch_need_tables;
+
+          trace_one_strategy.add("chosen", true);
+        }
       }
     }
   }
@@ -4109,21 +4252,41 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
     Notice that any other semi-joined tables must be outside this table range.
   */
   {
-    /*
-      LooseScan strategy can't handle interleaving between tables from the
-      semi-join that LooseScan is handling and any other tables.
-    */
     if (pos->first_loosescan_table != MAX_TABLES) {
-      TABLE_LIST *const first_emb_sj_nest =
+      const TABLE_LIST *first_emb_sj_nest =
           join->positions[pos->first_loosescan_table].table->emb_sj_nest;
       if (first_emb_sj_nest->sj_inner_tables & remaining_tables_incl) {
         // Stage 2: Accept remaining tables from the semi-join nest:
-        if (emb_sj_nest != first_emb_sj_nest)
+        if (emb_sj_nest != first_emb_sj_nest) {
+          /*
+            LooseScan strategy can't handle interleaving between tables from
+            the semi-join that LooseScan is handling and any other tables.
+          */
           pos->first_loosescan_table = MAX_TABLES;
+        } else {
+          /*
+            NestedLoopSemiJoinWithDuplicateRemovalIterator takes a
+            single-table iterator as left argument, and inner-joins
+            it with the set of other SJ-inner tables. E.g. it doesn't work for
+            A SEMI JOIN (B LEFT JOIN C) with B as LooseScan table. So:
+            - if we're now at the second SJ-inner table (1) , and
+            - this table belongs to a join nest which is outer-joined to
+            the first SJ-inner table (2), or is directly outer-joined to the
+            first SJ-inner table (3),
+            - then both tables are not inner-joined together and LooseScan is
+            impossible.
+          */
+          if (idx == pos->first_loosescan_table + 1 &&  // (1)
+              ((pos->table->table_ref->outer_join_nest() !=
+                join->positions[pos->first_loosescan_table]
+                    .table->table_ref->outer_join_nest())  // (2)
+               || pos->table->table_ref->outer_join))      // (3)
+            pos->first_loosescan_table = MAX_TABLES;
+        }
       } else {
         // Stage 3: Accept outer dependent and non-dependent tables:
         DBUG_ASSERT(emb_sj_nest != first_emb_sj_nest);
-        if (emb_sj_nest != NULL) pos->first_loosescan_table = MAX_TABLES;
+        if (emb_sj_nest != nullptr) pos->first_loosescan_table = MAX_TABLES;
       }
     }
 
@@ -4154,7 +4317,7 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
           emb_sj_nest->nested_join->sj_corr_tables) &&  // (5)
         (remaining_tables_incl &
          emb_sj_nest->nested_join->sj_depends_on) &&       // (6)
-        new_join_tab->keyuse() != NULL &&                  // (7)
+        new_join_tab->keyuse() != nullptr &&               // (7)
         !new_join_tab->table_ref->uses_materialization())  // (8)
     {
       // start considering using LooseScan strategy
@@ -4229,7 +4392,7 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
       The simple way to model this is to remove SJM-SCAN(...) fanout once
       we reach the point #2.
     */
-    if (pos->sjm_scan_need_tables && emb_sj_nest != NULL &&
+    if (pos->sjm_scan_need_tables && emb_sj_nest != nullptr &&
         emb_sj_nest !=
             join->positions[pos->sjm_scan_last_inner].table->emb_sj_nest)
       /*
@@ -4275,7 +4438,7 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
     The optimizer does not support that we have inner tables from more
     than one semi-join nest within the table range.
   */
-  if (pos->sjm_scan_need_tables && emb_sj_nest != NULL &&
+  if (pos->sjm_scan_need_tables && emb_sj_nest != nullptr &&
       emb_sj_nest !=
           join->positions[pos->sjm_scan_last_inner].table->emb_sj_nest)
     pos->sjm_scan_need_tables = 0;
@@ -4393,8 +4556,6 @@ void Optimize_table_order::advance_sj_state(table_map remaining_tables,
   */
   if (sj_strategy != SJ_OPT_NONE)
     pos->set_prefix_cost(best_cost, best_rowcount);
-
-  DBUG_VOID_RETURN;
 }
 
 /**
@@ -4467,6 +4628,7 @@ void Optimize_table_order::backout_nj_state(const table_map remaining_tables
     DBUG_ASSERT(nest->nj_counter > 0);
 
     cur_embedding_map |= nest->nj_map;
+
     bool was_fully_covered = nest->nj_total == nest->nj_counter;
 
     if (--nest->nj_counter == 0) cur_embedding_map &= ~nest->nj_map;

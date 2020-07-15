@@ -1,4 +1,3 @@
-//>>built
 define("dojox/editor/plugins/CollapsibleToolbar", [
 	"dojo",
 	"dijit",
@@ -12,9 +11,9 @@ define("dojox/editor/plugins/CollapsibleToolbar", [
 	"dojo/_base/declare",
 	"dojo/i18n",
 	"dojo/i18n!dojox/editor/plugins/nls/CollapsibleToolbar"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, _Widget, _TemplatedMixin, _Plugin) {
 
-dojo.declare("dojox.editor.plugins._CollapsibleToolbarButton", [dijit._Widget, dijit._TemplatedMixin], {
+var CollapsibleToolbarButton = dojo.declare("dojox.editor.plugins._CollapsibleToolbarButton", [_Widget, _TemplatedMixin], {
 	// summary:
 	//		Simple internal widget for representing a clickable button for expand/collapse
 	//		with A11Y support.
@@ -46,14 +45,13 @@ dojo.declare("dojox.editor.plugins._CollapsibleToolbarButton", [dijit._Widget, d
 	}
 });
 
-
-dojo.declare("dojox.editor.plugins.CollapsibleToolbar",dijit._editor._Plugin,{
+var CollapsibleToolbar = dojo.declare("dojox.editor.plugins.CollapsibleToolbar", _Plugin, {
 	// summary:
 	//		This plugin provides a weappable toolbar container to allow expand/collapse
 	//		of the editor toolbars.  This plugin should be registered first in most cases to
 	//		avoid conflicts in toolbar construction.
 
-	// _myWidgets: [private] array
+	// _myWidgets: [private] Array
 	//		Container for widgets I allocate that will need to be destroyed.
 	_myWidgets: null,
 
@@ -85,14 +83,14 @@ dojo.declare("dojox.editor.plugins.CollapsibleToolbar",dijit._editor._Plugin,{
 		var menuTd = dojo.create("td", {style: { width: "100%" }, tabindex: -1}, row);
 		var m = dojo.create("span", {style: { width: "100%" }, tabindex: -1}, menuTd);
 
-		var collapseButton = new dojox.editor.plugins._CollapsibleToolbarButton({
+		var collapseButton = new CollapsibleToolbarButton({
 			buttonClass: "dojoxCollapsibleToolbarCollapse",
 			title: strings.collapse,
 			text: "-",
 			textClass: "dojoxCollapsibleToolbarCollapseText"
 		});
 		dojo.place(collapseButton.domNode, openTd);
-		var expandButton = new dojox.editor.plugins._CollapsibleToolbarButton({
+		var expandButton = new CollapsibleToolbarButton({
 			buttonClass: "dojoxCollapsibleToolbarExpand",
 			title: strings.expand,
 			text: "+",
@@ -172,15 +170,18 @@ dojo.declare("dojox.editor.plugins.CollapsibleToolbar",dijit._editor._Plugin,{
 	}
 });
 
+// For monkey patching
+CollapsibleToolbar._CollapsibleToolbarButton = CollapsibleToolbarButton;
+
 // Register this plugin.
 dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name.toLowerCase();
 	if(name === "collapsibletoolbar"){
-		o.plugin = new dojox.editor.plugins.CollapsibleToolbar({});
+		o.plugin = new CollapsibleToolbar({});
 	}
 });
 
-return dojox.editor.plugins.CollapsibleToolbar;
+return CollapsibleToolbar;
 
 });

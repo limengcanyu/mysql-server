@@ -1,5 +1,5 @@
-//>>built
 define("dojox/dtl/_Templated", [
+	"dojo/aspect",
 	"dojo/_base/declare",
 	"./_base",
 	"dijit/_TemplatedMixin",
@@ -7,22 +7,16 @@ define("dojox/dtl/_Templated", [
 	"dojo/cache",
 	"dojo/_base/array",
 	"dojo/string",
-	"dojo/parser",
-	"dijit/_base/manager"
-], function(declare,dd,TemplatedMixin, domConstruct,Cache,Array,dString,Parser,dijitMgr){
-	/*=====
-		Cache = dojo.cache;
-		dString = dojo.string;
-		Parser = dojo.parser;
-		TemplatedMixin = dijit._TemplatedMixin;
-		dd = dojox.dtl;
-	=====*/
+	"dojo/parser"
+], function(aspect,declare,dd,TemplatedMixin, domConstruct,Cache,Array,dString,Parser){
+
 	return declare("dojox.dtl._Templated", TemplatedMixin, {
-		// summary: The base-class for DTL-templated widgets.
+		// summary:
+		//		The base-class for DTL-templated widgets.
 
 		_dijitTemplateCompat: false,
+		
 		buildRendering: function(){
-			// summary: The method overrides dijit._TemplatedMixin.startup.
 			var node;
 
 			if(this.domNode && !this._template){
@@ -38,7 +32,7 @@ define("dojox/dtl/_Templated", [
 				if(t instanceof dd.Template) {
 					this._template = t;
 				}else{
-					node = t;
+					node = t.cloneNode(true);
 				}
 			}
 			if(!node){
@@ -64,9 +58,7 @@ define("dojox/dtl/_Templated", [
 					node = nodes;
 				}
 			}
-			this._attachTemplateNodes(node, function(n,p){
-				return n.getAttribute(p);
-			});
+			this._attachTemplateNodes(node);
 			if(this.widgetsInTemplate){
 				//Make sure dojoType is used for parsing widgets in template.
 				//The Parser.query could be changed from multiversion support.
@@ -90,11 +82,21 @@ define("dojox/dtl/_Templated", [
 					parser._attrName = attr;
 				}
 
-				this._supportingWidgets = dijitMgr.findWidgets(node);
-
-				this._attachTemplateNodes(cw, function(n,p){
-					return n[p];
-				});
+				// Hook up attach points and events for nodes that were converted to widgets
+				for(var i = 0; i < cw.length; i++){
+					this._processTemplateNode(cw[i], function(n,p){
+						return n[p];
+					}, function(widget, type, callback){
+						// function to do data-dojo-attach-event to a widget
+						if(type in widget){
+							// back-compat, remove for 2.0
+							return aspect.after(widget, type, callback, true);
+						}else{
+							// 1.x may never hit this branch, but it's the default for 2.0
+							return widget.on(type, callback, true);
+						}
+					});
+				}
 			}
 
 			if(this.domNode){
@@ -106,6 +108,18 @@ define("dojox/dtl/_Templated", [
 
 			this._fillContent(this.srcNodeRef);
 		},
+
+		_processTemplateNode: function(/*DOMNode|Widget*/ baseNode, getAttrFunc, attachFunc){
+			// Override _AttachMixin._processNode to skip nodes with data-dojo-type set.   They are handled separately
+			// in the buildRendering() code above.
+
+			if(this.widgetsInTemplate && (getAttrFunc(baseNode, "dojoType") || getAttrFunc(baseNode, "data-dojo-type"))){
+				return true;
+			}
+
+			this.inherited(arguments);
+		},
+
 		_templateCache: {},
 		getCachedTemplate: function(templatePath, templateString, alwaysUseString){
 			// summary:
@@ -132,11 +146,11 @@ define("dojox/dtl/_Templated", [
 			}
 		},
 		render: function(){
-			// summary: Renders the widget.
+			// summary:
+			//		Renders the widget.
 			this.buildRendering();
 		},
 		startup: function(){
-			// summary: The method overrides dijit._TemplatedMixin.startup.
 			Array.forEach(this._startupWidgets, function(w){
 				if(w && !w._started && w.startup){
 					w.startup();

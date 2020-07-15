@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1997, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1997, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -54,12 +54,8 @@ class PersistentTableMetadata;
 
 struct recv_addr_t;
 
-/** This is set to FALSE if the backup was originally taken with the
-mysqlbackup --include regexp option: then we do not want to create tables in
-directories which were not included */
-extern bool meb_replay_file_ops;
-/** true if the redo log is copied during an online backup */
-extern volatile bool is_online_redo_copy;
+/** list of tablespaces, that experienced an inplace DDL during a backup op */
+extern std::list<std::pair<space_id_t, lsn_t>> index_load_list;
 /** the last redo log flush len as seen by MEB */
 extern volatile lsn_t backup_redo_log_flushed_lsn;
 /** TRUE when the redo log is being backed up */
@@ -72,17 +68,24 @@ log scanned.
 @param[in,out]	scanned_lsn		lsn of buffer start, we return scanned
 lsn
 @param[in,out]	scanned_checkpoint_no	4 lowest bytes of the highest scanned
+@param[out]	block_no	highest block no in scanned buffer.
 checkpoint number so far
 @param[out]	n_bytes_scanned		how much we were able to scan, smaller
-than buf_len if log data ended here */
+than buf_len if log data ended here
+@param[out]	has_encrypted_log	set true, if buffer contains encrypted
+redo log, set false otherwise */
 void meb_scan_log_seg(byte *buf, ulint buf_len, lsn_t *scanned_lsn,
-                      ulint *scanned_checkpoint_no, ulint *n_bytes_scanned);
+                      uint32_t *scanned_checkpoint_no, uint32_t *block_no,
+                      ulint *n_bytes_scanned, bool *has_encrypted_log);
 
 /** Applies the hashed log records to the page, if the page lsn is less than the
 lsn of a log record. This can be called when a buffer page has just been
 read in, or also for a page already in the buffer pool.
+
+TODO(Bug#31173032): Remove SUPPRESS_UBSAN_CLANG10.
+
 @param[in,out]	block		buffer block */
-void recv_recover_page_func(buf_block_t *block);
+void recv_recover_page_func(buf_block_t *block) SUPPRESS_UBSAN_CLANG10;
 
 /** Wrapper for recv_recover_page_func().
 Applies the hashed log records to the page, if the page lsn is less than the
@@ -99,8 +102,8 @@ void meb_apply_log_recs(void);
 
 /** Applies log records in the hash table to a backup using a callback
 functions.
-@param[in]	function		function for apply
-@param[in]	wait_till_finished	function for wait */
+@param[in]	apply_log_record_function  function for apply
+@param[in]	wait_till_done_function    function for wait */
 void meb_apply_log_recs_via_callback(
     void (*apply_log_record_function)(recv_addr_t *),
     void (*wait_till_done_function)());
@@ -138,16 +141,39 @@ bool meb_scan_log_recs(ulint available_memory, const byte *buf, ulint len,
                        lsn_t checkpoint_lsn, lsn_t start_lsn,
                        lsn_t *contiguous_lsn, lsn_t *group_scanned_lsn);
 
+/** Creates an IORequest object for decrypting redo log with
+Encryption::decrypt_log() method. If the encryption_info parameter is
+a null pointer, then encryption information is read from
+"ib_logfile0". If the encryption_info parameter is not null, then it
+should contain a copy of the encryption info stored in the header of
+"ib_logfile0".
+@param[in,out]	encryption_request      an IORequest object
+@param[in]	encryption_info         a copy of the encryption info in
+the header of "ib_logfile0", or a null pointer
+@retval	true	if the call succeeded
+@retval	false	otherwise */
+bool meb_read_log_encryption(IORequest &encryption_request,
+                             byte *encryption_info = nullptr);
+
 bool recv_check_log_header_checksum(const byte *buf);
+/** Check the 4-byte checksum to the trailer checksum field of a log
+block.
+@param[in]	block	pointer to a log block
+@return whether the checksum matches */
+bool log_block_checksum_is_ok(const byte *block);
 #else /* UNIV_HOTBACKUP */
 
 /** Applies the hashed log records to the page, if the page lsn is less than the
 lsn of a log record. This can be called when a buffer page has just been
 read in, or also for a page already in the buffer pool.
+
+TODO(fix Bug#31173032): Remove SUPPRESS_UBSAN_CLANG10.
+
 @param[in]	just_read_in	true if the IO handler calls this for a freshly
                                 read page
 @param[in,out]	block		buffer block */
-void recv_recover_page_func(bool just_read_in, buf_block_t *block);
+void recv_recover_page_func(bool just_read_in,
+                            buf_block_t *block) SUPPRESS_UBSAN_CLANG10;
 
 /** Wrapper for recv_recover_page_func().
 Applies the hashed log records to the page, if the page lsn is less than the
@@ -303,62 +329,12 @@ struct recv_addr_t {
   List rec_list;
 };
 
-struct recv_dblwr_t {
-  // Default constructor
-  recv_dblwr_t() : deferred(), pages() {}
-
-  /** Add a page frame to the doublewrite recovery buffer. */
-  void add(const byte *page) { pages.push_back(page); }
-
-  /** Find a doublewrite copy of a page.
-  @param[in]	space_id	tablespace identifier
-  @param[in]	page_no		page number
-  @return	page frame
-  @retval NULL if no page was found */
-  const byte *find_page(space_id_t space_id, page_no_t page_no);
-
-  using List = std::list<const byte *>;
-
-  struct Page {
-    /** Default constructor */
-    Page() : m_no(), m_ptr(), m_page() {}
-
-    /** Constructor
-    @param[in]	no	Doublewrite page number
-    @param[in]	page	Page read from no */
-    Page(page_no_t no, const byte *page);
-
-    /** Free the memory */
-    void close() {
-      ut_free(m_ptr);
-      m_ptr = nullptr;
-      m_page = nullptr;
-    }
-
-    /** Page number if the doublewrite buffer */
-    page_no_t m_no;
-
-    /** Unaligned pointer */
-    byte *m_ptr;
-
-    /** Aligned pointer derived from ptr */
-    byte *m_page;
-  };
-
-  using Deferred = std::list<Page>;
-
-  /** Pages that could not be recovered from the doublewrite
-  buffer at the start and need to be recovered once we process an
-  MLOG_FILE_OPEN redo log record */
-  Deferred deferred;
-
-  /** Recovered doublewrite buffer page frames */
-  List pages;
-
-  // Disable copying
-  recv_dblwr_t(const recv_dblwr_t &) = delete;
-  recv_dblwr_t &operator=(const recv_dblwr_t &) = delete;
-};
+// Forward declaration
+namespace dblwr {
+namespace recv {
+class DBLWR;
+}
+}  // namespace dblwr
 
 /** Class to parse persistent dynamic metadata redo log, store and
 merge them and apply them to in-memory table objects finally */
@@ -469,6 +445,8 @@ struct recv_sys_t {
   keeping free blocks.  BUF_FLUSH_LIST: flush all of blocks. */
   buf_flush_t flush_type;
 
+#else  /* !UNIV_HOTBACKUP */
+  bool apply_file_operations;
 #endif /* !UNIV_HOTBACKUP */
 
   /** This is true when log rec application to pages is allowed;
@@ -518,6 +496,17 @@ struct recv_sys_t {
   /** The log records have been parsed up to this lsn */
   lsn_t recovered_lsn;
 
+  /** The previous value of recovered_lsn - before we parsed the last mtr.
+  It is equal to recovered_lsn before we parsed any mtr. This is used to
+  find moments in which recovered_lsn moves to the next block in which case
+  we should update the last_block_first_rec_group (described below). */
+  lsn_t previous_recovered_lsn;
+
+  /** Tracks what should be the proper value of first_rec_group field in the
+  header of the block to which recovered_lsn belongs. It might be also zero,
+  in which case it means we do not know. */
+  uint32_t last_block_first_rec_group;
+
   /** Set when finding a corrupt log block or record, or there
   is a log parsing buffer overflow */
   bool found_corrupt_log;
@@ -529,14 +518,22 @@ struct recv_sys_t {
   /** If the recovery is from a cloned database. */
   bool is_cloned_db;
 
+  /** Recovering from MEB. */
+  bool is_meb_recovery;
+
+  /** Doublewrite buffer state before MEB recovery starts. We restore to this
+  state after MEB recovery completes and disable the doublewrite buffer during
+  MEB recovery. */
+  bool dblwr_state;
+
   /** Hash table of pages, indexed by SpaceID. */
   Spaces *spaces;
 
   /** Number of not processed hashed file addresses in the hash table */
   ulint n_addrs;
 
-  /** Doublewrite buffer state during recovery. */
-  recv_dblwr_t dblwr;
+  /** Doublewrite buffer pages, destroyed after recovery completes */
+  dblwr::recv::DBLWR *dblwr;
 
   /** We store and merge all table persistent data here during
   scanning redo logs */

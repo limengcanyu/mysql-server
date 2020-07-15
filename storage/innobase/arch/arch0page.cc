@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2017, 2019, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2017, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -44,15 +44,11 @@ uint ARCH_PAGE_FILE_DATA_CAPACITY =
     ARCH_PAGE_FILE_CAPACITY - ARCH_PAGE_FILE_NUM_RESET_PAGE;
 #endif
 
-/** Global to indicate if the page archiver task is active */
-bool page_archiver_is_active = false;
-
 /** Event to signal the page archiver thread. */
 os_event_t page_archiver_thread_event;
 
 /** Archiver background thread */
 void page_archiver_thread() {
-  bool page_abort = false;
   bool page_wait = false;
 
   Arch_Group::init_dblwr_file_ctx(
@@ -60,14 +56,12 @@ void page_archiver_thread() {
       static_cast<uint64_t>(ARCH_PAGE_BLK_SIZE) * ARCH_DBLWR_FILE_CAPACITY);
 
   while (true) {
-    if (!page_abort) {
-      /* Archive in memory data blocks to disk. */
-      page_abort = arch_page_sys->archive(&page_wait);
+    /* Archive in memory data blocks to disk. */
+    auto page_abort = arch_page_sys->archive(&page_wait);
 
-      if (page_abort) {
-        ib::info(ER_IB_MSG_14) << "Exiting Page Archiver";
-        break;
-      }
+    if (page_abort) {
+      ib::info(ER_IB_MSG_14) << "Exiting Page Archiver";
+      break;
     }
 
     if (page_wait) {
@@ -76,8 +70,6 @@ void page_archiver_thread() {
       os_event_reset(page_archiver_thread_event);
     }
   }
-
-  page_archiver_is_active = false;
 }
 
 void Arch_Reset_File::init() {
@@ -152,7 +144,7 @@ dberr_t Arch_Group::write_to_doublewrite_file(Arch_File_Ctx *from_file,
 dberr_t Arch_Group::init_dblwr_file_ctx(const char *path, const char *base_file,
                                         uint num_files, uint64_t file_size) {
   auto err =
-      s_dblwr_file_ctx.init(path, nullptr, base_file, num_files, file_size);
+      s_dblwr_file_ctx.init(ARCH_DIR, path, base_file, num_files, file_size);
 
   if (err != DB_SUCCESS) {
     ut_ad(s_dblwr_file_ctx.get_phy_size() == file_size);
@@ -619,7 +611,8 @@ bool Arch_File_Ctx::validate_stop_point_in_file(Arch_Group *group,
   byte buf[ARCH_PAGE_BLK_SIZE];
 
   /* Read the entire reset block. */
-  dberr_t err = os_file_read(request, file, buf, offset, ARCH_PAGE_BLK_SIZE);
+  dberr_t err =
+      os_file_read(request, m_path_name, file, buf, offset, ARCH_PAGE_BLK_SIZE);
 
   if (err != DB_SUCCESS) {
     return (false);
@@ -648,7 +641,8 @@ bool Arch_File_Ctx::validate_reset_block_in_file(pfs_os_file_t file,
   byte buf[ARCH_PAGE_BLK_SIZE];
 
   /* Read the entire reset block. */
-  dberr_t err = os_file_read(request, file, buf, 0, ARCH_PAGE_BLK_SIZE);
+  dberr_t err =
+      os_file_read(request, m_path_name, file, buf, 0, ARCH_PAGE_BLK_SIZE);
 
   if (err != DB_SUCCESS) {
     return (false);
@@ -765,15 +759,12 @@ bool Arch_File_Ctx::validate(Arch_Group *group, uint file_index,
 
   build_name(file_index, start_lsn, file_name, MAX_ARCH_PAGE_FILE_NAME_LEN);
 
-  os_file_type_t type;
-  bool exists = false;
-  bool success = os_file_status(file_name, &exists, &type);
-
-  if (!success || !exists) {
+  if (!os_file_exists(file_name)) {
     /* Could be the case if files are purged. */
     return (true);
   }
 
+  bool success;
   pfs_os_file_t file;
 
   file = os_file_create(innodb_arch_file_key, file_name, OS_FILE_OPEN,
@@ -819,7 +810,7 @@ lsn_t Arch_File_Ctx::purge(lsn_t begin_lsn, lsn_t end_lsn, lsn_t purge_lsn) {
   auto success = find_reset_point(purge_lsn, reset_point);
 
   if (!success || reset_point.lsn == begin_lsn) {
-    ib::info() << "Could not find appropriate reset points.";
+    ib::info(ER_IB_MSG_PAGE_ARCH_NO_RESET_POINTS);
     return (LSN_MAX);
   }
 
@@ -927,7 +918,7 @@ int Page_Arch_Client_Ctx::start(bool recovery, uint64_t *start_id) {
   switch (m_state) {
     case ARCH_CLIENT_STATE_STOPPED:
       if (!m_is_durable) {
-        ib::error() << "Client needs to release its resources";
+        arch_client_mutex_exit();
         return (ER_PAGE_TRACKING_NOT_STARTED);
       }
       DBUG_PRINT("page_archiver", ("Archiver in progress"));
@@ -973,6 +964,12 @@ int Page_Arch_Client_Ctx::start(bool recovery, uint64_t *start_id) {
   arch_client_mutex_exit();
 
   if (!m_is_durable) {
+    /* Update DD table buffer to get rid of recovery dependency for auto INC */
+    dict_persist_to_dd_table_buffer();
+
+    /* Make sure all written pages are synced to disk. */
+    fil_flush_file_spaces(to_int(FIL_TYPE_TABLESPACE));
+
     ib::info(ER_IB_MSG_20) << "Clone Start PAGE ARCH : start LSN : "
                            << m_start_lsn << ", checkpoint LSN : "
                            << log_get_checkpoint_lsn(*log_sys);
@@ -1013,13 +1010,9 @@ int Page_Arch_Client_Ctx::stop(lsn_t *stop_id) {
   auto err =
       arch_page_sys->stop(m_group, &m_stop_lsn, &m_stop_pos, m_is_durable);
 
-  if (err != 0) {
-    arch_client_mutex_exit();
-    return (err);
-  }
-
   ut_d(print());
 
+  /* We stop the client even in cases of an error. */
   m_state = ARCH_CLIENT_STATE_STOPPED;
 
   if (stop_id != nullptr) {
@@ -1155,13 +1148,12 @@ bool wait_flush_archiver(Page_Wait_Flush_Archiver_Cbk cbk_func) {
 
     auto err = Clone_Sys::wait_default(
         [&](bool alert, bool &result) {
-
           ut_ad(mutex_own(arch_page_sys->get_oper_mutex()));
           result = cbk_func();
 
           int err2 = 0;
-          if (srv_shutdown_state == SRV_SHUTDOWN_LAST_PHASE ||
-              srv_shutdown_state == SRV_SHUTDOWN_EXIT_THREADS ||
+          if (srv_shutdown_state.load() == SRV_SHUTDOWN_LAST_PHASE ||
+              srv_shutdown_state.load() == SRV_SHUTDOWN_EXIT_THREADS ||
               arch_page_sys->is_abort()) {
             err2 = ER_QUERY_INTERRUPTED;
 
@@ -1255,9 +1247,8 @@ bool Arch_Block::validate(byte *block) {
 
   if (checksum != block_checksum) {
     ut_ad(0);
-    ib::warn() << "Page archiver's doublewrite buffer for "
-               << "block " << Arch_Block::get_block_number(block)
-               << " is not valid.";
+    ib::warn(ER_IB_ERR_PAGE_ARCH_INVALID_DOUBLE_WRITE_BUF)
+        << Arch_Block::get_block_number(block);
     return (false);
   } else if (Arch_Block::is_zeroes(block)) {
     return (false);
@@ -1603,7 +1594,8 @@ Arch_Page_Sys::Arch_Page_Sys() {
 }
 
 Arch_Page_Sys::~Arch_Page_Sys() {
-  ut_ad(m_state == ARCH_STATE_INIT || m_state == ARCH_STATE_ABORT);
+  ut_ad(m_state == ARCH_STATE_INIT || m_state == ARCH_STATE_ABORT ||
+        m_state == ARCH_STATE_READ_ONLY);
   ut_ad(m_current_group == nullptr);
 
   for (auto group : m_group_list) {
@@ -1696,11 +1688,8 @@ void Arch_Page_Sys::flush_at_checkpoint(lsn_t checkpoint_lsn) {
   /* We need to ensure that blocks are flushed until request_flush_pos */
   auto cbk = [&] { return (request_flush_pos < m_flush_pos ? false : true); };
 
-  bool success = wait_flush_archiver(cbk);
-
-  if (!success) {
-    ib::warn() << "Unable to flush. Page archiving data"
-               << " may be corrupt in case of a crash";
+  if (!wait_flush_archiver(cbk)) {
+    ib::warn(ER_IB_WRN_PAGE_ARCH_FLUSH_DATA);
   }
 
   arch_oper_mutex_exit();
@@ -1735,7 +1724,7 @@ void Arch_Page_Sys::track_page(buf_page_t *bpage, lsn_t track_lsn,
 
     /* Can possibly loop only two times. */
     if (count >= 2) {
-      if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
+      if (srv_shutdown_state.load() >= SRV_SHUTDOWN_CLEANUP) {
         arch_oper_mutex_exit();
         return;
       }
@@ -1846,6 +1835,11 @@ int Arch_Page_Sys::get_pages(MYSQL_THD thd, Page_Track_Callback cbk_func,
   DBUG_PRINT("page_archiver", ("Fetch pages"));
 
   arch_mutex_enter();
+
+  if (m_state == ARCH_STATE_READ_ONLY) {
+    arch_mutex_exit();
+    return (0);
+  }
 
   /** 1. Get appropriate LSN range. */
   Arch_Group *group = nullptr;
@@ -2100,7 +2094,7 @@ int Arch_Page_Sys::get_num_pages(lsn_t &start_id, lsn_t &stop_id,
   success = get_num_pages(start_pos, stop_pos, *num_pages);
 
   if (!success) {
-    num_pages = 0;
+    num_pages = nullptr;
   }
 
   DBUG_PRINT("page_archiver",
@@ -2124,11 +2118,10 @@ bool Arch_Page_Sys::wait_idle() {
 
     auto err = Clone_Sys::wait_default(
         [&](bool alert, bool &result) {
-
           ut_ad(mutex_own(&m_mutex));
           result = (m_state == ARCH_STATE_PREPARE_IDLE);
 
-          if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
+          if (srv_shutdown_state.load() >= SRV_SHUTDOWN_CLEANUP) {
             return (ER_QUERY_INTERRUPTED);
           }
 
@@ -2210,7 +2203,7 @@ void Arch_Page_Sys::track_initial_pages() {
     skip_count = 0;
 
     /* Add all pages for which IO is already started. */
-    while (bpage != NULL) {
+    while (bpage != nullptr) {
       if (fsp_is_system_temporary(bpage->id.space())) {
         bpage = UT_LIST_GET_PREV(list, bpage);
         continue;
@@ -2358,21 +2351,27 @@ int Arch_Page_Sys::start_during_recovery(Arch_Group *group,
 int Arch_Page_Sys::start(Arch_Group **group, lsn_t *start_lsn,
                          Arch_Page_Pos *start_pos, bool is_durable,
                          bool restart, bool recovery) {
+  /* Check if archiver task needs to be started. */
+  arch_mutex_enter();
+
+  if (m_state == ARCH_STATE_READ_ONLY) {
+    arch_mutex_exit();
+    return (0);
+  }
+
   bool start_archiver = true;
   bool attach_to_current = false;
   bool acquired_oper_mutex = false;
 
   lsn_t log_sys_lsn = LSN_MAX;
 
-  /* Check if archiver task needs to be started. */
-  arch_mutex_enter();
   start_archiver = is_init();
 
   /* Wait for idle state, if preparing to idle. */
   if (!wait_idle()) {
     int err = 0;
 
-    if (srv_shutdown_state != SRV_SHUTDOWN_NONE) {
+    if (srv_shutdown_state.load() >= SRV_SHUTDOWN_CLEANUP) {
       err = ER_QUERY_INTERRUPTED;
       my_error(err, MYF(0));
     } else {
@@ -2380,6 +2379,7 @@ int Arch_Page_Sys::start(Arch_Group **group, lsn_t *start_lsn,
       my_error(err, MYF(0), "Page Archiver wait too long");
     }
 
+    arch_mutex_exit();
     return (err);
   }
 
@@ -2524,20 +2524,19 @@ int Arch_Page_Sys::start(Arch_Group **group, lsn_t *start_lsn,
   m_state = ARCH_STATE_ACTIVE;
   *start_lsn = m_last_lsn;
 
+  bool wait_for_block_flush = false;
+
   if (!recovery) {
     if (!attach_to_current) {
-      save_reset_point(is_durable);
+      wait_for_block_flush = save_reset_point(is_durable);
 
     } else if (is_durable && !m_current_group->is_durable()) {
       /* In case this is the first durable archiving of the group and if the
-      gap is small for a reset wait for the reset info to be flushed */
+      gap is small for a reset then set the below variable and wait for the
+      reset info to be flushed before we return to the caller. */
 
-      bool success = wait_for_reset_info_flush(m_last_pos.m_block_num);
-
-      if (!success) {
-        ib::warn() << "Unable to flush. Page archiving data"
-                   << " may be corrupt in case of a crash";
-      }
+      wait_for_block_flush = true;
+      m_request_blk_num_with_lsn = m_last_pos.m_block_num;
     }
   }
 
@@ -2561,10 +2560,6 @@ int Arch_Page_Sys::start(Arch_Group **group, lsn_t *start_lsn,
     /* Attach to the group. */
     m_current_group->attach(is_durable);
 
-    if (is_durable && !recovery) {
-      m_current_group->mark_active();
-      m_current_group->mark_durable();
-    }
   } else if (recovery) {
     arch_oper_mutex_enter();
     acquired_oper_mutex = true;
@@ -2581,9 +2576,24 @@ int Arch_Page_Sys::start(Arch_Group **group, lsn_t *start_lsn,
 
   arch_mutex_exit();
 
+  if (wait_for_block_flush) {
+    bool success = wait_for_reset_info_flush(m_request_blk_num_with_lsn);
+
+    if (!success) {
+      ib::warn(ER_IB_WRN_PAGE_ARCH_FLUSH_DATA);
+    }
+
+    ut_ad(m_current_group->get_file_count());
+  }
+
   if (!recovery) {
-    /* Make sure all written pages are synced to disk. */
-    log_request_checkpoint(*log_sys, false);
+    if (is_durable && !restart) {
+      m_current_group->mark_active();
+      m_current_group->mark_durable();
+    }
+
+    /* Request checkpoint */
+    log_request_checkpoint(*log_sys, true);
   }
 
   return (0);
@@ -2594,6 +2604,11 @@ int Arch_Page_Sys::stop(Arch_Group *group, lsn_t *stop_lsn,
   Arch_Block *cur_blk;
 
   arch_mutex_enter();
+
+  if (m_state == ARCH_STATE_READ_ONLY) {
+    arch_mutex_exit();
+    return (0);
+  }
 
   ut_ad(group == m_current_group);
   ut_ad(m_state == ARCH_STATE_ACTIVE);
@@ -2608,6 +2623,7 @@ int Arch_Page_Sys::stop(Arch_Group *group, lsn_t *stop_lsn,
   arch_oper_mutex_exit();
 
   int err = 0;
+  bool wait_for_block_flush = false;
 
   /* If no other active client, let the system get into idle state. */
   if (count == 0 && m_state != ARCH_STATE_ABORT) {
@@ -2624,23 +2640,7 @@ int Arch_Page_Sys::stop(Arch_Group *group, lsn_t *stop_lsn,
 
     os_event_set(page_archiver_thread_event);
 
-    if (m_current_group->is_durable()) {
-      /* Wait for flush archiver to flush the blocks. */
-      auto cbk = [&] {
-        if (m_flush_pos.m_block_num > m_request_flush_pos.m_block_num) {
-          return (false);
-        }
-        return (true);
-      };
-
-      bool success = wait_flush_archiver(cbk);
-      if (!success) {
-        ib::warn() << "Unable to flush. Page archiving data"
-                   << " may be corrupt in case of a crash";
-      }
-
-      ut_ad(group->validate_info_in_files());
-    }
+    wait_for_block_flush = m_current_group->is_durable() ? true : false;
 
   } else {
     if (m_state != ARCH_STATE_ABORT && is_durable &&
@@ -2663,6 +2663,24 @@ int Arch_Page_Sys::stop(Arch_Group *group, lsn_t *stop_lsn,
 
   arch_oper_mutex_exit();
   arch_mutex_exit();
+
+  if (wait_for_block_flush) {
+    /* Wait for flush archiver to flush the blocks. */
+    auto cbk = [&] {
+      return (m_flush_pos.m_block_num > m_request_flush_pos.m_block_num ? false
+                                                                        : true);
+    };
+
+    arch_oper_mutex_enter();
+
+    if (!wait_flush_archiver(cbk)) {
+      ib::warn(ER_IB_WRN_PAGE_ARCH_FLUSH_DATA);
+    }
+
+    arch_oper_mutex_exit();
+
+    ut_ad(group->validate_info_in_files());
+  }
 
   return (err);
 }
@@ -2834,8 +2852,8 @@ dberr_t Arch_Page_Sys::flush_blocks(bool *wait) {
 bool Arch_Page_Sys::archive(bool *wait) {
   dberr_t db_err;
 
-  auto is_abort = (srv_shutdown_state == SRV_SHUTDOWN_LAST_PHASE ||
-                   srv_shutdown_state == SRV_SHUTDOWN_EXIT_THREADS ||
+  auto is_abort = (srv_shutdown_state.load() == SRV_SHUTDOWN_LAST_PHASE ||
+                   srv_shutdown_state.load() == SRV_SHUTDOWN_EXIT_THREADS ||
                    m_state == ARCH_STATE_ABORT);
 
   arch_oper_mutex_enter();
@@ -2944,7 +2962,8 @@ int Arch_Group::read_from_file(Arch_Page_Pos *read_pos, uint read_len,
   request.disable_compression();
   request.clear_encrypted();
 
-  auto db_err = os_file_read(request, file, read_buff, offset, read_len);
+  auto db_err =
+      os_file_read(request, file_name, file, read_buff, offset, read_len);
 
   os_file_close(file);
 
@@ -2971,7 +2990,7 @@ int Arch_Group::read_data(Arch_Page_Pos cur_pos, byte *buff, uint buff_len) {
   return (err);
 }
 
-void Arch_Page_Sys::save_reset_point(bool is_durable) {
+bool Arch_Page_Sys::save_reset_point(bool is_durable) {
   /* 1. Add the reset info to the reset block */
 
   uint current_file_index = Arch_Block::get_file_index(m_last_pos.m_block_num);
@@ -3019,25 +3038,12 @@ void Arch_Page_Sys::save_reset_point(bool is_durable) {
 
   m_request_blk_num_with_lsn = request_blk_num_with_lsn;
 
-  /* 3. In case of durable archiving wait till the reset block and the data
-  block with reset LSN is flushed so that we do not lose reset information in
-  case of a crash. This is not required for non-durable archiving. */
-  if (is_durable) {
-    bool success = wait_for_reset_info_flush(request_blk_num_with_lsn);
-
-    if (!success) {
-      ib::warn() << "Unable to flush. Page archiving data"
-                 << " may be corrupt in case of a crash";
-    }
-
-    ut_ad(m_current_group->get_file_count());
-    ut_ad(current_file_index < m_current_group->get_file_count());
-  }
-
   DBUG_PRINT("page_archiver",
              ("Saved reset point at %u - %" PRIu64 ", %" PRIu64 ", %u\n",
               m_last_reset_file_index, m_last_lsn, m_last_pos.m_block_num,
               m_last_pos.m_offset));
+
+  return is_durable;
 }
 
 bool Arch_Page_Sys::wait_for_reset_info_flush(uint64_t request_blk) {
@@ -3052,7 +3058,11 @@ bool Arch_Page_Sys::wait_for_reset_info_flush(uint64_t request_blk) {
     return (false);
   };
 
+  arch_oper_mutex_enter();
+
   bool success = wait_flush_archiver(cbk);
+
+  arch_oper_mutex_exit();
 
   return (success);
 }

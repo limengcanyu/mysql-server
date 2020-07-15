@@ -1,20 +1,19 @@
-//>>built
 define("dojox/editor/plugins/SafePaste", [
 	"dojo",
 	"dijit",
 	"dojox",
+	"dojox/editor/plugins/PasteFromWord",
 	"dijit/Dialog",
 	"dojo/_base/connect",
 	"dojo/_base/declare",
 	"dojo/i18n",
 	"dojo/string",
-	"dojox/editor/plugins/PasteFromWord",
 	"dojo/i18n!dojox/editor/plugins/nls/SafePaste",
 	"dojo/i18n!dijit/nls/common",
 	"dojo/i18n!dijit/_editor/nls/commands"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, PasteFromWord) {
 
-dojo.declare("dojox.editor.plugins.SafePaste", [dojox.editor.plugins.PasteFromWord],{
+var SafePaste = dojo.declare("dojox.editor.plugins.SafePaste", [PasteFromWord],{
 	// summary:
 	//		This plugin extends from the PasteFromWord plugin and provides
 	//		'safe pasting', meaning that it will not allow keyboard/menu pasting
@@ -30,7 +29,6 @@ dojo.declare("dojox.editor.plugins.SafePaste", [dojox.editor.plugins.PasteFromWo
 		this._filters = this._filters.slice(0); 
 		var strings = dojo.i18n.getLocalization("dojox.editor.plugins", "SafePaste");
 		dojo.mixin(strings, dojo.i18n.getLocalization("dijit", "common"));
-		strings.cancel = strings.buttonCancel;
 		dojo.mixin(strings, dojo.i18n.getLocalization("dijit._editor", "commands"));
 
 		this._uId = dijit.getUniqueId(this.editor.id);
@@ -74,6 +72,7 @@ dojo.declare("dojox.editor.plugins.SafePaste", [dojox.editor.plugins.PasteFromWo
 		//		Overrides _Plugin.updateState(). 
 		// tags:
 		//		protected
+		
 		// Do nothing.
 	},
 	
@@ -103,7 +102,7 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name.toLowerCase();
 	if(name === "safepaste"){
-		o.plugin = new dojox.editor.plugins.SafePaste({
+		o.plugin = new SafePaste({
 			width: (o.args.hasOwnProperty("width"))?o.args.width:"400px",
 			height: (o.args.hasOwnProperty("height"))?o.args.width:"300px",
 			stripTags: (o.args.hasOwnProperty("stripTags"))?o.args.stripTags:null 
@@ -111,6 +110,6 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	}
 });
 
-return dojox.editor.plugins.SafePaste;
+return SafePaste;
 
 });

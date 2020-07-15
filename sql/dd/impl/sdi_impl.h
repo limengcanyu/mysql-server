@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -403,7 +403,7 @@ bool read_binary(dd::Sdi_rcontext *rctx, binary_t *b, const GV &gv,
   int binsz = base64_needed_decoded_length(b64sz);
 
   char *bp = dd::buf_handle(rctx, static_cast<size_t>(binsz));
-  binsz = base64_decode(b64, b64sz, bp, NULL, 0);
+  binsz = base64_decode(b64, b64sz, bp, nullptr, 0);
   *b = binary_t(bp, binsz);
   return false;
 }
@@ -511,8 +511,8 @@ bool deserialize_each(dd::Sdi_rcontext *rctx, ADD_BINDER add_binder,
   }
   return false;
 }
-  /** @} */  // special_composite_templates
+/** @} */  // special_composite_templates
 
-  //} // namespace dd_sdi_impl
+//} // namespace dd_sdi_impl
 
 #endif /* DD_SERIALIZE_IMPL_H_INCLUDED */

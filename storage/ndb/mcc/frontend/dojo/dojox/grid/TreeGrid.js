@@ -144,7 +144,7 @@ this.inherited(arguments);
 var obj=this.inherited(arguments);
 return _5.mixin(obj,_12);
 }});
-var _45=_3("dojox.grid.TreePath",null,{level:0,_str:"",_arr:null,grid:null,store:null,cell:null,item:null,constructor:function(_46,_47){
+var _45=_3("dojox.grid.TreePath",null,{level:0,_str:"",_arr:null,grid:null,store:null,cell:null,constructor:function(_46,_47){
 if(_5.isString(_46)){
 this._str=_46;
 this._arr=_4.map(_46.split("/"),function(_48){
@@ -443,6 +443,9 @@ this.updateRow(idx);
 },_onDelete:function(_77){
 this._cleanupExpandoCache(this._getItemIndex(_77,true),this.store.getIdentity(_77),_77);
 this.inherited(arguments);
+},_clearData:function(){
+this.inherited(arguments);
+this._by_idty_paths={};
 },_cleanupExpandoCache:function(_78,_79,_7a){
 },_addItem:function(_7b,_7c,_7d,_7e){
 if(!_7e&&this.model&&_4.indexOf(this.model.root.children,_7b)==-1){

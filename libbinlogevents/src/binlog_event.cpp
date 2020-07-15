@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -63,7 +63,8 @@ enum_binlog_checksum_alg Log_event_footer::get_checksum_alg(
     Event_reader &reader) {
   enum_binlog_checksum_alg alg =
       get_checksum_alg(reader.buffer(), reader.length());
-  reader.shrink_limit(BINLOG_CHECKSUM_ALG_DESC_LEN);
+  if (alg != binary_log::BINLOG_CHECKSUM_ALG_UNDEF)
+    reader.shrink_limit(BINLOG_CHECKSUM_LEN);
   return alg;
 }
 
@@ -163,7 +164,7 @@ bool Log_event_footer::event_checksum_test(unsigned char *event_buf,
            sizeof(incoming));
     incoming = le32toh(incoming);
 
-    computed = checksum_crc32(0L, NULL, 0);
+    computed = checksum_crc32(0L, nullptr, 0);
     /* checksum the event content but not the checksum part itself */
     computed =
         binary_log::checksum_crc32(computed, (const unsigned char *)event_buf,
@@ -282,7 +283,7 @@ void Binary_log_event::print_long_info(std::ostream &) {}
   Please note this is different from the print_event_info methods
   used by mysqlbinlog.cc.
 
-  @param std output stream to which the event data is appended.
+  @param info std output stream to which the event data is appended.
 */
 void Stop_event::print_long_info(std::ostream &info) {
   info << "Timestamp: " << header()->when.tv_sec;

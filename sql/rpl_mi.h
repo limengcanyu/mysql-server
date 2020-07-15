@@ -1,4 +1,4 @@
-/* Copyright (c) 2006, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2006, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -27,7 +27,8 @@
 #include <time.h>
 #include <atomic>
 
-#include "binlog_event.h"  // enum_binlog_checksum_alg
+#include "compression.h"  // COMPRESSION_ALGORITHM_NAME_BUFFER_SIZE
+#include "libbinlogevents/include/binlog_event.h"  // enum_binlog_checksum_alg
 #include "m_string.h"
 #include "my_inttypes.h"
 #include "my_io.h"
@@ -82,7 +83,7 @@ struct MYSQL;
 
 *****************************************************************************/
 
-class Master_info : public Rpl_info, public Gtid_mode_copy {
+class Master_info : public Rpl_info {
   friend class Rpl_info_factory;
 
  public:
@@ -276,7 +277,17 @@ class Master_info : public Rpl_info, public Gtid_mode_copy {
 
   bool ssl;  // enables use of SSL connection if true
   char ssl_ca[FN_REFLEN], ssl_capath[FN_REFLEN], ssl_cert[FN_REFLEN];
-  char ssl_cipher[FN_REFLEN], ssl_key[FN_REFLEN], tls_version[FN_REFLEN];
+  char ssl_cipher[FN_REFLEN], ssl_key[FN_REFLEN];
+  char tls_version[FN_REFLEN];
+  /*
+    Ciphersuites used for TLS 1.3 communication with the master server.
+    tls_ciphersuites = NULL means that TLS 1.3 default ciphersuites
+    are enabled. To allow a value that can either be NULL or a string,
+    it is represented by the pair:
+      first:  true if tls_ciphersuites is set to NULL
+      second: the string value when first is false
+  */
+  std::pair<bool, std::string> tls_ciphersuites = {true, ""};
   char ssl_crl[FN_REFLEN], ssl_crlpath[FN_REFLEN];
   char public_key_path[FN_REFLEN];
   bool ssl_verify_server_cert;
@@ -327,6 +338,13 @@ class Master_info : public Rpl_info, public Gtid_mode_copy {
   const char *network_namespace_str() const {
     return is_set_network_namespace() ? network_namespace : "";
   }
+  /*
+    describes what compression algorithm and level is used between
+    master/slave communication protocol
+  */
+  char compression_algorithm[COMPRESSION_ALGORITHM_NAME_BUFFER_SIZE];
+  int zstd_compression_level;
+  NET_SERVER server_extn;  // maintain compress context info.
 
   int mi_init_info();
   void end_info();
@@ -462,6 +480,13 @@ class Master_info : public Rpl_info, public Gtid_mode_copy {
   */
   static const uint *get_table_pk_field_indexes();
 
+  /**
+     Sets bits for columns that are allowed to be `NULL`.
+
+     @param nullable_fields the bitmap to hold the nullable fields.
+  */
+  static void set_nullable_fields(MY_BITMAP *nullable_fields);
+
   bool is_auto_position() { return auto_position; }
 
   void set_auto_position(bool auto_position_param) {
@@ -549,8 +574,10 @@ class Master_info : public Rpl_info, public Gtid_mode_copy {
     It will also be used to verify transactions boundaries on the relay log
     while collecting the Retrieved_Gtid_Set to make sure of only adding GTIDs
     of fully retrieved transactions.
+    Its output is also used to detect when events were not logged using row
+    based logging.
   */
-  Transaction_boundary_parser transaction_parser;
+  Replication_transaction_boundary_parser transaction_parser;
 
  private:
   /*

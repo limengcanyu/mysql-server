@@ -1,4 +1,3 @@
-//>>built
 define("dojox/editor/plugins/FindReplace", [
 	"dojo",
 	"dijit",
@@ -18,17 +17,20 @@ define("dojox/editor/plugins/FindReplace", [
 	"dijit/form/Button",
 	"dijit/form/DropDownButton",
 	"dijit/form/ToggleButton",
-	"dojox/editor/plugins/ToolbarLineBreak",
+	"./ToolbarLineBreak",
 	"dojo/_base/connect",
 	"dojo/_base/declare",
 	"dojo/i18n",
 	"dojo/string",
 	"dojo/i18n!dojox/editor/plugins/nls/FindReplace"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, manager, popup,
+			_Widget, _TemplatedMixin, _KeyNavContainer, _WidgetsInTemplateMixin, TooltipDialog,
+			Toolbar, CheckBox, _TextBoxMixin, TextBox, _Plugin) {
 
 dojo.experimental("dojox.editor.plugins.FindReplace");
 
-dojo.declare("dojox.editor.plugins._FindReplaceCloseBox", [dijit._Widget, dijit._TemplatedMixin, dijit._WidgetsInTemplateMixin], {
+var FindReplaceCloseBox = dojo.declare("dojox.editor.plugins._FindReplaceCloseBox",
+	[_Widget, _TemplatedMixin, _WidgetsInTemplateMixin], {
 	// summary:
 	//		Base class for widgets that contains a button labeled X
 	//		to close the tool bar.
@@ -57,8 +59,8 @@ dojo.declare("dojox.editor.plugins._FindReplaceCloseBox", [dijit._Widget, dijit.
 });
 
 
-dojo.declare("dojox.editor.plugins._FindReplaceTextBox",
-	[dijit._Widget, dijit._TemplatedMixin, dijit._WidgetsInTemplateMixin],{
+var FindReplaceTextBox = dojo.declare("dojox.editor.plugins._FindReplaceTextBox",
+	[_Widget, _TemplatedMixin, _WidgetsInTemplateMixin],{
 	// summary:
 	//		Base class for widgets that contains a label (like "Font:")
 	//		and a TextBox to pick a value.
@@ -163,8 +165,8 @@ dojo.declare("dojox.editor.plugins._FindReplaceTextBox",
 });
 
 
-dojo.declare("dojox.editor.plugins._FindReplaceCheckBox",
-	[dijit._Widget, dijit._TemplatedMixin, dijit._WidgetsInTemplateMixin],{
+var FindReplaceCheckBox = dojo.declare("dojox.editor.plugins._FindReplaceCheckBox",
+	[_Widget, _TemplatedMixin, _WidgetsInTemplateMixin],{
 	// summary:
 	//		Base class for widgets that contains a label (like "Match case: ")
 	//		and a checkbox to indicate if it is checked or not.
@@ -244,7 +246,7 @@ dojo.declare("dojox.editor.plugins._FindReplaceCheckBox",
 });
 
 
-dojo.declare("dojox.editor.plugins._FindReplaceToolbar", dijit.Toolbar, {
+var FindReplaceToolbar = dojo.declare("dojox.editor.plugins._FindReplaceToolbar", Toolbar, {
 	// summary:
 	//		A toolbar that derived from dijit.Toolbar, which
 	//		eliminates some unnecessary event response such as LEFT_ARROW pressing
@@ -275,13 +277,13 @@ dojo.declare("dojox.editor.plugins._FindReplaceToolbar", dijit.Toolbar, {
 	}
 });
 
-dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
-	//	summary:
-	//		This plugin provides a Find/Replace cabability for the editor.
+var FindReplace = dojo.declare("dojox.editor.plugins.FindReplace",[_Plugin],{
+	// summary:
+	//		This plugin provides a Find/Replace capability for the editor.
 	//		Note that this plugin is NOT supported on Opera currently, as opera
 	//		does not implement a window.find or equiv function.
 
-	//	buttonClass: [protected]
+	// buttonClass: [protected]
 	//		Define the class of button the editor uses.
 	buttonClass: dijit.form.ToggleButton,
 
@@ -343,8 +345,10 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 	//		The array that contains globalized strings
 	_strings: null,
 
+	_bookmark: null,
+
 	_initButton: function(){
-		//	summary:
+		// summary:
 		//		Over-ride for creation of the resize button.
 		this._strings = dojo.i18n.getLocalization("dojox.editor.plugins", "FindReplace");
 		this.button = new dijit.form.ToggleButton({
@@ -430,7 +434,7 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 		//		private
 		var ed = this.editor;
 		var win = ed.window;
-		var selectedTxt = dojo.withGlobal(ed.window, "getSelectedText", dijit._editor.selection, [null]);
+		var selectedTxt = ed._sCall("getSelectedText", [null]);
 		if(this._findField && this._findField.textBox){
 			if(selectedTxt){
 				this._findField.textBox.set("value", selectedTxt);
@@ -449,7 +453,7 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 		//		public
 		this.inherited(arguments);
 		if(!dojo.isOpera){
-			var _tb = (this._frToolbar = new dojox.editor.plugins._FindReplaceToolbar());
+			var _tb = (this._frToolbar = new FindReplaceToolbar());
 			dojo.style(_tb.domNode, "display", "none");
 			dojo.place(_tb.domNode, toolbar.domNode, "after");
 			_tb.startup();
@@ -457,15 +461,15 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 			// IE6 will put the close box in a new line when its style is "float: right".
 			// So place the close box ahead of the other fields, which makes it align with
 			// the other components.
-			this._closeBox = new dojox.editor.plugins._FindReplaceCloseBox();
+			this._closeBox = new FindReplaceCloseBox();
 			_tb.addChild(this._closeBox);
 			
 			// Define the search/replace fields.
-			this._findField = new dojox.editor.plugins._FindReplaceTextBox(
+			this._findField = new FindReplaceTextBox(
 				{label: this._strings["findLabel"], tooltip: this._strings["findTooltip"]});
 			_tb.addChild(this._findField);
 			
-			this._replaceField = new dojox.editor.plugins._FindReplaceTextBox(
+			this._replaceField = new FindReplaceTextBox(
 				{label: this._strings["replaceLabel"], tooltip: this._strings["replaceTooltip"]});
 			_tb.addChild(this._replaceField);
 
@@ -488,11 +492,11 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 			_tb.addChild(this._replaceAllButton);
 			
 			// Define the option checkboxes.
-			this._caseSensitive = new dojox.editor.plugins._FindReplaceCheckBox(
+			this._caseSensitive = new FindReplaceCheckBox(
 				{label: this._strings["matchCase"], tooltip: this._strings["matchCaseTooltip"]});
 			_tb.addChild(this._caseSensitive);
 			
-			this._backwards = new dojox.editor.plugins._FindReplaceCheckBox(
+			this._backwards = new FindReplaceCheckBox(
 				{label: this._strings["backwards"], tooltip: this._strings["backwardsTooltip"]});
 			_tb.addChild(this._backwards);
 
@@ -612,7 +616,7 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 			var backwards = this._backwards.get("value");
 			
 			//Replace the current selected text if it matches the pattern
-			var selected = dojo.withGlobal(ed.window, "getSelectedText", dijit._editor.selection, [null]);
+			var selected = ed._sCall("getSelectedText", [null]);
 			// Handle checking/replacing current selection.  For some reason on Moz
 			// leading whitespace is trimmed, so we have to trim it down on this check
 			// or we don't always replace.  Moz bug!
@@ -630,7 +634,7 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 					// Move to the beginning of the replaced text
 					// to avoid the infinite recursive replace
 					this._findText(repTxt, caseSensitive, backwards);
-					dojo.withGlobal(ed.window, "collapse", dijit._editor.selection, [true]);
+					ed._sCall("collapse", [true]);
 				}
 			}
 			
@@ -722,18 +726,35 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 				found = win.find(txt, caseSensitive, backwards, false, false, false, false);
 			}else{
 				var doc = ed.document;
-				if(doc.selection){
+				if(doc.selection || win.getSelection){
 					/* IE */
 					// Focus to restore position/selection,
 					// then shift to search from current position.
 					this.editor.focus();
 					var txtRg = doc.body.createTextRange();
+					var txtRg2 = txtRg.duplicate();
+					var sel1 = win.getSelection();
+					var sRange = sel1.getRangeAt(0);
 					var curPos = doc.selection?doc.selection.createRange():null;
 					if(curPos){
 						if(backwards){
 							txtRg.setEndPoint("EndToStart", curPos);
 						}else{
 							txtRg.setEndPoint("StartToEnd", curPos);
+						}
+					}else if(this._bookmark){
+						var currentText = win.getSelection().toString();
+						txtRg.moveToBookmark(this._bookmark);
+						//if selection is different to previous bookmark, need to search from that position
+						if ( txtRg.text != currentText ) {
+							txtRg = txtRg2.duplicate();
+							this._bookmark = null;
+						}else if(backwards){
+							txtRg2.setEndPoint("EndToStart", txtRg);
+							txtRg = txtRg2.duplicate();
+						}else{
+							txtRg2.setEndPoint("StartToEnd", txtRg);
+							txtRg = txtRg2.duplicate();
 						}
 					}
 					var flags = caseSensitive?4:0;
@@ -744,6 +765,7 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 					found = txtRg.findText(txt,txtRg.text.length,flags);
 					if(found){
 						txtRg.select();
+						this._bookmark = txtRg.getBookmark();
 					}
 				}
 			}
@@ -757,25 +779,27 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 		// description:
 		//		Returns a regular expression object that conforms to the defined conversion rules.
 		//		For example:
-		//			ca*   -> /^ca.*$/
-		//			*ca*  -> /^.*ca.*$/
-		//			*c\*a*  -> /^.*c\*a.*$/
-		//			*c\*a?*  -> /^.*c\*a..*$/
-		//			and so on.
 		//
+		//		- ca*   -> /^ca.*$/
+		//		- *ca*  -> /^.*ca.*$/
+		//		- *c\*a*  -> /^.*c\*a.*$/
+		//		- *c\*a?*  -> /^.*c\*a..*$/
+		//
+		//		and so on.
 		// pattern: string
 		//		A simple matching pattern to convert that follows basic rules:
-		//			* Means match anything, so ca* means match anything starting with ca
-		//			? Means match single character.  So, b?b will match to bob and bab, and so on.
-		//			\ is an escape character.  So for example, \* means do not treat * as a match, but literal character *.
-		//				To use a \ as a character in the string, it must be escaped.  So in the pattern it should be
-		//				represented by \\ to be treated as an ordinary \ character instead of an escape.
 		//
-		//	ignoreCase:
+		//		- * Means match anything, so ca* means match anything starting with ca
+		//		- ? Means match single character.  So, b?b will match to bob and bab, and so on.
+		//		- \ is an escape character.  So for example, \* means do not treat * as a match, but literal character *.
+		//		  To use a \ as a character in the string, it must be escaped.  So in the pattern it should be
+		//		  represented by \\ to be treated as an ordinary \ character instead of an escape.
+		// ignoreCase:
 		//		An optional flag to indicate if the pattern matching should be treated as case-sensitive or not when comparing
 		//		By default, it is assumed case sensitive.
 		// tags:
 		//		private
+
 		var rxp = "";
 		var c = null;
 		for(var i = 0; i < pattern.length; i++){
@@ -838,16 +862,21 @@ dojo.declare("dojox.editor.plugins.FindReplace",[dijit._editor._Plugin],{
 	}
 });
 
+// For monkey patching
+FindReplace._FindReplaceCloseBox = FindReplaceCloseBox;
+FindReplace._FindReplaceTextBox = FindReplaceTextBox;
+FindReplace._FindReplaceCheckBox = FindReplaceCheckBox;
+FindReplace._FindReplaceToolbar = FindReplaceToolbar;
 
 // Register this plugin.
 dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name.toLowerCase();
 	if(name ===  "findreplace"){
-		o.plugin = new dojox.editor.plugins.FindReplace({});
+		o.plugin = new FindReplace({});
 	}
 });
 
-return dojox.editor.plugins.FindReplace;
+return FindReplace;
 
 });

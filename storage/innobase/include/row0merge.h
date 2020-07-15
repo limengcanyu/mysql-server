@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2005, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2005, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -99,11 +99,12 @@ struct merge_file_t {
 
 /** Index field definition */
 struct index_field_t {
-  ulint col_no;      /*!< column offset */
-  ulint prefix_len;  /*!< column prefix length, or 0
-                     if indexing the whole column */
-  bool is_v_col;     /*!< whether this is a virtual column */
-  bool is_ascending; /*!< true=ASC, false=DESC */
+  ulint col_no;        /*!< column offset */
+  ulint prefix_len;    /*!< column prefix length, or 0
+                       if indexing the whole column */
+  bool is_v_col;       /*!< whether this is a virtual column */
+  bool is_multi_value; /*!< whether it has multi-value */
+  bool is_ascending;   /*!< true=ASC, false=DESC */
 };
 
 /** Definition of an index being created */
@@ -281,7 +282,7 @@ and then stage->inc() will be called for each record processed.
 @return DB_SUCCESS or error code */
 dberr_t row_merge_sort(trx_t *trx, const row_merge_dup_t *dup,
                        merge_file_t *file, row_merge_block_t *block, int *tmpfd,
-                       ut_stage_alter_t *stage = NULL);
+                       ut_stage_alter_t *stage = nullptr);
 
 /** Allocate a sort buffer.
  @return own: sort buffer */

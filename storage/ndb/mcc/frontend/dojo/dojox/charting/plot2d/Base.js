@@ -1,87 +1,61 @@
 //>>built
-define("dojox/charting/plot2d/Base",["dojo/_base/lang","dojo/_base/declare","dojo/_base/connect","../Element","./_PlotEvents","dojo/_base/array","../scaler/primitive","./common","dojox/gfx/fx"],function(_1,_2,_3,_4,_5,_6,_7,_8,fx){
-return _2("dojox.charting.plot2d.Base",[_4,_5],{constructor:function(_9,_a){
-this.zoom=null,this.zoomQueue=[];
-this.lastWindow={vscale:1,hscale:1,xoffset:0,yoffset:0};
+define("dojox/charting/plot2d/Base",["dojo/_base/declare","dojo/_base/array","dojo/_base/lang","dojox/gfx","../Element","./common","../axis2d/common","dojo/has"],function(_1,_2,_3,_4,_5,_6,ac,_7){
+var _8=_1("dojox.charting.plot2d.Base",_5,{constructor:function(_9,_a){
+if(_a&&_a.tooltipFunc){
+this.tooltipFunc=_a.tooltipFunc;
+}
 },clear:function(){
 this.series=[];
-this._hAxis=null;
-this._vAxis=null;
 this.dirty=true;
 return this;
 },setAxis:function(_b){
-if(_b){
-this[_b.vertical?"_vAxis":"_hAxis"]=_b;
-}
 return this;
-},toPage:function(_c){
-var ah=this._hAxis,av=this._vAxis,sh=ah.getScaler(),sv=av.getScaler(),th=sh.scaler.getTransformerFromModel(sh),tv=sv.scaler.getTransformerFromModel(sv),c=this.chart.getCoords(),o=this.chart.offsets,_d=this.chart.dim;
-var t=function(_e){
-var r={};
-r.x=th(_e[ah.name])+c.x+o.l;
-r.y=c.y+_d.height-o.b-tv(_e[av.name]);
-return r;
-};
-return _c?t(_c):t;
-},toData:function(_f){
-var ah=this._hAxis,av=this._vAxis,sh=ah.getScaler(),sv=av.getScaler(),th=sh.scaler.getTransformerFromPlot(sh),tv=sv.scaler.getTransformerFromPlot(sv),c=this.chart.getCoords(),o=this.chart.offsets,dim=this.chart.dim;
-var t=function(_10){
-var r={};
-r[ah.name]=th(_10.x-c.x-o.l);
-r[av.name]=tv(c.y+dim.height-_10.y-o.b);
-return r;
-};
-return _f?t(_f):t;
-},addSeries:function(run){
-this.series.push(run);
+},assignAxes:function(_c){
+_2.forEach(this.axes,function(_d){
+if(this[_d]){
+this.setAxis(_c[this[_d]]);
+}
+},this);
+},addSeries:function(_e){
+this.series.push(_e);
 return this;
 },getSeriesStats:function(){
-return _8.collectSimpleStats(this.series);
-},calculateAxes:function(dim){
-this.initializeScalers(dim,this.getSeriesStats());
+return _6.collectSimpleStats(this.series,_3.hitch(this,"isNullValue"));
+},calculateAxes:function(_f){
+this.initializeScalers(_f,this.getSeriesStats());
 return this;
-},isDirty:function(){
-return this.dirty||this._hAxis&&this._hAxis.dirty||this._vAxis&&this._vAxis.dirty;
+},initializeScalers:function(){
+return this;
 },isDataDirty:function(){
-return _6.some(this.series,function(_11){
-return _11.dirty;
+return _2.some(this.series,function(_10){
+return _10.dirty;
 });
-},performZoom:function(dim,_12){
-var vs=this._vAxis.scale||1,hs=this._hAxis.scale||1,_13=dim.height-_12.b,_14=this._hScaler.bounds,_15=(_14.from-_14.lower)*_14.scale,_16=this._vScaler.bounds,_17=(_16.from-_16.lower)*_16.scale,_18=vs/this.lastWindow.vscale,_19=hs/this.lastWindow.hscale,_1a=(this.lastWindow.xoffset-_15)/((this.lastWindow.hscale==1)?hs:this.lastWindow.hscale),_1b=(_17-this.lastWindow.yoffset)/((this.lastWindow.vscale==1)?vs:this.lastWindow.vscale),_1c=this.group,_1d=fx.animateTransform(_1.delegate({shape:_1c,duration:1200,transform:[{name:"translate",start:[0,0],end:[_12.l*(1-_19),_13*(1-_18)]},{name:"scale",start:[1,1],end:[_19,_18]},{name:"original"},{name:"translate",start:[0,0],end:[_1a,_1b]}]},this.zoom));
-_1.mixin(this.lastWindow,{vscale:vs,hscale:hs,xoffset:_15,yoffset:_17});
-this.zoomQueue.push(_1d);
-_3.connect(_1d,"onEnd",this,function(){
-this.zoom=null;
-this.zoomQueue.shift();
-if(this.zoomQueue.length>0){
-this.zoomQueue[0].play();
-}
-});
-if(this.zoomQueue.length==1){
-this.zoomQueue[0].play();
-}
+},render:function(dim,_11){
 return this;
-},render:function(dim,_1e){
-return this;
+},renderLabel:function(_12,x,y,_13,_14,_15,_16){
+var _17=ac.createText[this.opt.htmlLabels&&_4.renderer!="vml"?"html":"gfx"](this.chart,_12,x,y,_16?_16:"middle",_13,_14.series.font,_14.series.fontColor);
+if(_15){
+if(this.opt.htmlLabels&&_4.renderer!="vml"){
+_17.style.pointerEvents="none";
+}else{
+if(_17.rawNode){
+_17.rawNode.style.pointerEvents="none";
+}
+}
+}
+if(this.opt.htmlLabels&&_4.renderer!="vml"){
+this.htmlElements.push(_17);
+}
+return _17;
 },getRequiredColors:function(){
 return this.series.length;
-},initializeScalers:function(dim,_1f){
-if(this._hAxis){
-if(!this._hAxis.initialized()){
-this._hAxis.calculate(_1f.hmin,_1f.hmax,dim.width);
-}
-this._hScaler=this._hAxis.getScaler();
-}else{
-this._hScaler=_7.buildScaler(_1f.hmin,_1f.hmax,dim.width);
-}
-if(this._vAxis){
-if(!this._vAxis.initialized()){
-this._vAxis.calculate(_1f.vmin,_1f.vmax,dim.height);
-}
-this._vScaler=this._vAxis.getScaler();
-}else{
-this._vScaler=_7.buildScaler(_1f.vmin,_1f.vmax,dim.height);
-}
-return this;
+},_getLabel:function(_18){
+return _6.getLabel(_18,this.opt.fixed,this.opt.precision);
 }});
+if(_7("dojo-bidi")){
+_8.extend({_checkOrientation:function(_19,dim,_1a){
+this.chart.applyMirroring(this.group,dim,_1a);
+}});
+}
+return _8;
 });

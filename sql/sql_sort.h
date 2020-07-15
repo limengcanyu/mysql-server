@@ -1,7 +1,7 @@
 #ifndef SQL_SORT_INCLUDED
 #define SQL_SORT_INCLUDED
 
-/* Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -53,10 +53,10 @@ constexpr size_t VARLEN_PREFIX = 4;
 struct Merge_chunk {
  public:
   Merge_chunk()
-      : m_current_key(NULL),
+      : m_current_key(nullptr),
         m_file_position(0),
-        m_buffer_start(NULL),
-        m_buffer_end(NULL),
+        m_buffer_start(nullptr),
+        m_buffer_end(nullptr),
         m_rowcount(0),
         m_mem_count(0),
         m_max_keys(0) {}
@@ -74,7 +74,7 @@ struct Merge_chunk {
   }
   void set_buffer_start(uchar *start) { m_buffer_start = start; }
   void set_buffer_end(uchar *end) {
-    DBUG_ASSERT(m_buffer_end == NULL || end <= m_buffer_end);
+    DBUG_ASSERT(m_buffer_end == nullptr || end <= m_buffer_end);
     m_buffer_end = end;
   }
 
@@ -131,10 +131,16 @@ typedef Bounds_checked_array<Merge_chunk> Merge_chunk_array;
   The result of Unique or filesort; can either be stored on disk
   (in which case io_cache points to the file) or in memory in one
   of two ways. See sorted_result_in_fsbuf.
+
+  Note if sort_result points into memory, it does _not_ own the sort buffer;
+  Filesort_info does.
+
+  TODO: Clean up so that Filesort / Filesort_info / Filesort_buffer /
+  Sort_result have less confusing overlap.
 */
 class Sort_result {
  public:
-  Sort_result() : sorted_result_in_fsbuf(false), sorted_result_end(NULL) {}
+  Sort_result() : sorted_result_in_fsbuf(false), sorted_result_end(nullptr) {}
 
   bool has_result_in_memory() const {
     return sorted_result || sorted_result_in_fsbuf;
@@ -182,9 +188,11 @@ class Filesort_info {
 
   Filesort_info() : m_using_varlen_keys(false), m_sort_length(0) {}
 
-  /** Sort filesort_buffer */
-  void sort_buffer(Sort_param *param, uint count) {
-    filesort_buffer.sort_buffer(param, count);
+  /** Sort filesort_buffer
+    @return Number of records, after any deduplication
+   */
+  unsigned sort_buffer(Sort_param *param, uint count) {
+    return filesort_buffer.sort_buffer(param, count);
   }
 
   /**

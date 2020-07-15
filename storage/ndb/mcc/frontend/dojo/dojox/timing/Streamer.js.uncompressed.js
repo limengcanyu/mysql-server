@@ -1,22 +1,26 @@
-//>>built
 define("dojox/timing/Streamer", ["./_base"], function(){
 	dojo.experimental("dojox.timing.Streamer");
-	dojox.timing.Streamer = function(
+
+	return dojox.timing.Streamer = function(
 		/* function */input,
 		/* function */output,
 		/* int */interval,
 		/* int */minimum,
 		/* array */initialData
 	){
-		//	summary
-		//	Streamer will take an input function that pushes N datapoints into a
+		// summary:
+		//		Streamer will take an input function that pushes N datapoints into a
 		//		queue, and will pass the next point in that queue out to an
 		//		output function at the passed interval; this way you can emulate
 		//		a constant buffered stream of data.
-		//	input: the function executed when the internal queue reaches minimumSize
-		//	output: the function executed on internal tick
-		//	interval: the interval in ms at which the output function is fired.
-		//	minimum: the minimum number of elements in the internal queue.
+		// input:
+		//		the function executed when the internal queue reaches minimumSize
+		// output:
+		//		the function executed on internal tick
+		// interval:
+		//		the interval in ms at which the output function is fired.
+		// minimum:
+		//		the minimum number of elements in the internal queue.
 
 		var self = this;
 		var queue = [];
@@ -54,7 +58,7 @@ define("dojox/timing/Streamer", ["./_base"], function(){
 		};
 
 		this.setInterval = function(/* int */ms){
-			//	summary
+			// summary:
 			//	sets the interval in milliseconds of the internal timer
 			this.interval = ms;
 			timer.setInterval(ms);
@@ -63,7 +67,7 @@ define("dojox/timing/Streamer", ["./_base"], function(){
 		this.onTick = function(/* dojox.timing.Streamer */obj){ };
 		// wrap the timer functions so that we can connect to them if needed.
 		this.start = function(){
-			//	summary
+			// summary:
 			//	starts the Streamer
 			if(typeof(this.inputFunction) == "function" && typeof(this.outputFunction) == "function"){
 				timer.start();
@@ -73,7 +77,7 @@ define("dojox/timing/Streamer", ["./_base"], function(){
 		};
 		this.onStart = function(){ };
 		this.stop = function(){
-			//	summary
+			// summary:
 			//	stops the Streamer
 			timer.stop();
 		};
@@ -87,5 +91,4 @@ define("dojox/timing/Streamer", ["./_base"], function(){
 			queue.concat(initialData);
 		}
 	};
-	return dojox.timing.Streamer;
 });

@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -211,9 +211,17 @@ int ha_mock::load_table(const TABLE &table_arg) {
   return 0;
 }
 
-int ha_mock::unload_table(const char *db_name, const char *table_name) {
-  loaded_tables->erase(db_name, table_name);
-  return 0;
+int ha_mock::unload_table(const char *db_name, const char *table_name,
+                          bool error_if_not_loaded) {
+  if (error_if_not_loaded &&
+      loaded_tables->get(db_name, table_name) == nullptr) {
+    my_error(ER_SECONDARY_ENGINE_PLUGIN, MYF(0),
+             "Table is not loaded on a secondary engine");
+    return 1;
+  } else {
+    loaded_tables->erase(db_name, table_name);
+    return 0;
+  }
 }
 
 }  // namespace mock
@@ -227,6 +235,12 @@ static bool PrepareSecondaryEngine(THD *thd, LEX *lex) {
   auto context = new (thd->mem_root) Mock_execution_context;
   if (context == nullptr) return true;
   lex->set_secondary_engine_execution_context(context);
+
+  // Disable use of constant tables and evaluation of subqueries during
+  // optimization.
+  lex->add_statement_options(OPTION_NO_CONST_TABLES |
+                             OPTION_NO_SUBQUERY_DURING_OPTIMIZATION);
+
   return false;
 }
 
@@ -310,7 +324,7 @@ mysql_declare_plugin(mock){
     MYSQL_STORAGE_ENGINE_PLUGIN,
     &mock_storage_engine,
     "MOCK",
-    "MySQL",
+    PLUGIN_AUTHOR_ORACLE,
     "Mock storage engine",
     PLUGIN_LICENSE_GPL,
     Init,

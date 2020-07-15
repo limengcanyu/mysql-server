@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1995, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1995, 2020, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2008, Google Inc.
 Copyright (c) 2012, Facebook Inc.
 
@@ -118,6 +118,7 @@ extern mysql_pfs_key_t log_writer_mutex_key;
 extern mysql_pfs_key_t log_flusher_mutex_key;
 extern mysql_pfs_key_t log_write_notifier_mutex_key;
 extern mysql_pfs_key_t log_flush_notifier_mutex_key;
+extern mysql_pfs_key_t log_limits_mutex_key;
 extern mysql_pfs_key_t log_cmdq_mutex_key;
 extern mysql_pfs_key_t log_sn_lock_key;
 extern mysql_pfs_key_t log_sys_arch_mutex_key;
@@ -143,20 +144,19 @@ extern mysql_pfs_key_t rw_lock_debug_mutex_key;
 #endif /* UNIV_DEBUG */
 extern mysql_pfs_key_t rw_lock_list_mutex_key;
 extern mysql_pfs_key_t rw_lock_mutex_key;
-extern mysql_pfs_key_t srv_dict_tmpfile_mutex_key;
 extern mysql_pfs_key_t srv_innodb_monitor_mutex_key;
 extern mysql_pfs_key_t srv_misc_tmpfile_mutex_key;
 extern mysql_pfs_key_t srv_monitor_file_mutex_key;
 #ifdef UNIV_DEBUG
 extern mysql_pfs_key_t sync_thread_mutex_key;
 #endif /* UNIV_DEBUG */
-extern mysql_pfs_key_t buf_dblwr_mutex_key;
 extern mysql_pfs_key_t trx_undo_mutex_key;
 extern mysql_pfs_key_t trx_mutex_key;
 extern mysql_pfs_key_t trx_pool_mutex_key;
 extern mysql_pfs_key_t trx_pool_manager_mutex_key;
 extern mysql_pfs_key_t temp_pool_manager_mutex_key;
-extern mysql_pfs_key_t lock_mutex_key;
+extern mysql_pfs_key_t lock_sys_page_mutex_key;
+extern mysql_pfs_key_t lock_sys_table_mutex_key;
 extern mysql_pfs_key_t lock_wait_mutex_key;
 extern mysql_pfs_key_t trx_sys_mutex_key;
 extern mysql_pfs_key_t srv_sys_mutex_key;
@@ -173,6 +173,8 @@ extern mysql_pfs_key_t master_key_id_mutex_key;
 extern mysql_pfs_key_t clone_sys_mutex_key;
 extern mysql_pfs_key_t clone_task_mutex_key;
 extern mysql_pfs_key_t clone_snapshot_mutex_key;
+extern mysql_pfs_key_t parallel_read_mutex_key;
+extern mysql_pfs_key_t dblwr_mutex_key;
 #endif /* UNIV_PFS_MUTEX */
 
 #ifdef UNIV_PFS_RWLOCK
@@ -188,6 +190,7 @@ extern mysql_pfs_key_t buf_block_debug_latch_key;
 extern mysql_pfs_key_t dict_operation_lock_key;
 extern mysql_pfs_key_t undo_spaces_lock_key;
 extern mysql_pfs_key_t rsegs_lock_key;
+extern mysql_pfs_key_t lock_sys_global_rw_lock_key;
 extern mysql_pfs_key_t fil_space_latch_key;
 extern mysql_pfs_key_t fts_cache_rw_lock_key;
 extern mysql_pfs_key_t fts_cache_init_rw_lock_key;

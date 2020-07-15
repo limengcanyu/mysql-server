@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2004, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2004, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -305,6 +305,12 @@ Ndb_cluster_connection::no_db_nodes()
   return m_impl.m_nodes_proximity.size();
 }
 
+Uint32
+Ndb_cluster_connection::max_api_nodeid() const
+{
+  return m_impl.m_max_api_nodeid;
+}
+
 unsigned
 Ndb_cluster_connection::node_id()
 {
@@ -423,6 +429,11 @@ unsigned Ndb_cluster_connection::get_connect_count() const
 unsigned Ndb_cluster_connection::get_min_db_version() const
 {
   return m_impl.get_min_db_version();
+}
+
+unsigned Ndb_cluster_connection::get_min_api_version() const
+{
+  return m_impl.get_min_api_version();
 }
 
 int Ndb_cluster_connection::get_latest_error() const
@@ -1255,6 +1266,7 @@ Ndb_cluster_connection_impl::configure(Uint32 nodeId,
     // Configure timeouts
     {
       Uint32 timeout = 120000;
+      Uint32 max_node_id = 0;
       // Use new iterator to leave iter valid.
       ndb_mgm_configuration_iterator iterall(config, CFG_SECTION_NODE);
       for (; iterall.valid(); iterall.next())
@@ -1262,8 +1274,17 @@ Ndb_cluster_connection_impl::configure(Uint32 nodeId,
         Uint32 tmp1 = 0, tmp2 = 0;
         Uint32 nodeId = 0;
         Uint32 location_domain_id = 0;
+        Uint32 node_type;
         char *host_str;
         iterall.get(CFG_NODE_ID, &nodeId);
+        iterall.get(CFG_TYPE_OF_SECTION, &node_type);
+        if (node_type == NODE_TYPE_API)
+        {
+          if (max_node_id < nodeId)
+          {
+            max_node_id = nodeId;
+          }
+        }
         iterall.get(CFG_DB_TRANSACTION_CHECK_INTERVAL, &tmp1);
         iterall.get(CFG_DB_TRANSACTION_DEADLOCK_TIMEOUT, &tmp2);
         iterall.get(CFG_LOCATION_DOMAIN_ID, &location_domain_id);
@@ -1278,6 +1299,7 @@ Ndb_cluster_connection_impl::configure(Uint32 nodeId,
           timeout = tmp1;
       }
       m_config.m_waitfor_timeout = timeout;
+      m_max_api_nodeid = max_node_id;
     }
   }
 
@@ -1703,8 +1725,8 @@ Ndb_cluster_connection_impl::select_node(NdbImpl *impl_ndb,
   const Uint32 nodes_arr_cnt = m_nodes_proximity.size();
 
   Uint32 best_node = nodes[0];
-  Uint32 best_idx;
-  Uint32 best_usage;
+  Uint32 best_idx = Uint32(~0);
+  Uint32 best_usage = 0;
   Int32 best_score = MAX_PROXIMITY_GROUP; // Lower is better
 
   if (!m_impl.m_optimized_node_selection)
@@ -1720,6 +1742,11 @@ Ndb_cluster_connection_impl::select_node(NdbImpl *impl_ndb,
         continue;
 
       checked.set(candidate_node);
+
+      if (!impl_ndb->get_node_available(candidate_node))
+      {
+        continue;
+      }
 
       for (Uint32 i = 0; i < nodes_arr_cnt; i++)
       {
@@ -1796,8 +1823,11 @@ Ndb_cluster_connection_impl::select_node(NdbImpl *impl_ndb,
       }
     }
   }
-  nodes_arr[best_idx].hint_count =
-    (nodes_arr[best_idx].hint_count + 1) & HINT_COUNT_MASK;
+  if (best_idx != Uint32(~0))
+  {
+    nodes_arr[best_idx].hint_count =
+      (nodes_arr[best_idx].hint_count + 1) & HINT_COUNT_MASK;
+  }
   return best_node;
 }
 

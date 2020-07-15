@@ -10,8 +10,12 @@
 #
 
 --source include/have_binlog_format_row.inc
+--source include/force_myisam_default.inc
 --source include/have_myisam.inc
 --source include/master-slave.inc
+
+# sql_slave_skip_counter is not supported with compression
+--source include/not_binlog_transaction_compression_on.inc
 
 --connection slave
 

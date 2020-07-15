@@ -53,7 +53,7 @@ SELECT city.Name, country.Name, countrylanguage.Language
         city.Name LIKE 'L%' AND country.Population > 3000000 AND
         countrylanguage.Percentage > 50;
 
-set join_buffer_size=256;
+set join_buffer_size=2048;
 show variables like 'join_buffer_size';
 
 EXPLAIN
@@ -1267,9 +1267,10 @@ INSERT INTO t2 VALUES (2),(3);
 --echo
 
 --echo # The query shall return 1 record with a max value 9 and one of the 
---echo # int_key values inserted above (undefined which one). A changed 
---echo # execution plan may change the value in the second column
+--echo # int_key values inserted above (undefined which one, so it's replaced
+--echo # with "#").
 --source include/turn_off_only_full_group_by.inc
+--replace_column 2 #
 SELECT  MAX(t1.int_key), t1.int_key
 FROM t1 STRAIGHT_JOIN t2  
 ORDER BY t1.int_key;
@@ -1951,6 +1952,7 @@ let $query=SELECT t2.pk as t2_pk, t4.pk as t4_pk, t4.k as t4_k, t4.i
   LEFT JOIN t4 ON t4.pk = t2.pk;
 
 eval EXPLAIN $query;
+--sorted_result
 eval $query;
 
 DROP TABLE t1, t2, t3, t4; 
@@ -1995,6 +1997,7 @@ SELECT t4.col_int
   WHERE t1.col_int OR t3.col_int;
 
 eval EXPLAIN $query;
+--sorted_result
 eval $query;
 
 DROP TABLE t1, t2, t3, t4;
@@ -2060,3 +2063,77 @@ eval $query;
 set @@session.optimizer_switch=@optimizer_switch_saved;
 
 DROP TABLE t1,t2;
+
+--echo #
+--echo # Bug#29435133 JOIN_CACHE::JOIN_RECORD() MAY LEAVE A TABLE IN HAS_NULL_ROW-STATE
+--echo #
+
+CREATE TABLE t1 (
+  col_varchar_10_unique varchar(10)
+) ENGINE=innodb;
+
+INSERT INTO t1 VALUES ('nthfyejwxd');
+INSERT INTO t1 VALUES ('drrqahbhai');
+
+CREATE TABLE t3 (
+  col_int int(11) NOT NULL,
+  col_int_unique int(11) not null,
+  col_varchar_10 varchar(10) not null
+) ENGINE=innodb;
+
+INSERT INTO t3 VALUES(9, 4, '');
+
+
+CREATE TABLE t4 (
+  col_int_unique int(11)
+) ENGINE=innodb;
+
+# Rows *not* matching t3.col_int_unique
+INSERT INTO t4 VALUES(3);
+
+
+CREATE TABLE t2 (
+  col_int int(11)
+) ENGINE=innodb;
+
+# t2 intentionally empty
+
+let $query=SELECT * FROM t1 AS table1
+WHERE
+  table1.col_varchar_10_unique = ALL (
+    SELECT STRAIGHT_JOIN table3s.col_varchar_10 AS field3 FROM
+      t4 AS table4s LEFT JOIN
+        (t3 AS table3s JOIN t2 AS table2s)
+      ON table3s.col_int_unique = table4s.col_int_unique);
+
+eval EXPLAIN $query;
+eval $query;
+
+DROP TABLE t1,t2,t3,t4;
+
+--echo #
+--echo # t2 and t3 are const tables, which makes for a t1-t4 join on a constant,
+--echo # where the constant comes from a multi-equality. Verify that we get the expected
+--echo # query plan and don't crash (we don't care about the result).
+--echo #
+
+CREATE TABLE t1 (
+  pk integer NOT NULL,
+  a integer,
+  b integer,
+  PRIMARY KEY (pk),
+  KEY idx1 (b)
+) ENGINE=InnoDB;
+
+INSERT INTO t1 VALUES (1,5,5);
+ANALYZE TABLE t1;
+
+EXPLAIN FORMAT=tree SELECT *
+FROM
+  t1
+  LEFT JOIN t1 AS t2 ON t1.a = t2.pk
+  LEFT JOIN t1 AS t3 ON t2.pk = t3.pk
+  LEFT JOIN t1 AS t4 ON t3.b = t4.b
+WHERE t2.pk = 1;
+
+DROP TABLE t1;

@@ -1,17 +1,18 @@
-//>>built
 define("dojox/dtl/utils/date", [
 	"dojo/_base/lang",
 	"dojox/date/php",
 	"../_base"
 ], function(lang,ddp,dd){
-	/*=====
-		ddp = dojox.data.php;
-		dd = dojox.dtl;
-	=====*/
-	lang.getObject("dojox.dtl.utils.date", true);
 
-	dd.utils.date.DateFormat = ddp.DateFormat;
-	lang.extend(dd.utils.date.DateFormat, ddp.DateFormat.prototype, {
+	var date = lang.getObject("utils.date", true, dd);
+	/*=====
+	 date = {
+	 	// TODO: summary
+	 };
+	 =====*/
+
+	date.DateFormat = ddp.DateFormat;
+	lang.extend(date.DateFormat, ddp.DateFormat.prototype, {
 		f: function(){
 			// summary:
 			//		Time, in 12-hour hours and minutes, with minutes left off if they're zero.
@@ -21,8 +22,9 @@ define("dojox/dtl/utils/date", [
 			return (!this.date.getMinutes()) ? this.g() : this.g() + ":" + this.i();
 		},
 		N: function(){
-			// summary: Month abbreviation in Associated Press style. Proprietary extension.
-			return dojox.dtl.utils.date._months_ap[this.date.getMonth()];
+			// summary:
+			//		Month abbreviation in Associated Press style. Proprietary extension.
+			return date._months_ap[this.date.getMonth()];
 		},
 		P: function(){
 			// summary:
@@ -76,5 +78,6 @@ define("dojox/dtl/utils/date", [
 		],
 		_months_ap: ["Jan.", "Feb.", "March", "April", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec."]
 	});
-	return dojox.dtl.utils.date;
+
+	return date;
 });

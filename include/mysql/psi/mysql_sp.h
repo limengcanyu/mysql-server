@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -108,7 +108,7 @@ static inline struct PSI_sp_locker *inline_mysql_start_sp(
 }
 
 static inline void inline_mysql_end_sp(PSI_sp_locker *locker) {
-  if (likely(locker != NULL)) {
+  if (likely(locker != nullptr)) {
     PSI_SP_CALL(end_sp)(locker);
   }
 }
@@ -131,6 +131,6 @@ static inline PSI_sp_share *inline_mysql_get_sp_share(uint sp_type,
 }
 #endif
 
-  /** @} (end of group psi_api_sp) */
+/** @} (end of group psi_api_sp) */
 
 #endif

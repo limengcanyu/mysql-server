@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2.0,
@@ -120,7 +120,8 @@ void Insert_statement_builder::add_document(const Field_list &row) const {
       add_document_object(doc.object());
       return;
 
-    default: {}
+    default: {
+    }
   }
   m_builder.put("(").put_expr(doc).put(")");
 }
@@ -131,10 +132,12 @@ void Insert_statement_builder::add_upsert(const bool is_relational) const {
         ER_X_BAD_INSERT_DATA,
         "Unable update on duplicate key for TABLE data model");
   m_builder.put(
+      " AS _UPSERT_NEW_VALUES_(_NEW_DOC_)"
       " ON DUPLICATE KEY UPDATE"
       " doc = IF(JSON_UNQUOTE(JSON_EXTRACT(doc, '$._id'))"
-      " = JSON_UNQUOTE(JSON_EXTRACT(VALUES(doc), '$._id')),"
-      " VALUES(doc), MYSQLX_ERROR(" STRINGIFY_ARG(ER_X_BAD_UPSERT_DATA) "))");
+      " = JSON_UNQUOTE(JSON_EXTRACT(_UPSERT_NEW_VALUES_._NEW_DOC_, '$._id')),"
+      " _UPSERT_NEW_VALUES_._NEW_DOC_, MYSQLX_ERROR(" STRINGIFY_ARG(
+          ER_X_BAD_UPSERT_DATA) "))");
 }
 
 bool Insert_statement_builder::add_document_literal(
@@ -165,7 +168,8 @@ bool Insert_statement_builder::add_document_literal(
             .put("))");
       return true;
 
-    default: {}
+    default: {
+    }
   }
   return false;
 }

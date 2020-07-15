@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -24,17 +24,21 @@
 #define AUTH_COMMON_INCLUDED
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <functional>
+#include <list>
 #include <memory>
-#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "lex_string.h"
 #include "my_command.h"
 #include "my_dbug.h"
+#include "my_hostname.h"  // HOSTNAME_LENGTH
 #include "my_inttypes.h"
+#include "mysql_com.h"  // USERNAME_LENGTH
 #include "template_utils.h"
 
 /* Forward Declarations */
@@ -106,12 +110,11 @@ class ACL_internal_table_access {
     to save_priv.
     @param want_access the privileges requested
     @param [in, out] save_priv the privileges granted
-    @return
-      @retval ACL_INTERNAL_ACCESS_GRANTED All the requested privileges
+    @retval ACL_INTERNAL_ACCESS_GRANTED All the requested privileges
       are granted, and saved in save_priv.
-      @retval ACL_INTERNAL_ACCESS_DENIED At least one of the requested
+    @retval ACL_INTERNAL_ACCESS_DENIED At least one of the requested
       privileges was denied.
-      @retval ACL_INTERNAL_ACCESS_CHECK_GRANT No requested privilege
+    @retval ACL_INTERNAL_ACCESS_CHECK_GRANT No requested privilege
       was denied, and grant should be checked for at least one
       privilege. Requested privileges that are granted, if any, are saved
       in save_priv.
@@ -140,12 +143,11 @@ class ACL_internal_schema_access {
     Check access to an internal schema.
     @param want_access the privileges requested
     @param [in, out] save_priv the privileges granted
-    @return
-      @retval ACL_INTERNAL_ACCESS_GRANTED All the requested privileges
+    @retval ACL_INTERNAL_ACCESS_GRANTED All the requested privileges
       are granted, and saved in save_priv.
-      @retval ACL_INTERNAL_ACCESS_DENIED At least one of the requested
+    @retval ACL_INTERNAL_ACCESS_DENIED At least one of the requested
       privileges was denied.
-      @retval ACL_INTERNAL_ACCESS_CHECK_GRANT No requested privilege
+    @retval ACL_INTERNAL_ACCESS_CHECK_GRANT No requested privilege
       was denied, and grant should be checked for at least one
       privilege. Requested privileges that are granted, if any, are saved
       in save_priv.
@@ -168,7 +170,7 @@ class ACL_internal_schema_access {
 */
 class ACL_internal_schema_registry {
  public:
-  static void register_schema(const LEX_STRING &name,
+  static void register_schema(const LEX_CSTRING &name,
                               const ACL_internal_schema_access *access);
   static const ACL_internal_schema_access *lookup(const char *name);
 };
@@ -673,7 +675,7 @@ bool acl_check_host(THD *thd, const char *host, const char *ip);
 void log_user(THD *thd, String *str, LEX_USER *user, bool comma);
 bool check_change_password(THD *thd, const char *host, const char *user,
                            bool retain_current_password);
-bool change_password(THD *thd, LEX_USER *user, char *password,
+bool change_password(THD *thd, LEX_USER *user, const char *password,
                      const char *current_password,
                      bool retain_current_password);
 bool mysql_create_user(THD *thd, List<LEX_USER> &list, bool if_not_exists,
@@ -690,17 +692,18 @@ int wild_case_compare(CHARSET_INFO *cs, const char *str, size_t str_len,
                       const char *wildstr, size_t wildstr_len);
 bool hostname_requires_resolving(const char *hostname);
 bool acl_init(bool dont_read_acl_tables);
+bool is_acl_inited();
 void acl_free(bool end = false);
-bool check_engine_type_for_acl_table(THD *thd);
+bool check_engine_type_for_acl_table(THD *thd, bool mdl_locked);
 bool grant_init(bool skip_grant_tables);
 void grant_free(void);
-bool reload_acl_caches(THD *thd);
+bool reload_acl_caches(THD *thd, bool mdl_locked);
 ulong acl_get(THD *thd, const char *host, const char *ip, const char *user,
               const char *db, bool db_is_pattern);
 bool is_acl_user(THD *thd, const char *host, const char *user);
-bool acl_getroot(THD *thd, Security_context *sctx, char *user, char *host,
-                 char *ip, const char *db);
-bool check_acl_tables_intact(THD *thd);
+bool acl_getroot(THD *thd, Security_context *sctx, const char *user,
+                 const char *host, const char *ip, const char *db);
+bool check_acl_tables_intact(THD *thd, bool mdl_locked);
 bool check_acl_tables_intact(THD *thd, TABLE_LIST *tables);
 void notify_flush_event(THD *thd);
 bool wildcard_db_grant_exists();
@@ -740,7 +743,8 @@ void get_mqh(THD *thd, const char *user, const char *host, USER_CONN *uc);
 ulong get_table_grant(THD *thd, TABLE_LIST *table);
 ulong get_column_grant(THD *thd, GRANT_INFO *grant, const char *db_name,
                        const char *table_name, const char *field_name);
-bool mysql_show_grants(THD *, LEX_USER *, const List_of_auth_id_refs &, bool);
+bool mysql_show_grants(THD *, LEX_USER *, const List_of_auth_id_refs &, bool,
+                       bool);
 bool mysql_show_create_user(THD *thd, LEX_USER *user, bool are_both_users_same);
 bool mysql_revoke_all(THD *thd, List<LEX_USER> &list);
 bool sp_revoke_privileges(THD *thd, const char *sp_db, const char *sp_name,
@@ -772,8 +776,11 @@ bool check_single_table_access(THD *thd, ulong privilege, TABLE_LIST *tables,
 bool check_routine_access(THD *thd, ulong want_access, const char *db,
                           char *name, bool is_proc, bool no_errors);
 bool check_some_access(THD *thd, ulong want_access, TABLE_LIST *table);
-bool check_some_routine_access(THD *thd, const char *db, const char *name,
-                               bool is_proc);
+bool has_full_view_routine_access(THD *thd, const char *db,
+                                  const char *definer_user,
+                                  const char *definer_host);
+bool has_partial_view_routine_access(THD *thd, const char *db,
+                                     const char *routine_name, bool is_proc);
 bool check_access(THD *thd, ulong want_access, const char *db, ulong *save_priv,
                   GRANT_INTERNAL_INFO *grant_internal_info,
                   bool dont_check_global_grants, bool no_errors);
@@ -793,15 +800,18 @@ bool mysql_alter_or_clear_default_roles(THD *thd, role_enum role_type,
                                         const List<LEX_USER> *users,
                                         const List<LEX_USER> *roles);
 void roles_graphml(THD *thd, String *);
-bool has_grant_role_privilege(THD *thd, const LEX_CSTRING &role_name,
-                              const LEX_CSTRING &role_host);
+bool has_grant_role_privilege(THD *thd, const List<LEX_USER> *roles);
 Auth_id_ref create_authid_from(const LEX_USER *user);
 std::string create_authid_str_from(const LEX_USER *user);
+std::pair<std::string, std::string> get_authid_from_quoted_string(
+    std::string str);
 void append_identifier(String *packet, const char *name, size_t length);
 bool is_role_id(LEX_USER *authid);
 void shutdown_acl_cache();
 bool is_granted_role(LEX_CSTRING user, LEX_CSTRING host, LEX_CSTRING role,
                      LEX_CSTRING role_host);
+bool is_mandatory_role(LEX_CSTRING role, LEX_CSTRING role_host,
+                       bool *is_mandatory);
 bool check_show_access(THD *thd, TABLE_LIST *table);
 bool check_global_access(THD *thd, ulong want_access);
 
@@ -816,11 +826,10 @@ typedef enum ssl_artifacts_status {
 } ssl_artifacts_status;
 
 ulong get_global_acl_cache_size();
-#if defined(HAVE_OPENSSL) && !defined(HAVE_WOLFSSL)
 extern bool opt_auto_generate_certs;
 bool do_auto_cert_generation(ssl_artifacts_status auto_detection_status,
-                             char **ssl_ca, char **ssl_key, char **ssl_cert);
-#endif /* HAVE_OPENSSL && !HAVE_WOLFSSL */
+                             const char **ssl_ca, const char **ssl_key,
+                             const char **ssl_cert);
 
 #define DEFAULT_SSL_CA_CERT "ca.pem"
 #define DEFAULT_SSL_CA_KEY "ca-key.pem"
@@ -828,10 +837,10 @@ bool do_auto_cert_generation(ssl_artifacts_status auto_detection_status,
 #define DEFAULT_SSL_SERVER_KEY "server-key.pem"
 
 void update_mandatory_roles(void);
-bool check_authorization_id_string(THD *thd, const char *buffer, size_t length);
+bool check_authorization_id_string(THD *thd, LEX_STRING &mandatory_roles);
 void func_current_role(const THD *thd, String *active_role);
 
-extern volatile uint32 global_password_history, global_password_reuse_interval;
+extern uint32 global_password_history, global_password_reuse_interval;
 
 struct Security_context_policy {
   enum Operation { Precheck, Execute };
@@ -890,22 +899,20 @@ class Security_context_factory {
     @param drop_policy                The policy for deleting the authid and
                                       revoke privileges
   */
-  Security_context_factory(
-      THD *thd, const std::string &user, const std::string &host,
-      const Security_context_functor &extend_user_profile,
-      const Security_context_functor &priv,
-      const Security_context_functor &static_priv,
-      const std::function<void(Security_context *)> &drop_policy)
+  Security_context_factory(THD *thd, std::string user, std::string host,
+                           Security_context_functor extend_user_profile,
+                           Security_context_functor priv,
+                           Security_context_functor static_priv,
+                           std::function<void(Security_context *)> drop_policy)
       : m_thd(thd),
-        m_user(user),
-        m_host(host),
-        m_user_profile(extend_user_profile),
-        m_privileges(priv),
-        m_static_privileges(static_priv),
-        m_drop_policy(drop_policy) {}
+        m_user(std::move(user)),
+        m_host(std::move(host)),
+        m_user_profile(std::move(extend_user_profile)),
+        m_privileges(std::move(priv)),
+        m_static_privileges(std::move(static_priv)),
+        m_drop_policy(std::move(drop_policy)) {}
 
   Sctx_ptr<Security_context> create(MEM_ROOT *mem_root);
-  void apply_policies_to_security_ctx();
 
  private:
   bool apply_pre_constructed_policies(Security_context *sctx);
@@ -937,7 +944,7 @@ class Grant_temporary_dynamic_privileges
     : public Grant_privileges<Grant_temporary_dynamic_privileges> {
  public:
   Grant_temporary_dynamic_privileges(const THD *thd,
-                                     const std::vector<std::string> privs);
+                                     std::vector<std::string> privs);
   bool precheck(Security_context *sctx);
   bool grant_privileges(Security_context *sctx);
 
@@ -948,8 +955,8 @@ class Grant_temporary_dynamic_privileges
 
 class Drop_temporary_dynamic_privileges {
  public:
-  Drop_temporary_dynamic_privileges(const std::vector<std::string> privs)
-      : m_privs(privs) {}
+  explicit Drop_temporary_dynamic_privileges(std::vector<std::string> privs)
+      : m_privs(std::move(privs)) {}
   void operator()(Security_context *sctx);
 
  private:
@@ -1001,10 +1008,17 @@ class Auth_id {
   const std::string &host() const;
 
  private:
+  void create_key();
   /** User part */
   std::string m_user;
   /** Host part */
   std::string m_host;
+  /**
+    Key: Internal representation mainly to facilitate use of
+         Auth_id class in standard container.
+         Format: 'user\0host\0'
+  */
+  std::string m_key;
 };
 
 /*
@@ -1014,4 +1028,20 @@ class Auth_id {
 */
 using Role_id = Auth_id;
 
+/**
+  Length of string buffer, that is enough to contain
+  username and hostname parts of the user identifier with trailing zero in
+  MySQL standard format:
+  user_name_part\@host_name_part\\0
+*/
+static constexpr int USER_HOST_BUFF_SIZE =
+    HOSTNAME_LENGTH + USERNAME_LENGTH + 2;
+
+void generate_random_password(std::string *password, uint32_t);
+typedef std::list<std::vector<std::string>> Userhostpassword_list;
+bool send_password_result_set(THD *thd,
+                              const Userhostpassword_list &generated_passwords);
+bool lock_and_get_mandatory_roles(std::vector<Role_id> *mandatory_roles);
+bool mysql_alter_user_comment(THD *thd, const List<LEX_USER> *users,
+                              const std::string &json_blob, bool expect_text);
 #endif /* AUTH_COMMON_INCLUDED */

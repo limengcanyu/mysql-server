@@ -1,4 +1,3 @@
-//>>built
 define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base/sniff", "dojo/ready", "dojo/_base/unload",
 		"dojo/_base/window", "dojo/dom-geometry"],
   function(kernel,lang,has,ready,UnloadUtil,Window,DOMGeom){
@@ -7,18 +6,22 @@ define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base
 
 	//	derived from Morris John's emResized measurer
 	dhm.getFontMeasurements = function(){
-		//	summary
-		//	Returns an object that has pixel equivilents of standard font size values.
+		// summary:
+		//		Returns an object that has pixel equivilents of standard font size values.
 		var heights = {
 			'1em':0, '1ex':0, '100%':0, '12pt':0, '16px':0, 'xx-small':0, 'x-small':0,
 			'small':0, 'medium':0, 'large':0, 'x-large':0, 'xx-large':0
 		};
 	
+		var oldStyle;	
 		if(has("ie")){
-			//	we do a font-size fix if and only if one isn't applied already.
-			//	NOTE: If someone set the fontSize on the HTML Element, this will kill it.
-			Window.doc.documentElement.style.fontSize="100%";
-		}
+			//	We do a font-size fix if and only if one isn't applied already.
+			// NOTE: If someone set the fontSize on the HTML Element, this will kill it.
+			oldStyle = Window.doc.documentElement.style.fontSize || "";
+			if(!oldStyle){
+				Window.doc.documentElement.style.fontSize="100%";
+			}
+		}		
 	
 		//	set up the measuring node.
 		var div=Window.doc.createElement("div");
@@ -41,6 +44,11 @@ define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base
 			ds.fontSize = p;
 			heights[p] = Math.round(div.offsetHeight * 12/16) * 16/12 / 1000;
 		}
+
+		if(has("ie")){
+			// Restore the font to its old style.
+			Window.doc.documentElement.style.fontSize = oldStyle;
+		}
 		
 		Window.body().removeChild(div);
 		div = null;
@@ -61,7 +69,9 @@ define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base
 		var m, s;
 		if(!measuringNode){
 			m = measuringNode = Window.doc.createElement("div");
-			// Container that we can set contraints on so that it doesn't
+			// Due to fixing the parent node's width below, texts which contain white-spaces would be wrapped. Avoid this.
+			m.style.whiteSpace = "nowrap";
+			// Container that we can set constraints on so that it doesn't
 			// trigger a scrollbar.
 			var c = Window.doc.createElement("div");
 			c.appendChild(m);
@@ -122,6 +132,7 @@ define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base
 		fs.width = "5em";
 		fs.height = "10em";
 		fs.top = "-10000px";
+		fs.display = "none";
 		if(has("ie")){
 			f.onreadystatechange = function(){
 				if(f.contentWindow.document.readyState == "complete"){
@@ -142,7 +153,7 @@ define("dojox/html/metrics", ["dojo/_base/kernel","dojo/_base/lang", "dojo/_base
 	dhm.onFontResize = function(){};
 	dhm._fontresize = function(){
 		dhm.onFontResize();
-	}
+	};
 
 	UnloadUtil.addOnUnload(function(){
 		// destroy our font resize iframe if we have one

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -212,6 +212,8 @@ class Gcs_xcom_interface : public Gcs_interface {
 
   Gcs_xcom_node_address *get_node_address();
 
+  void set_node_address(std::string const &address);
+
   /**
    This member function shall return the set of parameters that configure
    the interface at the time its initialization was done. The parameters
@@ -415,12 +417,6 @@ class Gcs_xcom_interface : public Gcs_interface {
   Gcs_xcom_interface &operator=(Gcs_xcom_interface const &);
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 int cb_xcom_match_port(xcom_port if_port);
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* GCS_XCOM_INTERFACE_INCLUDED */

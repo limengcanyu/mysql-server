@@ -37,13 +37,22 @@
  */
 static const Member_version min_version_required(0x080016);
 
-static bool group_replication_get_communication_protocol_init(UDF_INIT *,
+static bool group_replication_get_communication_protocol_init(UDF_INIT *initid,
                                                               UDF_ARGS *args,
                                                               char *message) {
   bool constexpr FAILURE = true;
   bool constexpr SUCCESS = false;
   bool result = FAILURE;
 
+  /*
+    Increment only after verifying the plugin is not stopping
+    Do NOT increment before accessing volatile plugin structures.
+    Stop is checked again after increment as the plugin might have stopped
+  */
+  if (get_plugin_is_stopping()) {
+    std::snprintf(message, MYSQL_ERRMSG_SIZE, member_offline_or_minority_str);
+    return result;
+  }
   UDF_counter udf_counter;
 
   if (args->arg_count != 0) {
@@ -51,18 +60,8 @@ static bool group_replication_get_communication_protocol_init(UDF_INIT *,
     goto end;
   }
 
-  if (plugin_is_stopping) {
+  if (get_plugin_is_stopping()) {
     std::snprintf(message, MYSQL_ERRMSG_SIZE, member_offline_or_minority_str);
-    goto end;
-  }
-
-  if (group_contains_unreachable_member()) {
-    std::snprintf(message, MYSQL_ERRMSG_SIZE, unreachable_member_on_group_str);
-    goto end;
-  }
-
-  if (group_contains_recovering_member()) {
-    std::snprintf(message, MYSQL_ERRMSG_SIZE, recovering_member_on_group_str);
     goto end;
   }
 
@@ -70,6 +69,7 @@ static bool group_replication_get_communication_protocol_init(UDF_INIT *,
     std::snprintf(message, MYSQL_ERRMSG_SIZE, member_offline_or_minority_str);
     goto end;
   }
+  if (Charset_service::set_return_value_charset(initid)) goto end;
 
   result = SUCCESS;
   udf_counter.succeeded();
@@ -115,20 +115,30 @@ const char *const invalid_format_str =
     "'%s' is not version string argument with format major.minor.patch";
 const char *const value_outside_domain_str = "%s is not between %s and %s";
 
-static bool group_replication_set_communication_protocol_init(UDF_INIT *,
+static bool group_replication_set_communication_protocol_init(UDF_INIT *initid,
                                                               UDF_ARGS *args,
                                                               char *message) {
   bool constexpr FAILURE = true;
   bool constexpr SUCCESS = false;
   bool result = FAILURE;
 
+  /*
+    Increment only after verifying the plugin is not stopping
+    Do NOT increment before accessing volatile plugin structures.
+    Stop is checked again after increment as the plugin might have stopped
+  */
+  if (get_plugin_is_stopping()) {
+    std::snprintf(message, MYSQL_ERRMSG_SIZE, member_offline_or_minority_str);
+    return result;
+  }
   UDF_counter udf_counter;
 
   privilege_result privilege = privilege_result::error();
   auto const &min_version = convert_to_mysql_version(Gcs_protocol_version::V1);
 
   // Validate nr. of arguments.
-  bool const wrong_number_of_args = (args->arg_count != 1);
+  bool const wrong_number_of_args =
+      (args->arg_count != 1 || args->lengths[0] == 0);
   bool const wrong_arg_type =
       (!wrong_number_of_args && args->arg_type[0] != STRING_RESULT);
   if (wrong_number_of_args || wrong_arg_type) {
@@ -136,7 +146,7 @@ static bool group_replication_set_communication_protocol_init(UDF_INIT *,
     goto end;
   }
 
-  if (plugin_is_stopping) {
+  if (get_plugin_is_stopping()) {
     std::snprintf(message, MYSQL_ERRMSG_SIZE, member_offline_or_minority_str);
     goto end;
   }
@@ -189,6 +199,9 @@ static bool group_replication_set_communication_protocol_init(UDF_INIT *,
       goto end;
     }
   }
+  if (Charset_service::set_return_value_charset(initid) ||
+      Charset_service::set_args_charset(args))
+    goto end;
 
   result = SUCCESS;
   udf_counter.succeeded();
@@ -203,6 +216,7 @@ static void group_replication_set_communication_protocol_deinit(UDF_INIT *) {
 static char *group_replication_set_communication_protocol(
     UDF_INIT *, UDF_ARGS *args, char *result, unsigned long *length,
     unsigned char *is_null, unsigned char *error) {
+  const char *action_name = "group_replication_set_communication_protocol";
   /* According to sql/udf_example.cc, result has at least 255 bytes */
   unsigned long constexpr MAX_SAFE_LENGTH = 255;
   bool valid_version = false;
@@ -216,6 +230,8 @@ static char *group_replication_set_communication_protocol(
   if (args->args[0] == nullptr) {
     std::snprintf(result, MAX_SAFE_LENGTH, wrong_nr_args_str);
     *length = std::strlen(result);
+    *error = 1;
+    throw_udf_error(action_name, result);
     return result;
   }
 
@@ -226,6 +242,8 @@ static char *group_replication_set_communication_protocol(
                   "least version %s",
                   min_version_required.get_version_string().c_str());
     *length = std::strlen(result);
+    *error = 1;
+    throw_udf_error(action_name, result);
     return result;
   }
 
@@ -233,6 +251,8 @@ static char *group_replication_set_communication_protocol(
   if (!valid_mysql_version_string(args->args[0])) {
     std::snprintf(result, MAX_SAFE_LENGTH, invalid_format_str, args->args[0]);
     *length = std::strlen(result);
+    *error = 1;
+    throw_udf_error(action_name, result);
     return result;
   }
 
@@ -247,6 +267,8 @@ static char *group_replication_set_communication_protocol(
                   min_version.get_version_string().c_str(),
                   my_version.get_version_string().c_str());
     *length = std::strlen(result);
+    *error = 1;
+    throw_udf_error(action_name, result);
     return result;
   }
 
@@ -257,9 +279,11 @@ static char *group_replication_set_communication_protocol(
   Group_action_diagnostics action_diagnostics;
   group_action_coordinator->coordinate_action_execution(&group_action,
                                                         &action_diagnostics);
-  log_group_action_result_message(
-      &action_diagnostics, "group_replication_set_communication_protocol",
-      result, length);
+  if (log_group_action_result_message(
+          &action_diagnostics, "group_replication_set_communication_protocol",
+          result, length)) {
+    *error = 1;
+  }
   return result;
 }
 

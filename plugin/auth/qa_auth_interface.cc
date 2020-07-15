@@ -1,4 +1,4 @@
-/*  Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
+/*  Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License, version 2.0,
@@ -78,7 +78,7 @@ static int qa_auth_interface(MYSQL_PLUGIN_VIO *vio,
     strcpy(info->user_name, "user_name");
     info->user_name_length = 9;
     /* Overwriting not intended, effect not visible */
-    strcpy((char *)info->auth_string, "auth_string");
+    strcpy(const_cast<char *>(info->auth_string), "auth_string");
     info->auth_string_length = 11;
     /* Assign with account for authorization, effect on CURRENT_USER() */
     strcpy(info->authenticated_as, "authenticated_as");
@@ -95,7 +95,7 @@ static int qa_auth_interface(MYSQL_PLUGIN_VIO *vio,
     /* Original value is 14. Test runs also with higher value. Changes have no
      * effect.*/
     info->user_name_length = 28;
-    strcpy((char *)info->auth_string, "qa_test_3_dest");
+    strcpy(const_cast<char *>(info->auth_string), "qa_test_3_dest");
     /* Original value is 14. Test runs also with higher value. Changes have no
      * effect.*/
     info->auth_string_length = 28;
@@ -107,7 +107,7 @@ static int qa_auth_interface(MYSQL_PLUGIN_VIO *vio,
     /* Original value is 14. Test runs also with lower value. Changes have no
      * effect.*/
     info->user_name_length = 8;
-    strcpy((char *)info->auth_string, "qa_test_4_dest");
+    strcpy(const_cast<char *>(info->auth_string), "qa_test_4_dest");
     /* Original value is 14. Test runs also with lower value. Changes have no
      * effect.*/
     info->auth_string_length = 8;
@@ -120,7 +120,7 @@ static int qa_auth_interface(MYSQL_PLUGIN_VIO *vio,
     strcpy(info->user_name, "");
     info->user_name_length = 0;
     /* This assignment has no effect.*/
-    strcpy((char *)info->auth_string, "");
+    strcpy(const_cast<char *>(info->auth_string), "");
     info->auth_string_length = 0;
     /* This assignment caused an error or an "empty" user */
     strcpy(info->authenticated_as, "");
@@ -175,22 +175,22 @@ static struct st_mysql_auth qa_auth_test_handler = {
     validate_auth_string_hash,
     set_salt,
     AUTH_FLAG_PRIVILEGED_USER_FOR_PASSWORD_CHANGE,
-    NULL};
+    nullptr};
 
 mysql_declare_plugin(test_plugin){
     MYSQL_AUTHENTICATION_PLUGIN,
     &qa_auth_test_handler,
     "qa_auth_interface",
-    "Horst Hunger",
+    PLUGIN_AUTHOR_ORACLE,
     "plugin API test plugin",
     PLUGIN_LICENSE_GPL,
-    NULL, /* Init */
-    NULL, /* Check uninstall */
-    NULL, /* Deinit */
+    nullptr, /* Init */
+    nullptr, /* Check uninstall */
+    nullptr, /* Deinit */
     0x0101,
-    NULL,
-    NULL,
-    NULL,
+    nullptr,
+    nullptr,
+    nullptr,
     0,
 } mysql_declare_plugin_end;
 
@@ -235,7 +235,7 @@ static int test_plugin_client(MYSQL_PLUGIN_VIO *vio, MYSQL *mysql) {
     pkt_len = vio->read_packet(vio, &pkt);
     if (pkt_len < 0) return CR_ERROR;
 
-    if (pkt == 0) {
+    if (pkt == nullptr) {
       /*
         in mysql_change_user() the client sends the first packet, so
         the first vio->read_packet() does nothing (pkt == 0).
@@ -276,7 +276,7 @@ static int test_plugin_client(MYSQL_PLUGIN_VIO *vio, MYSQL *mysql) {
   return CR_OK;
 }
 
-mysql_declare_client_plugin(AUTHENTICATION) "qa_auth_interface", "Horst Hunger",
-    "Dialog Client Authentication Plugin", {0, 1, 0},
-    "GPL", NULL, NULL, NULL, NULL,
-    test_plugin_client, NULL mysql_end_client_plugin;
+mysql_declare_client_plugin(AUTHENTICATION) "qa_auth_interface",
+    MYSQL_CLIENT_PLUGIN_AUTHOR_ORACLE, "Dialog Client Authentication Plugin",
+    {0, 1, 0}, "GPL", nullptr, nullptr, nullptr, nullptr, test_plugin_client,
+    nullptr mysql_end_client_plugin;

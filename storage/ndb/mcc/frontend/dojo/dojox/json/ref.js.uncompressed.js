@@ -1,50 +1,55 @@
-//>>built
-define("dojox/json/ref", ["dojo/_base/kernel", "dojox", "dojo/date/stamp", "dojo/_base/array", "dojo/_base/json"], function(dojo, dojox){
+define("dojox/json/ref", [
+	"dojo/_base/array",
+	"dojo/_base/json",
+	"dojo/_base/kernel",
+	"dojo/_base/lang",
+	"dojo/date/stamp",
+	"dojox"
+],
+function(array, djson, dojo, lang, stamp, dojox){
 
-dojo.getObject("json", true, dojox);
+lang.getObject("json", true, dojox);
 
 return dojox.json.ref = {
 	// summary:
-	// 		Adds advanced JSON {de}serialization capabilities to the base json library.
-	// 		This enhances the capabilities of dojo.toJson and dojo.fromJson,
-	// 		adding referencing support, date handling, and other extra format handling.
-	// 		On parsing, references are resolved. When references are made to
-	// 		ids/objects that have been loaded yet, the loader function will be set to
-	// 		_loadObject to denote a lazy loading (not loaded yet) object.
+	//		Adds advanced JSON {de}serialization capabilities to the base json library.
+	//		This enhances the capabilities of dojo.toJson and dojo.fromJson,
+	//		adding referencing support, date handling, and other extra format handling.
+	//		On parsing, references are resolved. When references are made to
+	//		ids/objects that have been loaded yet, the loader function will be set to
+	//		_loadObject to denote a lazy loading (not loaded yet) object.
 
 
-	resolveJson: function(/*Object*/ root,/*Object?*/ args){
+	resolveJson: function(/*Object*/ root, /*Object?*/ args){
 		// summary:
-		// 		Indexes and resolves references in the JSON object.
+		//		Indexes and resolves references in the JSON object.
 		// description:
-		// 		A JSON Schema object that can be used to advise the handling of the JSON (defining ids, date properties, urls, etc)
-		//
+		//		A JSON Schema object that can be used to advise the handling of the JSON (defining ids, date properties, urls, etc)
 		// root:
 		//		The root object of the object graph to be processed
 		// args:
 		//		Object with additional arguments:
 		//
-		// The *index* parameter.
-		//		This is the index object (map) to use to store an index of all the objects.
-		// 		If you are using inter-message referencing, you must provide the same object for each call.
-		// The *defaultId* parameter.
-		//		This is the default id to use for the root object (if it doesn't define it's own id)
-		//	The *idPrefix* parameter.
-		//		This the prefix to use for the ids as they enter the index. This allows multiple tables
-		// 		to use ids (that might otherwise collide) that enter the same global index.
-		// 		idPrefix should be in the form "/Service/".  For example,
-		//		if the idPrefix is "/Table/", and object is encountered {id:"4",...}, this would go in the
-		//		index as "/Table/4".
-		//	The *idAttribute* parameter.
-		//		This indicates what property is the identity property. This defaults to "id"
-		//	The *assignAbsoluteIds* parameter.
-		//		This indicates that the resolveJson should assign absolute ids (__id) as the objects are being parsed.
-		//
-		// The *schemas* parameter
-		//		This provides a map of schemas, from which prototypes can be retrieved
-		// The *loader* parameter
-		//		This is a function that is called added to the reference objects that can't be resolved (lazy objects)
-		// return:
+		//		- The *index* parameter:
+		//			This is the index object (map) to use to store an index of all the objects.
+		//			If you are using inter-message referencing, you must provide the same object for each call.
+		//		- The *defaultId* parameter:
+		//			This is the default id to use for the root object (if it doesn't define it's own id)
+		//		- The *idPrefix* parameter:
+		//			This the prefix to use for the ids as they enter the index. This allows multiple tables
+		//			to use ids (that might otherwise collide) that enter the same global index.
+		//			idPrefix should be in the form "/Service/".  For example,
+		//			if the idPrefix is "/Table/", and object is encountered {id:"4",...}, this would go in the
+		//			index as "/Table/4".
+		//		- The *idAttribute* parameter:
+		//			This indicates what property is the identity property. This defaults to "id"
+		//		- The *assignAbsoluteIds* parameter:
+		//			This indicates that the resolveJson should assign absolute ids (__id) as the objects are being parsed.
+		//		- The *schemas* parameter:
+		//			This provides a map of schemas, from which prototypes can be retrieved
+		//		- The *loader* parameter:
+		//			This is a function that is called added to the reference objects that can't be resolved (lazy objects)
+		// returns:
 		//		An object, the result of the processing
 		args = args || {};
 		var idAttribute = args.idAttribute || 'id';
@@ -58,7 +63,7 @@ return dojox.json.ref = {
 		var pathResolveRegex = /^(.*\/)?(\w+:\/\/)|[^\/\.]+\/\.\.\/|^.*\/(\/)/;
 		var addProp = this._addProp;
 		var F = function(){};
-		function walk(it, stop, defaultId, needsPrefix, schema, defaultObject){
+		function walk(it, stop, defaultId, needsPrefix, schema, defaultObject, parent){
 			// this walks the new graph, resolving references and making other changes
 		 	var i, update, val, id = idAttribute in it ? it[idAttribute] : defaultId;
 		 	if(idAttribute in it || ((id !== undefined) && needsPrefix)){
@@ -99,7 +104,7 @@ return dojox.json.ref = {
 					for(i in it){
 						var propertyDefinition = properties[i];
 						if(propertyDefinition && propertyDefinition.format == 'date-time' && typeof it[i] == 'string'){
-							it[i] = dojo.date.stamp.fromISOString(it[i]);
+							it[i] = stamp.fromISOString(it[i]);
 						}
 					}
 				}
@@ -114,10 +119,8 @@ return dojox.json.ref = {
 					val=it[i];
 					if((typeof val =='object') && val && !(val instanceof Date) && i != '__parent'){
 						ref=val[refAttribute] || (idAsRef && val[idAttribute]);
-						if(!ref || !val.__parent){
-							if(it != reWalk){
-								val.__parent = target;
-							}
+						if(it != reWalk && (!ref || !val.__parent)){
+							val.__parent = parent ? parent : target;
 						}
 						if(ref){ // a reference was found
 							// make sure it is a safe reference
@@ -125,7 +128,7 @@ return dojox.json.ref = {
 							var path = ref.toString().replace(/(#)([^\.\[])/,'$1.$2').match(/(^([^\[]*\/)?[^#\.\[]*)#?([\.\[].*)?/); // divide along the path
 							if(index[(prefix + ref).replace(pathResolveRegex,'$2$3')]){
 								ref = index[(prefix + ref).replace(pathResolveRegex,'$2$3')];
-							}else if((ref = (path[1]=='$' || path[1]=='this' || path[1]=='') ? root : index[(prefix + path[1]).replace(pathResolveRegex,'$2$3')])){  // a $ indicates to start with the root, otherwise start with an id
+							}else if((ref = (path[1]=='$' || path[1]=='this' || path[1]==='') ? root : index[(prefix + path[1]).replace(pathResolveRegex,'$2$3')])){  // a $ indicates to start with the root, otherwise start with an id
 								// if there is a path, we will iterate through the path references
 								if(path[3]){
 									path[3].replace(/(\[([^\]]+)\])|(\.?([^\.\[]+))/g,function(t,a,b,c,d){
@@ -145,6 +148,7 @@ return dojox.json.ref = {
 										reWalk.push(target); // we need to rewalk it to resolve references
 									}
 									rewalking = true; // we only want to add it once
+									// TODO: What is propertyDefinition supposed to be here?
 									val = walk(val, false, val[refAttribute], true, propertyDefinition);
 									// create a lazy loaded object
 									val._loadObject = args.loader;
@@ -158,10 +162,12 @@ return dojox.json.ref = {
 									reWalk==it,
 									id === undefined ? undefined : addProp(id, i), // the default id to use
 									false,
+									// TODO: What is propertyDefinition supposed to be here?
 									propertyDefinition,
 									// if we have an existing object child, we want to
 									// maintain it's identity, so we pass it as the default object
-									target != it && typeof target[i] == 'object' && target[i]
+									target != it && typeof target[i] == 'object' && target[i],
+									it
 								);
 							}
 						}
@@ -181,7 +187,7 @@ return dojox.json.ref = {
 					}
 				}
 			}
-	
+
 			if(update && (idAttribute in it || target instanceof Array)){
 				// this means we are updating with a full representation of the object, we need to remove deleted
 				for(i in target){
@@ -213,22 +219,22 @@ return dojox.json.ref = {
 
 	fromJson: function(/*String*/ str,/*Object?*/ args){
 	// summary:
-	// 		evaluates the passed string-form of a JSON object.
-	//
+	//		evaluates the passed string-form of a JSON object.
 	// str:
 	//		a string literal of a JSON item, for instance:
-	//			'{ "foo": [ "bar", 1, { "baz": "thud" } ] }'
-	// args: See resolveJson
-	//
-	// return:
+	// |	'{ "foo": [ "bar", 1, { "baz": "thud" } ] }'
+	// args:
+	//		See resolveJson
+	// returns:
 	//		An object, the result of the evaluation
 		function ref(target){ // support call styles references as well
 			var refObject = {};
 			refObject[this.refAttribute] = target;
 			return refObject;
 		}
+		var root;
 		try{
-			var root = eval('(' + str + ')'); // do the eval
+			root = eval('(' + str + ')'); // do the eval
 		}catch(e){
 			throw new SyntaxError("Invalid JSON string: " + e.message + " parsing: "+ str);
 		}
@@ -237,25 +243,22 @@ return dojox.json.ref = {
 		}
 		return root;
 	},
-	
-	toJson: function(/*Object*/ it, /*Boolean?*/ prettyPrint, /*Object?*/ idPrefix, /*Object?*/ indexSubObjects){
+
+	toJson: function(/*Object*/ it, /*Boolean?*/ prettyPrint, /*Object?*/ idPrefix, /*Object?*/ indexSubObjects, /*String*/idAttribute){
 		// summary:
 		//		Create a JSON serialization of an object.
 		//		This has support for referencing, including circular references, duplicate references, and out-of-message references
-		// 		id and path-based referencing is supported as well and is based on http://www.json.com/2007/10/19/json-referencing-proposal-and-library/.
-		//
+		//		id and path-based referencing is supported as well and is based on http://www.json.com/2007/10/19/json-referencing-proposal-and-library/.
 		// it:
 		//		an object to be serialized.
-		//
 		// prettyPrint:
 		//		if true, we indent objects and arrays to make the output prettier.
 		//		The variable dojo.toJsonIndentStr is used as the indent string
 		//		-- to use something other than the default (tab),
 		//		change that variable before calling dojo.toJson().
-		//
-		// idPrefix: The prefix that has been used for the absolute ids
-		//
-		// return:
+		// idPrefix:
+		//		The prefix that has been used for the absolute ids
+		// returns:
 		//		a String representing the serialized version of the passed object.
 		var useRefs = this._useRefs;
 		var addProp = this._addProp;
@@ -263,11 +266,20 @@ return dojox.json.ref = {
 		idPrefix = idPrefix || ''; // the id prefix for this context
 		var paths={};
 		var generated = {};
+		var idAttributeProvided = idAttribute ? true: false;
+		var uniqueIdCount = 1;
+		function getUniqueId() {
+			var str = (uniqueIdCount++).toString();
+			if (generated.hasOwnProperty(str)) {
+				return getUniqueId();
+			}
+			return str;
+		}
 		function serialize(it,path,_indentStr){
 			if(typeof it == 'object' && it){
 				var value;
 				if(it instanceof Date){ // properly serialize dates
-					return '"' + dojo.date.stamp.toISOString(it,{zulu:true}) + '"';
+					return '"' + stamp.toISOString(it,{zulu:true}) + '"';
 				}
 				var id = it.__id;
 				if(id){ // we found an identifiable object, we will just serialize a reference to it... unless it is the root
@@ -286,22 +298,30 @@ return dojox.json.ref = {
 						}
 						var refObject = {};
 						refObject[refAttribute] = ref;
-						return serialize(refObject,'#');
+						return djson.toJson(refObject, prettyPrint);
 					}
 					path = id;
 				}else{
-					it.__id = path; // we will create path ids for other objects in case they are circular
-					generated[path] = it;
+					if (idAttributeProvided) {
+						if(!(it instanceof Array)){
+							path = getUniqueId();
+							it.__id = path; // we will create path ids for other objects in case they are circular
+							generated[path] = it;
+						}
+					} else {
+						it.__id = path; // we will create path ids for other objects in case they are circular
+						generated[path] = it;
+					}
 				}
 				paths[path] = it;// save it here so they can be deleted at the end
 				_indentStr = _indentStr || "";
-				var nextIndent = prettyPrint ? _indentStr + dojo.toJsonIndentStr : "";
+				var nextIndent = prettyPrint ? _indentStr + djson.toJsonIndentStr : "";
 				var newLine = prettyPrint ? "\n" : "";
 				var sep = prettyPrint ? " " : "";
-	
+
 				if(it instanceof Array){
-					var res = dojo.map(it, function(obj,i){
-						var val = serialize(obj, addProp(path, i), nextIndent);
+					var res = array.map(it, function(obj,i){
+						var val = serialize(obj, idAttributeProvided ? undefined : addProp(path, i), nextIndent);
 						if(typeof val != "string"){
 							val = "undefined";
 						}
@@ -309,8 +329,11 @@ return dojox.json.ref = {
 					});
 					return "[" + res.join("," + sep) + newLine + _indentStr + "]";
 				}
-	
+
 				var output = [];
+				if (idAttributeProvided && (typeof it[idAttribute] === 'undefined')) {
+					output.push(newLine + nextIndent + djson._escapeString(idAttribute) + ":" + sep + djson.toJson(it.__id));
+				}
 				for(var i in it){
 					if(it.hasOwnProperty(i)){
 						var keyStr;
@@ -318,12 +341,12 @@ return dojox.json.ref = {
 							keyStr = '"' + i + '"';
 						}else if(typeof i == "string" && (i.charAt(0) != '_' || i.charAt(1) != '_')){
 							// we don't serialize our internal properties __id and __clientId
-							keyStr = dojo._escapeString(i);
+							keyStr = djson._escapeString(i);
 						}else{
 							// skip non-string or number keys
 							continue;
 						}
-						var val = serialize(it[i],addProp(path, i),nextIndent);
+						var val = serialize(it[i],idAttributeProvided ? undefined : addProp(path, i),nextIndent);
 						if(typeof val != "string"){
 							// skip non-serializable values
 							continue;
@@ -335,10 +358,10 @@ return dojox.json.ref = {
 			}else if(typeof it == "function" && dojox.json.ref.serializeFunctions){
 				return it.toString();
 			}
-	
-			return dojo.toJson(it); // use the default serializer for primitives
+
+			return djson.toJson(it); // use the default serializer for primitives
 		}
-		var json = serialize(it,'#','');
+		var json = serialize(it,idAttributeProvided ? undefined : '#','');
 		if(!indexSubObjects){
 			for(var i in generated)  {// cleanup the temporary path-generated ids
 				delete generated[i].__id;
@@ -349,10 +372,10 @@ return dojox.json.ref = {
 	_addProp: function(id, prop){
 		return id + (id.match(/#/) ? id.length == 1 ? '' : '.' : '#') + prop;
 	},
-	//	refAttribute: String
+	// refAttribute: String
 	//		This indicates what property is the reference property. This acts like the idAttribute
-	// 		except that this is used to indicate the current object is a reference or only partially
-	// 		loaded. This defaults to "$ref".
+	//		except that this is used to indicate the current object is a reference or only partially
+	//		loaded. This defaults to "$ref".
 	refAttribute: "$ref",
 	_useRefs: false,
 	serializeFunctions: false

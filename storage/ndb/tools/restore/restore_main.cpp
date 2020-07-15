@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -23,15 +23,16 @@
 */
 
 #include <Logger.hpp>
-#include <NDBT_ReturnCodes.h>
 #include <NdbOut.hpp>
 #include <NdbTCP.h>
+#include <NdbToolsProgramExitCodes.hpp>
 #include <OutputStream.hpp>
 #include <Properties.hpp>
 #include <Vector.hpp>
 #include <ndb_global.h>
 #include <ndb_limits.h>
 #include <ndb_opts.h>
+#include <ndb_version.h>
 
 #include "../src/ndbapi/NdbDictionaryImpl.hpp"
 #include "consumer_printer.hpp"
@@ -108,6 +109,8 @@ Vector<class RestoreOption *> g_include_exclude;
 static void save_include_exclude(int optid, char * argument);
 
 static inline void parse_rewrite_database(char * argument);
+static void exitHandler(int code);
+static void free_include_excludes_vector();
 
 /**
  * print and restore flags
@@ -119,7 +122,8 @@ static bool ga_skip_table_check = false;
 static bool ga_exclude_missing_columns = false;
 static bool ga_exclude_missing_tables = false;
 static bool opt_exclude_intermediate_sql_tables = true;
-#ifdef ERROR_INSERT 
+bool opt_include_stored_grants = false;
+#ifdef ERROR_INSERT
 static unsigned int _error_insert = 0;
 #endif
 static int _print = 0;
@@ -135,7 +139,11 @@ static bool ga_disable_indexes = false;
 static bool ga_rebuild_indexes = false;
 bool ga_skip_unknown_objects = false;
 bool ga_skip_broken_objects = false;
+bool ga_allow_pk_changes = false;
+bool ga_ignore_extended_pk_updates = false;
 BaseString g_options("ndb_restore");
+static int ga_num_slices = 1;
+static int ga_slice_id = 0;
 
 const char *load_default_groups[]= { "mysql_cluster","ndb_restore",0 };
 
@@ -149,6 +157,7 @@ enum ndb_restore_options {
 #ifdef ERROR_INSERT
   ,OPT_ERROR_INSERT
 #endif
+  ,OPT_REMAP_COLUMN = 'x'
 };
 static const char *opt_fields_enclosed_by= NULL;
 static const char *opt_fields_terminated_by= NULL;
@@ -162,7 +171,97 @@ static const char *opt_include_tables= NULL;
 static const char *opt_exclude_databases= NULL;
 static const char *opt_include_databases= NULL;
 static const char *opt_rewrite_database= NULL;
+static const char *opt_one_remap_col_arg= NULL;
 static bool opt_restore_privilege_tables = false;
+
+/**
+ * ExtraTableInfo
+ *
+ * Container for information from user about how
+ * table should be restored
+ */
+class ExtraTableInfo
+{
+public:
+  ExtraTableInfo(const char* db_name,
+                 const char* table_name):
+    m_dbName(db_name),
+    m_tableName(table_name)
+  {
+  }
+
+  ~ExtraTableInfo() {}
+
+  const BaseString m_dbName;
+  const BaseString m_tableName;
+
+  /* Arguments related to column remappings */
+  Vector<BaseString> m_remapColumnArgs;
+};
+
+/**
+ * ExtraRestoreInfo
+ *
+ * Container for information from user about
+ * how to restore
+ */
+class ExtraRestoreInfo
+{
+public:
+  ExtraRestoreInfo()
+  {}
+  ~ExtraRestoreInfo()
+  {
+    for (Uint32 i=0; i<m_tables.size(); i++)
+    {
+      delete m_tables[i];
+      m_tables[i] = NULL;
+    }
+  }
+
+  /**
+   * findTable
+   *
+   * Lookup extra restore info for named table
+   */
+  ExtraTableInfo* findTable(const char* db_name,
+                            const char* table_name)
+  {
+    for (Uint32 i=0; i<m_tables.size(); i++)
+    {
+      ExtraTableInfo* tab = m_tables[i];
+      if ((strcmp(db_name, tab->m_dbName.c_str()) == 0) &&
+          (strcmp(table_name, tab->m_tableName.c_str()) == 0))
+      {
+        return tab;
+      }
+    }
+    return NULL;
+  }
+
+  /**
+   * findOrAddTable
+   *
+   * Lookup or Add empty extra restore info for named table
+   */
+  ExtraTableInfo* findOrAddTable(const char* db_name,
+                                 const char* table_name)
+  {
+    ExtraTableInfo* tab = findTable(db_name, table_name);
+    if (tab != NULL)
+    {
+      return tab;
+    }
+
+    tab = new ExtraTableInfo(db_name, table_name);
+    m_tables.push_back(tab);
+    return tab;
+  }
+
+  Vector<ExtraTableInfo*> m_tables;
+};
+
+static ExtraRestoreInfo g_extra_restore_info;
 
 static struct my_option my_long_options[] =
 {
@@ -313,6 +412,11 @@ static struct my_option my_long_options[] =
     (uchar**) &opt_restore_privilege_tables,
     (uchar**) &opt_restore_privilege_tables, 0,
     GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0 },
+  { "include-stored-grants", NDB_OPT_NOSHORT,
+    "Restore users and grants to ndb_sql_metadata table",
+    (uchar **) &opt_include_stored_grants,
+    (uchar**) &opt_include_stored_grants, 0,
+    GET_BOOL, OPT_ARG, false, 0, 0, 0, 0, 0 },
   { "exclude-missing-columns", NDB_OPT_NOSHORT,
     "Ignore columns present in backup but not in database",
     (uchar**) &ga_exclude_missing_columns,
@@ -353,6 +457,49 @@ static struct my_option my_long_options[] =
     (uchar **)&_error_insert, (uchar **)&_error_insert, 0,
     GET_INT, REQUIRED_ARG, 0, 0, 0, 0, 0, 0 },
 #endif
+  { "num_slices", NDB_OPT_NOSHORT,
+    "How many slices are being applied",
+    (uchar**) &ga_num_slices,
+    (uchar**) &ga_num_slices,
+    0,
+    GET_UINT,
+    REQUIRED_ARG,
+    1, /* default */
+    1, /* min */
+    1024, /* max */
+    0,
+    0,
+    0 },
+  { "slice_id", NDB_OPT_NOSHORT,
+    "My slice id",
+    (uchar**) &ga_slice_id,
+    (uchar**) &ga_slice_id,
+    0,
+    GET_INT,
+    REQUIRED_ARG,
+    0, /* default */
+    0, /* min */
+    1023, /* max */
+    0,
+    0,
+    0 },
+  { "allow-pk-changes", NDB_OPT_NOSHORT,
+    "Allow changes to the set of columns making up a table's primary key.",
+    (uchar**) &ga_allow_pk_changes, (uchar**) &ga_allow_pk_changes, 0,
+    GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0 },
+  { "ignore-extended-pk-updates", NDB_OPT_NOSHORT,
+    "Ignore log entries containing updates to columns now included in an "
+    "extended primary key.",
+    (uchar**) &ga_ignore_extended_pk_updates,
+    (uchar**) &ga_ignore_extended_pk_updates,
+    0,
+    GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0 },
+  { "remap-column", OPT_REMAP_COLUMN, "Remap content for column while "
+    "restoring, format <database>.<table>.<column>:<function>:<function_args>."
+    "  <database> is remapped name, remapping applied before other conversions.",
+    (uchar**) &opt_one_remap_col_arg,
+    (uchar**) &opt_one_remap_col_arg, 0,
+    GET_STR, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
   { 0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}
 };
 
@@ -465,6 +612,90 @@ static bool analyse_nodegroup_map(const char *ng_map_str,
   DBUG_RETURN(FALSE);
 }
 
+static bool parse_remap_option(const BaseString option,
+                               BaseString& db_name,
+                               BaseString& tab_name,
+                               BaseString& col_name,
+                               BaseString& func_name,
+                               BaseString& func_args,
+                               BaseString& error_msg)
+{
+  const char* expectedFormat = "<db>.<table>.<column>:function[:args]";
+
+  Vector<BaseString> optParts;
+  const int numOptParts = option.split(optParts,
+                                       BaseString(":"),
+                                       3);
+
+  if (numOptParts < 2)
+  {
+    error_msg.assfmt("remap-column : Badly formed option : %s.  "
+                     "Expected format : %s.",
+                     option.c_str(),
+                     expectedFormat);
+    return false;
+  }
+
+  Vector<BaseString> nameParts;
+  const int numNameParts = optParts[0].split(nameParts,
+                                             BaseString("."));
+  if (numNameParts != 3)
+  {
+    error_msg.assfmt("remap-column : Badly formed column specifier : %s "
+                     "in option %s.  "
+                     "Expected format : %s.",
+                     optParts[0].c_str(),
+                     option.c_str(),
+                     expectedFormat);
+    return false;
+  }
+
+  /* Copy out substrings */
+  db_name.assign(nameParts[0]);
+  tab_name.assign(nameParts[1]);
+  col_name.assign(nameParts[2]);
+  func_name.assign(optParts[1]);
+
+  if (numOptParts == 3)
+  {
+    func_args.assign(optParts[2]);
+  }
+  else
+  {
+    func_args.assign("");
+  }
+
+  return true;
+}
+
+
+static bool parse_remap_column(const char* argument)
+{
+  BaseString option(argument);
+  BaseString db, tab, col, func, args, error_msg;
+
+  if (!parse_remap_option(option,
+                          db,
+                          tab,
+                          col,
+                          func,
+                          args,
+                          error_msg))
+  {
+    restoreLogger.log_info("%s", error_msg.c_str());
+    return false;
+  }
+
+  /* Store this remapping + arguments against the db+table name */
+  ExtraTableInfo* eti = g_extra_restore_info.findOrAddTable(db.c_str(),
+                                                            tab.c_str());
+
+  /* We store the whole argument string to assist error reporting later */
+  eti->m_remapColumnArgs.push_back(option);
+
+  return true;
+}
+
 static void short_usage_sub(void)
 {
   ndb_short_usage_sub("[<path to backup files>]");
@@ -486,7 +717,7 @@ get_one_option(int optid, const struct my_option *opt MY_ATTRIBUTE((unused)),
     if (ga_nodeId == 0)
     {
       err << "Error in --nodeid,-n setting, see --help";
-      exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+      exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
     }
     info.setLevel(254);
     info << "Nodeid = " << ga_nodeId << endl;
@@ -495,7 +726,7 @@ get_one_option(int optid, const struct my_option *opt MY_ATTRIBUTE((unused)),
     if (ga_backupId == 0)
     {
       err << "Error in --backupid,-b setting, see --help";
-      exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+      exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
     }
     info.setLevel(254);
     info << "Backup Id = " << ga_backupId << endl;
@@ -512,7 +743,7 @@ get_one_option(int optid, const struct my_option *opt MY_ATTRIBUTE((unused)),
     if (analyse_nodegroup_map(opt_nodegroup_map_str,
                               &opt_nodegroup_map[0]))
     {
-      exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+      exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
     }
     break;
   case OPT_INCLUDE_DATABASES:
@@ -524,6 +755,8 @@ get_one_option(int optid, const struct my_option *opt MY_ATTRIBUTE((unused)),
   case OPT_REWRITE_DATABASE:
     parse_rewrite_database(argument);
     break;
+  case OPT_REMAP_COLUMN:
+    return (parse_remap_column(argument) ? 0 : 1);
   }
   return 0;
 }
@@ -567,7 +800,7 @@ processTableList(const char* str, Vector<BaseString> &lst)
     if (makeInternalTableName(tmp[i], internalName))
     {
       info << "`" << tmp[i] << "` is not a valid tablename!" << endl;
-      exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+      exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
     }
     lst.push_back(internalName);
   }
@@ -587,22 +820,18 @@ makeExternalTableName(const BaseString &internalName)
   return externalName;
 }
 
-// Exclude the legacy list of six privilege tables from Cluster 7.x
-#include "sql/ndb_dist_priv_util.h"
-void
-exclude_privilege_tables()
-{
-  const char* table_name;
-  Ndb_dist_priv_util dist_priv;
-  while((table_name= dist_priv.iter_next_table()))
-  {
-    BaseString priv_tab;
-    priv_tab.assfmt("%s.%s", dist_priv.database(), table_name);
-    g_exclude_tables.push_back(priv_tab);
-    save_include_exclude(OPT_EXCLUDE_TABLES, (char *)priv_tab.c_str());
+// Exclude the legacy privilege tables from Cluster 7.x
+void exclude_privilege_tables() {
+  static const char *priv_tables[] = {
+      "mysql.user",         "mysql.db",         "mysql.tables_priv",
+      "mysql.columns_priv", "mysql.procs_priv", "mysql.proxies_priv"};
+
+  for (size_t i = 0; i < array_elements(priv_tables); i++) {
+    g_exclude_tables.push_back(priv_tables[i]);
+    save_include_exclude(OPT_EXCLUDE_TABLES,
+                         const_cast<char *>(priv_tables[i]));
   }
 }
-
 
 bool
 readArguments(Ndb_opts & opts, char*** pargv)
@@ -618,17 +847,17 @@ readArguments(Ndb_opts & opts, char*** pargv)
 
   if (opts.handle_options(get_one_option))
   {
-    exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+    exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
   }
   if (ga_nodeId == 0)
   {
     err << "Backup file node ID not specified, please provide --nodeid" << endl;
-    exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+    exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
   }
   if (ga_backupId == 0)
   {
     err << "Backup ID not specified, please provide --backupid" << endl;
-    exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+    exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
   }
 
 
@@ -659,7 +888,7 @@ o verify nodegroup mapping
   for (i = 0; i < 8 ; i++)
     printf("NG %u mapped to %u \n", i >> 1, map_ng[i]);
   }
-  exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+  exit(NdbToolsProgramExitCode::WRONG_ARGS);
 #endif
 
   for (;;)
@@ -827,6 +1056,14 @@ o verify nodegroup mapping
   {
     g_tableCompabilityMask |= TCM_EXCLUDE_MISSING_COLUMNS;
   }
+  if (ga_allow_pk_changes)
+  {
+    g_tableCompabilityMask |= TCM_ALLOW_PK_CHANGES;
+  }
+  if(ga_ignore_extended_pk_updates)
+  {
+    g_tableCompabilityMask |= TCM_IGNORE_EXTENDED_PK_UPDATES;
+  }
   return true;
 }
 
@@ -837,11 +1074,11 @@ bool create_consumers(RestoreThreadData *data)
   if (printer == NULL)
     return false;
 
-  if (g_restoring_in_parallel && (ga_nParallelism > ga_part_count))
-    ga_nParallelism /= ga_part_count;
-
   char threadname[20];
-  BaseString::snprintf(threadname, sizeof(threadname), "%d-%u", ga_nodeId, data->m_part_id);
+  BaseString::snprintf(threadname, sizeof(threadname), "%d-%u-%u",
+                       ga_nodeId,
+                       data->m_part_id,
+                       ga_slice_id);
   BackupRestore* restore = new BackupRestore(g_cluster_connection,
                                              opt_nodegroup_map,
                                              opt_nodegroup_map_len,
@@ -1044,7 +1281,7 @@ static void parse_rewrite_database(char * argument)
 
   info << "argument `" << arg.c_str()
        << "` is not a pair 'a,b' of non-empty names." << endl;
-  exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+  exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
 }
 
 static void save_include_exclude(int optid, char * argument)
@@ -1064,7 +1301,7 @@ static void save_include_exclude(int optid, char * argument)
       if (makeInternalTableName(args[i], arg))
       {
         info << "`" << args[i] << "` is not a valid tablename!" << endl;
-        exit(NDBT_ProgramExit(NDBT_WRONGARGS));
+        exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
       }
       break;
     default:
@@ -1186,9 +1423,13 @@ checkDbAndTableName(const TableS* table)
     return false;
   }
 
-  // If new options are given, ignore the old format
-  if (opt_include_tables || g_exclude_tables.size() > 0 ||
-      opt_include_databases || opt_exclude_databases ) {
+  // If --exclude lists are given, check them
+  if ((g_exclude_tables.size() || opt_exclude_databases)
+       && ! checkDoRestore(table))
+    return false;
+
+  // If --include lists are given, ignore the old-style table list
+  if (opt_include_tables || opt_include_databases ) {
     return (checkDoRestore(table));
   }
   
@@ -1261,6 +1502,483 @@ exclude_missing_tables(const RestoreMetaData& metaData, const Vector<BackupConsu
   }
 }
 
+static TableS*
+find_table_spec(RestoreMetaData& metaData,
+                const char* searchDbName,
+                const char* searchTableName,
+                bool rewrite_backup_db)
+{
+  for(Uint32 m = 0; m < metaData.getNoOfTables(); m++)
+  {
+    TableS *tableSpec= metaData[m];
+
+    BaseString externalName = makeExternalTableName(tableSpec->getTableName());
+    BaseString dbName, tabName;
+    {
+      Vector<BaseString> components;
+      if (externalName.split(components,
+                             BaseString(".")) != 2)
+      {
+        restoreLogger.log_info("Error processing table name from "
+                               "backup %s from %s",
+                               externalName.c_str(),
+                               tableSpec->getTableName());
+        return NULL;
+      }
+      dbName = components[0];
+      tabName = components[1];
+
+      if (rewrite_backup_db)
+      {
+        /* Check for rewrite db, as args are specified wrt new db names */
+        const char* rewrite_dbname;
+        if (g_rewrite_databases.get(dbName.c_str(), &rewrite_dbname))
+        {
+          dbName.assign(rewrite_dbname);
+        }
+      }
+    }
+
+    if (dbName == searchDbName &&
+        tabName == searchTableName)
+    {
+      return tableSpec;
+    }
+  }
+
+  return NULL;
+}
+
+class OffsetTransform : public ColumnTransform
+{
+public:
+  static
+  OffsetTransform* parse(const NdbDictionary::Column* col,
+                         const BaseString& func_name,
+                         const BaseString& func_args,
+                         BaseString& error_msg)
+  {
+    bool sig = true;
+    Uint64 bits = 0;
+    switch (col->getType())
+    {
+    case NdbDictionary::Column::Bigint:
+      sig = true;
+      bits = 64;
+      break;
+    case NdbDictionary::Column::Bigunsigned:
+      sig = false;
+      bits = 64;
+      break;
+    case NdbDictionary::Column::Int:
+      sig = true;
+      bits = 32;
+      break;
+    case NdbDictionary::Column::Unsigned:
+      sig = false;
+      bits = 32;
+      break;
+    default:
+      error_msg.assfmt("Column does not have supported integer type");
+      return NULL;
+    }
+
+    /* Todo : Use ndb type traits */
+    const Uint64 shift = bits - 1;
+    const Uint64 max_uval = ((Uint64(1) << shift) -1) | (Uint64(1) << shift);
+    const Int64 min_sval = 0 - (Uint64(1) << shift);
+    const Int64 max_sval = (Uint64(1) << shift) - 1;
+
+    Int64 offset_val;
+
+    int cnt = sscanf(func_args.c_str(), "%lld", &offset_val);
+    if (cnt != 1)
+    {
+      error_msg.assfmt("offset argument invalid");
+      return NULL;
+    }
+
+    {
+      /* Re-convert back to check for silent-saturation in sscanf */
+      char numbuf[22];
+      BaseString::snprintf(numbuf, sizeof(numbuf),
+                           "%lld", offset_val);
+      if (strncmp(func_args.c_str(), numbuf, sizeof(numbuf)) != 0)
+      {
+        error_msg.assfmt("Offset %s unreadable - out of range for type?",
+                         func_args.c_str());
+        return NULL;
+      }
+    }
+
+    if (offset_val < min_sval ||
+        offset_val > max_sval)
+    {
+      error_msg.assfmt("Offset %lld is out of range for type.",
+                       offset_val);
+      return NULL;
+    }
+
+    return new OffsetTransform(offset_val,
+                               sig,
+                               bits,
+                               min_sval,
+                               max_sval,
+                               max_uval);
+  }
+
+private:
+  Int64 m_offset_val;
+  Int64 m_sig_bound;
+  Uint64 m_unsig_bound;
+  bool m_offset_positive;
+  bool m_sig;
+  Uint32 m_bits;
+
+  OffsetTransform(Int64 offset_val,
+                  bool sig,
+                  Uint32 bits,
+                  Int64 min_sval,
+                  Int64 max_sval,
+                  Uint64 max_uval):
+    m_offset_val(offset_val),
+    m_sig(sig),
+    m_bits(bits)
+  {
+    m_offset_positive = offset_val >= 0;
+    if (sig)
+    {
+      if (m_offset_positive)
+      {
+        m_sig_bound = max_sval - offset_val;
+      }
+      else
+      {
+        m_sig_bound = min_sval - offset_val; // - - = +
+      }
+    }
+    else
+    {
+      if (m_offset_positive)
+      {
+        m_unsig_bound = max_uval - offset_val;
+      }
+      else
+      {
+        m_unsig_bound = (0 - offset_val);
+      }
+    }
+  }
+
+  ~OffsetTransform() {}
+
+  static Uint64 readIntoU64(const void* src, Uint32 bits)
+  {
+    switch(bits)
+    {
+    case 64:
+      Uint64 dst;
+      memcpy(&dst, src, 8);
+      return dst;
+    case 32:
+    {
+      Uint32 u32;
+      memcpy(&u32, src, 4);
+      return u32;
+    }
+    default:
+      abort();
+    }
+    return 0;
+  }
+
+  static void writeFromU64(Uint64 src, void* dst, Uint32 bits)
+  {
+    switch(bits)
+    {
+    case 64:
+      memcpy(dst, &src, 8);
+      return;
+    case 32:
+    {
+      Uint32 u32 = (Uint32) src;
+      memcpy(dst, &u32, 4);
+      return;
+    }
+    default:
+      abort();
+    }
+  }
+
+  static Int64 readIntoS64(const void* src, Uint32 bits)
+  {
+    switch(bits)
+    {
+    case 64:
+      Int64 dst;
+      memcpy(&dst, src, 8);
+      return dst;
+    case 32:
+    {
+      Int32 i32;
+      memcpy(&i32, src, 4);
+      return i32;
+    }
+    default:
+      abort();
+    }
+    return 0;
+  }
+
+  static void writeFromS64(Int64 src, void* dst, Uint32 bits)
+  {
+    switch(bits)
+    {
+    case 64:
+      memcpy(dst, &src, 8);
+      return;
+    case 32:
+    {
+      Int32 i32 = (Int32) src;
+      memcpy(dst, &i32, 4);
+      return;
+    }
+    default:
+      abort();
+    }
+  }
+      
+  virtual bool apply(const NdbDictionary::Column* col,
+                     const void* src_data,
+                     void** dst_data)
+  {
+    if (m_sig)
+    {
+      Int64 src_val = readIntoS64(src_data, m_bits);
+
+      bool src_in_bounds = true;
+      if (m_offset_positive)
+      {
+        src_in_bounds = (src_val <= m_sig_bound);
+      }
+      else
+      {
+        src_in_bounds = (src_val >= m_sig_bound);
+      }
+
+      if (unlikely(!src_in_bounds))
+      {
+        fprintf(stderr, "Offset : Source value out of bounds : adding %lld to %lld "
+                "gives an out of bounds value\n",
+                m_offset_val,
+                src_val);
+
+        return false;
+      }
+
+      src_val += m_offset_val;
+
+      writeFromS64(src_val, *dst_data, m_bits);
+    }
+    else
+    {
+      /* Unsigned */
+      Uint64 src_val = readIntoU64(src_data, m_bits);
+
+      bool src_in_bounds = true;
+      if (m_offset_positive)
+      {
+        src_in_bounds = (src_val <= m_unsig_bound);
+      }
+      else
+      {
+        src_in_bounds = (src_val >= m_unsig_bound);
+      }
+
+      if (unlikely(!src_in_bounds))
+      {
+        fprintf(stderr, "Offset : Source value out of bounds : adding %lld to %llu "
+                "gives an out of bounds value\n",
+                m_offset_val,
+                src_val);
+
+        return false;
+      }
+
+      src_val+= m_offset_val;
+
+      writeFromU64(src_val, *dst_data, m_bits);
+    }
+
+    return true;
+  }
+};
+
+
+static ColumnTransform*
+create_column_transform(const NdbDictionary::Column* col,
+                        const BaseString& func_name,
+                        const BaseString& func_args,
+                        BaseString& error_msg)
+{
+  BaseString lcfunc_name(func_name);
+  lcfunc_name.ndb_tolower();
+
+  if (lcfunc_name == "offset")
+  {
+    return OffsetTransform::parse(col, func_name, func_args, error_msg);
+  }
+  error_msg.assfmt("Function %s not defined", func_name.c_str());
+  return NULL;
+}
+
+static bool
+setup_one_remapping(TableS* tableSpec,
+                    const BaseString& col_name,
+                    const BaseString& func_name,
+                    const BaseString& func_args,
+                    BaseString& error_msg)
+{
+  const NdbDictionary::Column* col =
+    tableSpec->m_dictTable->getColumn(col_name.c_str());
+
+  if (!col)
+  {
+    error_msg.assfmt("Failed to find column %s in table",
+                     col_name.c_str());
+    return false;
+  }
+
+  AttributeDesc* ad = tableSpec->getAttributeDesc(col->getColumnNo());
+
+  if (ad->transform != NULL)
+  {
+    error_msg.assfmt("Duplicate remappings on column %s",
+                     col_name.c_str());
+    return false;
+  }
+
+  restoreLogger.log_debug("Initialising remap function "
+                          "\"%s:%s\" on column %s.%s",
+                          func_name.c_str(),
+                          func_args.c_str(),
+                          tableSpec->m_dictTable->getName(),
+                          col_name.c_str());
+
+  ColumnTransform* ct = create_column_transform(col,
+                                                func_name,
+                                                func_args,
+                                                error_msg);
+
+  if (ct == NULL)
+  {
+    return false;
+  }
+
+  ad->transform = ct;
+
+  return true;
+}
+
+static bool
+setup_column_remappings(RestoreMetaData& metaData)
+{
+  for (Uint32 t = 0; t < g_extra_restore_info.m_tables.size(); t++)
+  {
+    const ExtraTableInfo* eti = g_extra_restore_info.m_tables[t];
+
+    TableS* tableSpec = find_table_spec(metaData,
+                                        eti->m_dbName.c_str(),
+                                        eti->m_tableName.c_str(),
+                                        true); // Rewrite database
+    if (tableSpec)
+    {
+      const Vector<TableS*> blobTables = tableSpec->getBlobTables();
+      const bool haveBlobPartTables = blobTables.size() > 0;
+
+      for (Uint32 a=0; a < eti->m_remapColumnArgs.size(); a++)
+      {
+        BaseString db_name, tab_name, col_name, func_name, func_args, error_msg;
+        if (!parse_remap_option(eti->m_remapColumnArgs[a],
+                                db_name,
+                                tab_name,
+                                col_name,
+                                func_name,
+                                func_args,
+                                error_msg))
+        {
+          /* Should never happen as arg parsed on initial read */
+          restoreLogger.log_info("Unexpected - parse failed : \"%s\"",
+                                 eti->m_remapColumnArgs[a].c_str());
+          return false;
+        }
+
+        if (!setup_one_remapping(tableSpec,
+                                 col_name,
+                                 func_name,
+                                 func_args,
+                                 error_msg))
+        {
+          restoreLogger.log_info("remap_column : Failed with \"%s\" "
+                                 "while processing option \"%s\"",
+                                 error_msg.c_str(),
+                                 eti->m_remapColumnArgs[a].c_str());
+          return false;
+        }
+
+        const bool col_in_pk =
+          tableSpec->m_dictTable->getColumn(col_name.c_str())->getPrimaryKey();
+
+        if (col_in_pk &&
+            haveBlobPartTables)
+        {
+          /* This transform should be added on the Blob part table(s) */
+          for (Uint32 b=0; b < blobTables.size(); b++)
+          {
+            TableS* blobPartTableSpec = blobTables[b];
+            const NdbDictionary::Column* mainTabBlobCol =
+              tableSpec->m_dictTable->getColumn(blobPartTableSpec->getMainColumnId());
+
+            if (unlikely(mainTabBlobCol->getBlobVersion() == NDB_BLOB_V1))
+            {
+              restoreLogger.log_info("remap_column : Failed as table has "
+                                     "v1 Blob column %s when processing "
+                                     "option %s",
+                                     mainTabBlobCol->getName(),
+                                     eti->m_remapColumnArgs[a].c_str());
+              return false;
+            }
+
+            if (!setup_one_remapping(blobPartTableSpec,
+                                     col_name.c_str(),
+                                     func_name,
+                                     func_args,
+                                     error_msg))
+            {
+              restoreLogger.log_info("remap_column : Failed with error %s "
+                                     "while applying remapping to blob "
+                                     "parts table %s from option : %s",
+                                     error_msg.c_str(),
+                                     blobPartTableSpec->m_dictTable->getName(),
+                                     eti->m_remapColumnArgs[a].c_str());
+              return false;
+            }
+          }
+        }
+      }
+    }
+    else
+    {
+      restoreLogger.log_info("remap_column : Failed to find table in Backup "
+                             "matching option : \"%s\"",
+                             eti->m_remapColumnArgs[0].c_str());
+      return false;
+    }
+  }
+
+  return true;
+}
+
 static void
 free_data_callback(void *ctx)
 {
@@ -1285,7 +2003,6 @@ free_include_excludes_vector()
 static void exitHandler(int code)
 {
   free_include_excludes_vector();
-  NDBT_ProgramExit(code);
   if (opt_core)
     abort();
   else
@@ -1303,15 +2020,15 @@ static void init_restore()
     if (g_cluster_connection == NULL)
     {
       err << "Failed to create cluster connection!!" << endl;
-      exitHandler(NDBT_FAILED);
+      exitHandler(NdbToolsProgramExitCode::FAILED);
     }
     g_cluster_connection->set_name(g_options.c_str());
-    if(g_cluster_connection->connect(opt_connect_retries - 1,
+    if (g_cluster_connection->connect(opt_connect_retries - 1,
             opt_connect_retry_delay, 1) != 0)
     {
       delete g_cluster_connection;
       g_cluster_connection = NULL;
-      exitHandler(NDBT_FAILED);
+      exitHandler(NdbToolsProgramExitCode::FAILED);
     }
   }
 }
@@ -1373,6 +2090,85 @@ check_data_truncations(const TableS * table)
   }
 }
 
+
+/**
+ * Determine whether we should skip this table fragment due to
+ * operating in slice mode
+ */
+static bool
+determine_slice_skip_fragment(TableS * table, Uint32 fragmentId, Uint32& fragmentCount)
+{
+  if (ga_num_slices == 1)
+  {
+    /* No slicing */
+    return false;
+  }
+
+  /* Should we restore this fragment? */
+  int fragmentRestoreSlice = 0;
+  if (table->isBlobRelated())
+  {
+    /**
+     * v2 blobs + staging tables
+     * Staging tables need complete blobs restored
+     * at end of slice restore
+     * That requires that we restore matching main and
+     * parts table fragments
+     * So we must ensure that we slice deterministically
+     * across main and parts tables for Blobs tables.
+     * The id of the 'main' table is used to give some
+     * offsetting
+     */
+    const Uint32 mainId = table->getMainTable() ?
+      table->getMainTable()->getTableId() :  // Parts table
+      table->getTableId();                   // Main table
+
+    fragmentRestoreSlice = (mainId + fragmentId) % ga_num_slices;
+  }
+  else
+  {
+    /* For non-Blob tables we use round-robin so
+     * that we can balance across a number of slices
+     * different to the number of fragments
+     */
+    fragmentRestoreSlice = fragmentCount ++ % ga_num_slices;
+  }
+
+  restoreLogger.log_debug("Table : %s blobRelated : %u frag id : %u "
+                          "slice id : %u fragmentRestoreSlice : %u "
+                          "apply : %u",
+                          table->m_dictTable->getName(),
+                          table->isBlobRelated(),
+                          fragmentId,
+                          ga_slice_id,
+                          fragmentRestoreSlice,
+                          (fragmentRestoreSlice == ga_slice_id));
+
+  /* If it's not for this slice, skip it */
+  const bool skip_fragment = (fragmentRestoreSlice != ga_slice_id);
+
+  /* Remember for later lookup */
+  table->setSliceSkipFlag(fragmentId, skip_fragment);
+
+  return skip_fragment;
+}
+
+/**
+ * Check result of previous determination about whether
+ * to skip this fragment in slice mode
+ */
+static
+bool check_slice_skip_fragment(const TableS* table, Uint32 fragmentId)
+{
+  if (ga_num_slices == 1)
+  {
+    /* No slicing */
+    return false;
+  }
+
+  return table->getSliceSkipFlag(fragmentId);
+}
+
 int do_restore(RestoreThreadData *thrdata)
 {
   init_progress();
@@ -1403,7 +2199,7 @@ int do_restore(RestoreThreadData *thrdata)
   if (!metaData.readHeader())
   {
     restoreLogger.log_error("Failed to read %s", metaData.getFilename());
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   const BackupFormat::FileHeader & tmp = metaData.getFileHeader();
@@ -1417,7 +2213,7 @@ int do_restore(RestoreThreadData *thrdata)
   {
   restoreLogger.log_info("Backup version in files: %s ndb version: %s",
            ndbGetVersionString(version, 0,
-                               isDrop6(version) ? "-drop6" : 0,
+                               ndbd_drop6(version) ? "-drop6" : 0,
                                buf, sizeof(buf)),
            ndbGetVersionString(tmp.NdbVersion, tmp.MySQLVersion, 0,
                                 buf, sizeof(buf)));
@@ -1426,7 +2222,7 @@ int do_restore(RestoreThreadData *thrdata)
   {
     restoreLogger.log_info("Backup version in files: %s",
            ndbGetVersionString(version, 0,
-                               isDrop6(version) ? "-drop6" : 0,
+                               ndbd_drop6(version) ? "-drop6" : 0,
                                buf, sizeof(buf)));
   }
 
@@ -1441,13 +2237,13 @@ int do_restore(RestoreThreadData *thrdata)
         ,ndbGetVersionString(MAKE_VERSION(5,1,3), 0, 0, buf, sizeof(buf))
         ,ndbGetVersionString(MAKE_VERSION(5,1,9), 0, 0, new_buf, sizeof(new_buf))
        );
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   if (version > NDB_VERSION)
   {
     restoreLogger.log_error("Restore program older than backup version. Not supported. Use new restore program");
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   restoreLogger.log_debug("Load content");
@@ -1457,26 +2253,27 @@ int do_restore(RestoreThreadData *thrdata)
   int res  = metaData.loadContent();
 
   restoreLogger.log_info("Stop GCP of Backup: %u", metaData.getStopGCP());
+  restoreLogger.log_info("Start GCP of Backup: %u", metaData.getStartGCP());
   
   if (res == 0)
   {
     restoreLogger.log_error("Restore: Failed to load content");
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
   restoreLogger.log_debug("Get number of Tables");
   Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
   restoreLogger.log_info("%s [restore_metadata] Get number of Tables", timestamp);
-  if (metaData.getNoOfTables() == 0) 
+  if (metaData.getNoOfTables() == 0)
   {
     restoreLogger.log_error("The backup contains no tables");
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
-  if(_print_sql_log && _print_log)
+  if (_print_sql_log && _print_log)
   {
     restoreLogger.log_debug("Check to ensure that both print-sql-log and print-log options are not passed");
     restoreLogger.log_error("Both print-sql-log and print-log options passed. Exiting...");
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   if (_print_sql_log)
@@ -1493,20 +2290,20 @@ int do_restore(RestoreThreadData *thrdata)
       BaseString tableName(table->getTableName());
       Vector<BaseString> tableNameParts;
       tableName.split(tableNameParts, "/");
-      if (tableNameParts[2].substr(0,8) == "NDB$BLOB")
+      if (tableNameParts[2].starts_with("NDB$BLOB"))
       {
         restoreLogger.log_error("Found column of type blob with print-sql-log option set. Exiting..." );
-        return NDBT_FAILED;
+        return NdbToolsProgramExitCode::FAILED;
       }
       /* Hidden PKs are stored with the name $PK */
       int noOfPK = table->m_dictTable->getNoOfPrimaryKeys();
-      for(int j = 0; j < noOfPK; j++)
+      for (int j = 0; j < noOfPK; j++)
       {
         const char* pkName = table->m_dictTable->getPrimaryKey(j);
-        if(strcmp(pkName,"$PK") == 0)
+        if (strcmp(pkName, "$PK") == 0)
         {
           restoreLogger.log_error("Found hidden primary key with print-sql-log option set. Exiting...");
-          return NDBT_FAILED;
+          return NdbToolsProgramExitCode::FAILED;
         }
       }
     }
@@ -1516,25 +2313,29 @@ int do_restore(RestoreThreadData *thrdata)
   Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
   restoreLogger.log_info("%s [restore_metadata] Validate Footer", timestamp);
 
-  if (!metaData.validateFooter()) 
+  if (!metaData.validateFooter())
   {
     restoreLogger.log_error("Restore: Failed to validate footer.");
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
   restoreLogger.log_debug("Init Backup objects");
   Uint32 i;
-  for(i= 0; i < g_consumers.size(); i++)
+  for (i = 0; i < g_consumers.size(); i++)
   {
     if (!g_consumers[i]->init(g_tableCompabilityMask))
     {
       restoreLogger.log_error("Failed to initialize consumers");
-      return NDBT_FAILED;
+      return NdbToolsProgramExitCode::FAILED;
     }
-
   }
 
   if(ga_exclude_missing_tables)
     exclude_missing_tables(metaData, thrdata->m_consumers);
+
+  if (!setup_column_remappings(metaData))
+  {
+    return NdbToolsProgramExitCode::FAILED;
+  }
 
   /* report to clusterlog if applicable */
   for (i = 0; i < g_consumers.size(); i++)
@@ -1543,7 +2344,7 @@ int do_restore(RestoreThreadData *thrdata)
   /* before syncing on m_barrier, check if any threads have already exited */
   if (ga_error_thread > 0)
   {
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   if (!thrdata->m_restore_meta)
@@ -1570,21 +2371,22 @@ int do_restore(RestoreThreadData *thrdata)
     if (!thrdata->m_barrier->wait())
     {
       ga_error_thread = thrdata->m_part_id;
-      return NDBT_FAILED;
+      return NdbToolsProgramExitCode::FAILED;
     }
   }
   restoreLogger.log_debug("Restore objects (tablespaces, ..)");
   Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
   restoreLogger.log_info("%s [restore_metadata] Restore objects (tablespaces, ..)", timestamp);
-  for(i = 0; i<metaData.getNoOfObjects(); i++)
+  for (i = 0; i < metaData.getNoOfObjects(); i++)
   {
-    for(Uint32 j= 0; j < g_consumers.size(); j++)
+    for (Uint32 j = 0; j < g_consumers.size(); j++)
       if (!g_consumers[j]->object(metaData.getObjType(i),
-				  metaData.getObjPtr(i)))
+                                  metaData.getObjPtr(i)))
       {
-	restoreLogger.log_error("Restore: Failed to restore table: %s ... Exiting",
-                                metaData[i]->getTableName());
-	return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Restore: Failed to restore table: %s ... Exiting",
+          metaData[i]->getTableName());
+        return NdbToolsProgramExitCode::FAILED;
       } 
     if (check_progress())
     {
@@ -1633,26 +2435,34 @@ int do_restore(RestoreThreadData *thrdata)
                       MYF(MY_WME));
         if (res == 0)
         {
-          return NDBT_FAILED;
+          return NdbToolsProgramExitCode::FAILED;
         }
         FileOutputStream *f= new FileOutputStream(res);
         table_output[i]= f;
       }
-      for(Uint32 j= 0; j < g_consumers.size(); j++)
-	if (!g_consumers[j]->table(* table))
-	{
-	  restoreLogger.log_error("Restore: Failed to restore table: `%s` ... Exiting ",
-                                table->getTableName());
-	  return NDBT_FAILED;
-	} 
-    } else {
-      for(Uint32 j= 0; j < g_consumers.size(); j++)
+      for (Uint32 j = 0; j < g_consumers.size(); j++)
+      {
+        if (!g_consumers[j]->table(* table))
+        {
+          restoreLogger.log_error(
+            "Restore: Failed to restore table: `%s` ... Exiting ",
+            table->getTableName());
+          return NdbToolsProgramExitCode::FAILED;
+        }
+      }
+    }
+    else
+    {
+      for (Uint32 j = 0; j < g_consumers.size(); j++)
+      {
         if (!g_consumers[j]->createSystable(* table))
         {
-	  restoreLogger.log_error("Restore: Failed to restore system table: `%s` ... Exiting",
-                                table->getTableName());
-          return NDBT_FAILED;
+          restoreLogger.log_error(
+            "Restore: Failed to restore system table: `%s` ... Exiting",
+            table->getTableName());
+          return NdbToolsProgramExitCode::FAILED;
         }
+      }
     }
     if (check_progress())
     {
@@ -1665,38 +2475,40 @@ int do_restore(RestoreThreadData *thrdata)
   restoreLogger.log_debug("Save foreign key info");
   Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
   restoreLogger.log_info("%s [restore_metadata] Save foreign key info", timestamp);
-  for(i = 0; i<metaData.getNoOfObjects(); i++)
+  for (i = 0; i < metaData.getNoOfObjects(); i++)
   {
-    for(Uint32 j= 0; j < g_consumers.size(); j++)
+    for (Uint32 j = 0; j < g_consumers.size(); j++)
+    {
       if (!g_consumers[j]->fk(metaData.getObjType(i),
-			      metaData.getObjPtr(i)))
+                              metaData.getObjPtr(i)))
       {
-        return NDBT_FAILED;
-      } 
+        return NdbToolsProgramExitCode::FAILED;
+      }
+    }
   }
 
   restoreLogger.log_debug("Close tables" );
-  for(i= 0; i < g_consumers.size(); i++)
+  for (i = 0; i < g_consumers.size(); i++)
   {
     if (!g_consumers[i]->endOfTables())
     {
-      restoreLogger.log_error("Restore: Failed while closing tables" );
-      return NDBT_FAILED;
+      restoreLogger.log_error("Restore: Failed while closing tables");
+      return NdbToolsProgramExitCode::FAILED;
     } 
     if (!ga_disable_indexes && !ga_rebuild_indexes)
     {
       if (!g_consumers[i]->endOfTablesFK())
       {
-        restoreLogger.log_error("Restore: Failed while closing tables FKs" );
-        return NDBT_FAILED;
-      } 
+        restoreLogger.log_error("Restore: Failed while closing tables FKs");
+        return NdbToolsProgramExitCode::FAILED;
+      }
     }
   }
 
   /* before syncing on m_barrier, check if any threads have already exited */
   if (ga_error_thread > 0)
   {
-    return NDBT_FAILED;
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   if (thrdata->m_restore_meta)
@@ -1705,7 +2517,7 @@ int do_restore(RestoreThreadData *thrdata)
     if (!thrdata->m_barrier->wait())
     {
       ga_error_thread = thrdata->m_part_id;
-      return NDBT_FAILED;
+      return NdbToolsProgramExitCode::FAILED;
     }
   }
 
@@ -1719,6 +2531,8 @@ int do_restore(RestoreThreadData *thrdata)
   restoreLogger.log_info("%s [restore_data] Start restoring table data", timestamp);
   if (ga_restore || ga_print) 
   {
+    Uint32 fragmentsTotal = 0;
+    Uint32 fragmentsRestored = 0;
     if(_restore_data || _print_data)
     {
       // Check table compatibility
@@ -1727,18 +2541,18 @@ int do_restore(RestoreThreadData *thrdata)
             checkDbAndTableName(metaData[i]))
         {
           TableS & tableS = *metaData[i]; // not const
-          for(Uint32 j= 0; j < g_consumers.size(); j++)
+          for(Uint32 j = 0; j < g_consumers.size(); j++)
           {
             if (!g_consumers[j]->table_compatible_check(tableS))
             {
               restoreLogger.log_error("Restore: Failed to restore data, %s table structure incompatible with backup's ... Exiting ", tableS.getTableName());
-              return NDBT_FAILED;
+              return NdbToolsProgramExitCode::FAILED;
             } 
             if (tableS.m_staging &&
                 !g_consumers[j]->prepare_staging(tableS))
             {
               restoreLogger.log_error("Restore: Failed to restore data, %s failed to prepare staging table for data conversion ... Exiting", tableS.getTableName());
-              return NDBT_FAILED;
+              return NdbToolsProgramExitCode::FAILED;
             }
           } 
         }
@@ -1750,14 +2564,17 @@ int do_restore(RestoreThreadData *thrdata)
         {
           // blob table checks use data which is populated by table compatibility checks
           TableS & tableS = *metaData[i];
-          if(isBlobTable(&tableS))
+          if (isBlobTable(&tableS))
           {
-            for(Uint32 j= 0; j < g_consumers.size(); j++)
+            for (Uint32 j = 0; j < g_consumers.size(); j++)
             {
               if (!g_consumers[j]->check_blobs(tableS))
               {
-                 restoreLogger.log_error("Restore: Failed to restore data, %s table's blobs incompatible with backup's ... Exiting ", tableS.getTableName());;
-                  return NDBT_FAILED;
+                restoreLogger.log_error(
+                  "Restore: Failed to restore data, "
+                  "%s table's blobs incompatible with backup's ... Exiting ",
+                  tableS.getTableName());
+                return NdbToolsProgramExitCode::FAILED;
               }
             }
           }
@@ -1768,15 +2585,16 @@ int do_restore(RestoreThreadData *thrdata)
 
       if (!dataIter.validateBackupFile())
       {
-          restoreLogger.log_error("Unable to allocate memory for BackupFile constructor");
-          return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Unable to allocate memory for BackupFile constructor");
+        return NdbToolsProgramExitCode::FAILED;
       }
 
 
       if (!dataIter.validateRestoreDataIterator())
       {
           restoreLogger.log_error("Unable to allocate memory for RestoreDataIterator constructor");
-          return NDBT_FAILED;
+          return NdbToolsProgramExitCode::FAILED;
       }
       
       Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
@@ -1785,23 +2603,64 @@ int do_restore(RestoreThreadData *thrdata)
       // Read data file header
       if (!dataIter.readHeader())
       {
-	restoreLogger.log_error("Failed to read header of data file. Exiting...");
-	return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Failed to read header of data file. Exiting...");
+        return NdbToolsProgramExitCode::FAILED;
       }
       
       Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
       restoreLogger.log_info("%s [restore_data] Restore fragments", timestamp);
 
+      Uint32 fragmentCount = 0;
       Uint32 fragmentId; 
       while (dataIter.readFragmentHeader(res= 0, &fragmentId))
       {
-	const TupleS* tuple;
-	while ((tuple = dataIter.getNextTuple(res= 1)) != 0)
-	{
-          const TableS* table = tuple->getTable();
-          OutputStream *output = table_output[table->getLocalId()];
-          if (!output)
+        TableS* table = dataIter.getCurrentTable();
+        OutputStream *output = table_output[table->getLocalId()];
+
+        /**
+         * Check whether we should skip the entire fragment
+         */
+        bool skipFragment = true;
+        if (output == NULL)
+        {
+          restoreLogger.log_info("  Skipping fragment");
+        }
+        else
+        {
+          fragmentsTotal++;
+          skipFragment = determine_slice_skip_fragment(table,
+                                                       fragmentId,
+                                                       fragmentCount);
+          if (skipFragment)
+          {
+            restoreLogger.log_info("  Skipping fragment on this slice");
+          }
+          else
+          {
+            fragmentsRestored++;
+          }
+        }
+
+        /**
+         * Iterate over all rows stored in the data file for
+         * this fragment
+         */
+        const TupleS* tuple;
+#ifdef ERROR_INSERT
+        Uint64 rowCount = 0;
+#endif
+	while ((tuple = dataIter.getNextTuple(res= 1, skipFragment)) != 0)
+        {
+          assert(output && !skipFragment);
+#ifdef ERROR_INSERT
+          if ((_error_insert == NDB_RESTORE_ERROR_INSERT_SKIP_ROWS) &&
+              ((++rowCount % 3) == 0))
+          {
+            restoreLogger.log_info("Skipping row on error insertion");
             continue;
+          }
+#endif
           OutputStream *tmp = ndbout.m_out;
           ndbout.m_out = output;
           for(Uint32 j= 0; j < g_consumers.size(); j++) 
@@ -1811,21 +2670,27 @@ int do_restore(RestoreThreadData *thrdata)
             report_progress("Data file progress: ", dataIter);
 	} // while (tuple != NULL);
 	
-	if (res < 0)
-	{
-	  restoreLogger.log_error(" Restore: An error occured while restoring data. Exiting...");
-	  return NDBT_FAILED;
-	}
-	if (!dataIter.validateFragmentFooter()) {
-	  restoreLogger.log_error("Restore: Error validating fragment footer. ... Exiting");
-	  return NDBT_FAILED;
-	}
-      } // while (dataIter.readFragmentHeader(res))
+        if (res < 0)
+        {
+          restoreLogger.log_error(
+            "Restore: An error occurred while restoring data. Exiting...");
+          return NdbToolsProgramExitCode::FAILED;
+        }
+        if (!dataIter.validateFragmentFooter())
+        {
+          restoreLogger.log_error(
+            "Restore: Error validating fragment footer. Exiting...");
+          return NdbToolsProgramExitCode::FAILED;
+        }
+      }  // while (dataIter.readFragmentHeader(res))
       
       if (res < 0)
       {
-	restoreLogger.log_error("Restore: An error occured while restoring data. Exiting... res= %u", res);
-	return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Restore: An error occurred while restoring data."
+          "Exiting... res = %u",
+          res);
+        return NdbToolsProgramExitCode::FAILED;
       }
       
       
@@ -1850,8 +2715,9 @@ int do_restore(RestoreThreadData *thrdata)
 
       if (!logIter.readHeader())
       {
-	restoreLogger.log_error("Failed to read header of data file. Exiting...");
-	return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Failed to read header of data file. Exiting...");
+        return NdbToolsProgramExitCode::FAILED;
       }
       
       const LogEntry * logEntry = 0;
@@ -1864,6 +2730,8 @@ int do_restore(RestoreThreadData *thrdata)
         OutputStream *output = table_output[table->getLocalId()];
         if (!output)
           continue;
+        if (check_slice_skip_fragment(table, logEntry->m_frag_id))
+          continue;
         for(Uint32 j= 0; j < g_consumers.size(); j++)
           g_consumers[j]->logEntry(* logEntry);
 
@@ -1872,8 +2740,10 @@ int do_restore(RestoreThreadData *thrdata)
       }
       if (res < 0)
       {
-	restoreLogger.log_error("Restore: An restoring the data log. Exiting... res=%u", res);
-	return NDBT_FAILED;
+        restoreLogger.log_error(
+          "Restore: An restoring the data log. Exiting... res = %u",
+          res);
+        return NdbToolsProgramExitCode::FAILED;
       }
       logIter.validateFooter(); //not implemented
       for (i= 0; i < g_consumers.size(); i++)
@@ -1894,13 +2764,14 @@ int do_restore(RestoreThreadData *thrdata)
         const TableS* table = metaData[i];
         if (table->m_staging)
         {
-          for(Uint32 j= 0; j < g_consumers.size(); j++)
+          for (Uint32 j = 0; j < g_consumers.size(); j++)
           {
             if (!g_consumers[j]->finalize_staging(*table))
             {
-              restoreLogger.log_error("Restore: Failed staging data to table: %s. Exiting...",
-                            table->getTableName());
-              return NDBT_FAILED;
+              restoreLogger.log_error(
+                "Restore: Failed staging data to table: %s. Exiting...",
+                table->getTableName());
+              return NdbToolsProgramExitCode::FAILED;
             }
           }
         }
@@ -1915,40 +2786,63 @@ int do_restore(RestoreThreadData *thrdata)
         check_data_truncations(table);
         OutputStream *output = table_output[table->getLocalId()];
         if (!output)
+        {
           continue;
-        for(Uint32 j= 0; j < g_consumers.size(); j++)
+        }
+        for (Uint32 j = 0; j < g_consumers.size(); j++)
+        {
           if (!g_consumers[j]->finalize_table(*table))
           {
-            restoreLogger.log_error("Restore: Failed to finalize restore table: %s. Exiting... ",  metaData[i]->getTableName());
-            return NDBT_FAILED;
+            restoreLogger.log_error(
+              "Restore: Failed to finalize restore table: %s. Exiting...",
+              metaData[i]->getTableName());
+            return NdbToolsProgramExitCode::FAILED;
           }
+        }
       }
+      if (ga_num_slices != 1)
+      {
+        restoreLogger.log_info("Restore: Slice id %u/%u restored %u/%u fragments.",
+                               ga_slice_id,
+                               ga_num_slices,
+                               fragmentsRestored,
+                               fragmentsTotal);
+      };
     }
   }
 
   if (ga_error_thread > 0)
   {
     restoreLogger.log_error("Thread %u exits on error", thrdata->m_part_id);
-    return NDBT_FAILED; // thread 1 failed to restore metadata, exiting
+    // thread 1 failed to restore metadata, exiting
+    return NdbToolsProgramExitCode::FAILED;  
   }
 
   if (ga_restore_epoch)
   {
     Logger::format_timestamp(time(NULL), timestamp, sizeof(timestamp));
     restoreLogger.log_info("%s [restore_epoch] Restoring epoch", timestamp);
+    RestoreLogIterator logIter(metaData);
 
+    if (!logIter.readHeader())
+    {
+      err << "Failed to read snapshot info from log file. Exiting..." << endl;
+      return NdbToolsProgramExitCode::FAILED;
+    }
+    bool snapshotstart = logIter.isSnapshotstartBackup();
     for (i= 0; i < g_consumers.size(); i++)
-      if (!g_consumers[i]->update_apply_status(metaData))
+      if (!g_consumers[i]->update_apply_status(metaData, snapshotstart))
       {
         restoreLogger.log_error("Restore: Failed to restore epoch");
-        return NDBT_FAILED;
+        return NdbToolsProgramExitCode::FAILED;
       }
   }
 
   if (ga_error_thread > 0)
   {
     restoreLogger.log_error("Thread %u exits on error", thrdata->m_part_id);
-    return NDBT_FAILED; // thread 1 failed to restore metadata, exiting
+    // thread 1 failed to restore metadata, exiting
+    return NdbToolsProgramExitCode::FAILED;  
   }
 
   unsigned j;
@@ -1972,7 +2866,7 @@ int do_restore(RestoreThreadData *thrdata)
     if (!thrdata->m_barrier->wait())
     {
       ga_error_thread = thrdata->m_part_id;
-      return NDBT_FAILED;
+      return NdbToolsProgramExitCode::FAILED;
     }
 
     restoreLogger.log_debug("Rebuilding indexes");
@@ -1986,23 +2880,28 @@ int do_restore(RestoreThreadData *thrdata)
         continue;
       if (isBlobTable(table) || isIndex(table))
         continue;
-      for(Uint32 j= 0; j < g_consumers.size(); j++)
+      for (Uint32 j = 0; j < g_consumers.size(); j++)
       {
         if (!g_consumers[j]->rebuild_indexes(* table))
-          return NDBT_FAILED;
+        {
+          return NdbToolsProgramExitCode::FAILED;
+        }
       }
     }
-    for(Uint32 j= 0; j < g_consumers.size(); j++)
+    for (Uint32 j = 0; j < g_consumers.size(); j++)
     {
       if (!g_consumers[j]->endOfTablesFK())
-        return NDBT_FAILED;
+      {
+        return NdbToolsProgramExitCode::FAILED;
+      }
     }
   }
 
   if (ga_error_thread > 0)
   {
     restoreLogger.log_error("Thread %u exits on error", thrdata->m_part_id);
-    return NDBT_FAILED; // thread 1 failed to restore metadata, exiting
+    // thread 1 failed to restore metadata, exiting
+    return NdbToolsProgramExitCode::FAILED;
   }
 
   /* report to clusterlog if applicable */
@@ -2019,8 +2918,8 @@ int do_restore(RestoreThreadData *thrdata)
       table_output[i] = NULL;
     }
   }
-  return NDBT_OK;
-} // do_restore
+  return NdbToolsProgramExitCode::OK;
+}  // do_restore
 
 /* Detects the backup type (single part or multiple parts) by locating
  * the ctl file. It sets the backup format as BF_SINGLE/BF_MULTI_PART
@@ -2062,29 +2961,45 @@ int detect_backup_format()
       //      BACKUP-1-PART-1-OF-2 : not found, continue
       //      BACKUP-1-PART-1-OF-3 : not found, continue
       //      BACKUP-1-PART-1-OF-4 : FOUND, set ga_part_count and break
-      BaseString::snprintf(name, sz, "%s%sBACKUP-%d-PART-1-OF-%u%sBACKUP-%u.%d.ctl",
-              ga_backupPath, DIR_SEPARATOR, ga_backupId, ga_part_count,
-              DIR_SEPARATOR, ga_backupId, ga_nodeId);
-      if(my_stat(name, &buf, 0))
-        break; // part found, end of parts
-      if(ga_part_count == g_max_parts)
-        return NDBT_FAILED; // too many parts
+      BaseString::snprintf(name,
+                           sz,
+                           "%s%sBACKUP-%d-PART-1-OF-%u%sBACKUP-%u.%d.ctl",
+                           ga_backupPath,
+                           DIR_SEPARATOR,
+                           ga_backupId,
+                           ga_part_count,
+                           DIR_SEPARATOR,
+                           ga_backupId,
+                           ga_nodeId);
+      if (my_stat(name, &buf, 0))
+      {
+        info << "Found backup " << ga_backupId << " with " << ga_part_count
+             << " backup parts" << endl;
+        break;  // part found, end of parts
+      }
+      if (ga_part_count == g_max_parts)
+      {
+        err << "Failed to find backup " << ga_backupId << " in path "
+            << ga_backupPath << endl;
+        return NdbToolsProgramExitCode::FAILED;  // too many parts
+      }
     }
   }
-  return NDBT_OK;
-} // detect_backup_format
+  return NdbToolsProgramExitCode::OK;
+}  // detect_backup_format
 
 static void* start_restore_worker(void *data)
 {
   RestoreThreadData *rdata = (RestoreThreadData*)data;
   rdata->m_result = do_restore(rdata);
-  if (rdata->m_result == NDBT_FAILED)
+  if (rdata->m_result == NdbToolsProgramExitCode::FAILED)
   {
     info << "Thread " << rdata->m_part_id << " failed, exiting" << endl;
     ga_error_thread = rdata->m_part_id;
   }
   return 0;
 }
+
 
 int
 main(int argc, char** argv)
@@ -2096,7 +3011,7 @@ main(int argc, char** argv)
 
   if (!readArguments(opts, &argv))
   {
-    exitHandler(NDBT_FAILED);
+    exitHandler(NdbToolsProgramExitCode::FAILED);
   }
 
   g_options.appfmt(" -b %u", ga_backupId);
@@ -2132,14 +3047,52 @@ main(int argc, char** argv)
     g_options.append(" --skip-unknown-objects");
   if (ga_skip_broken_objects)
     g_options.append(" --skip-broken-objects");
+  if (ga_num_slices > 1)
+  {
+    g_options.appfmt(" --num-slices=%u --slice-id=%u",
+                     ga_num_slices,
+                     ga_slice_id);
+  }
+  if (ga_allow_pk_changes)
+    g_options.append(" --allow-pk-changes");
+  if (ga_ignore_extended_pk_updates)
+    g_options.append(" --ignore-extended-pk-updates");
 
   // determine backup format: simple or multi-part, and count parts
   int result = detect_backup_format();
 
-  if (result != NDBT_OK)
+  if (result != NdbToolsProgramExitCode::OK)
+  {
     exitHandler(result);
+  }
 
   init_restore();
+
+  /* Slices */
+  if (ga_num_slices < 1)
+  {
+    err << "Too few slices" << endl;
+    exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
+  }
+  if ((ga_slice_id < 0) ||
+      (ga_slice_id >= ga_num_slices))
+  {
+    err << "Slice id "
+        << ga_slice_id
+        << " out of range (0-"
+        << ga_num_slices
+        << ")" << endl;
+    exitHandler(NdbToolsProgramExitCode::WRONG_ARGS);
+  }
+  else
+  {
+    if (ga_num_slices > 1)
+    {
+      printf("ndb_restore slice %d/%d\n",
+             ga_slice_id,
+             ga_num_slices);
+    }
+  }
 
   g_restoring_in_parallel = true;
   // check if single-threaded restore is necessary
@@ -2183,7 +3136,7 @@ main(int argc, char** argv)
          break;
       }
 
-      if (do_restore(&thrdata) == NDBT_FAILED)
+      if (do_restore(&thrdata) == NdbToolsProgramExitCode::FAILED)
       {
         if (ga_backup_format == BF_SINGLE)
         {
@@ -2206,10 +3159,21 @@ main(int argc, char** argv)
    // create one restore thread per backup part
     Vector<RestoreThreadData*> thrdata;
     CyclicBarrier barrier(ga_part_count);
+
+    /**
+     * Divide data INSERT parallelism across parts, ensuring
+     * each part has at least 1
+     */
+    ga_nParallelism /= ga_part_count;
+    if (ga_nParallelism == 0)
+      ga_nParallelism = 1;
+
+    debug << "Part parallelism is " << ga_nParallelism << endl;
+
     for (int part_id=1; part_id<=ga_part_count; part_id++)
     {
       NDB_THREAD_PRIO prio = NDB_THREAD_PRIO_MEAN;
-      uint stack_size = 64*1024;
+      uint stack_size = 128*1024;
       char name[20];
       snprintf (name, sizeof(name), "restore%d", part_id);
       RestoreThreadData *data = new RestoreThreadData(part_id, &barrier);
@@ -2253,13 +3217,12 @@ main(int argc, char** argv)
   cleanup_restore();
 
   if (ga_error_thread > 0)
-    exitHandler(NDBT_FAILED);
+  {
+    exitHandler(NdbToolsProgramExitCode::FAILED);
+  }
 
-  if (opt_verbose)
-    return NDBT_ProgramExit(NDBT_OK);
-  else
-    return 0;
-} // main
+  return NdbToolsProgramExitCode::OK;
+}  // main
 
 template class Vector<BackupConsumer*>;
 template class Vector<OutputStream*>;

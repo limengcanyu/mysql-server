@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -52,7 +52,7 @@
    @retval true Memory allocation error.
 */
 static bool allocate_column_bitmap(TABLE *table, MY_BITMAP **bitmap) {
-  DBUG_ENTER("allocate_column_bitmap");
+  DBUG_TRACE;
   const uint number_bits = table->s->fields;
   MY_BITMAP *the_struct;
   my_bitmap_map *the_bits;
@@ -60,26 +60,24 @@ static bool allocate_column_bitmap(TABLE *table, MY_BITMAP **bitmap) {
   DBUG_ASSERT(current_thd == table->in_use);
   if (multi_alloc_root(table->in_use->mem_root, &the_struct, sizeof(MY_BITMAP),
                        &the_bits, bitmap_buffer_size(number_bits),
-                       NULL) == NULL)
-    DBUG_RETURN(true);
+                       NULL) == nullptr)
+    return true;
 
-  if (bitmap_init(the_struct, the_bits, number_bits, false) != 0)
-    DBUG_RETURN(true);
+  if (bitmap_init(the_struct, the_bits, number_bits) != 0) return true;
 
   *bitmap = the_struct;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool COPY_INFO::get_function_default_columns(TABLE *table) {
-  DBUG_ENTER("COPY_INFO::get_function_default_columns");
+  DBUG_TRACE;
 
-  if (m_function_default_columns != NULL) DBUG_RETURN(false);
+  if (m_function_default_columns != nullptr) return false;
 
-  if (allocate_column_bitmap(table, &m_function_default_columns))
-    DBUG_RETURN(true);
+  if (allocate_column_bitmap(table, &m_function_default_columns)) return true;
 
-  if (!m_manage_defaults) DBUG_RETURN(false);  // leave bitmap full of zeroes
+  if (!m_manage_defaults) return false;  // leave bitmap full of zeroes
 
   /*
     Find columns with function default on insert or update, mark them in
@@ -91,11 +89,11 @@ bool COPY_INFO::get_function_default_columns(TABLE *table) {
          f->has_insert_default_datetime_value_expression()) ||
         (m_optype == UPDATE_OPERATION &&
          f->has_update_default_datetime_value_expression()))
-      bitmap_set_bit(m_function_default_columns, f->field_index);
+      bitmap_set_bit(m_function_default_columns, f->field_index());
     // if it's a default expression also mark the columns it reads
     if (m_optype == INSERT_OPERATION &&
         f->has_insert_default_general_value_expression()) {
-      bitmap_set_bit(m_function_default_columns, f->field_index);
+      bitmap_set_bit(m_function_default_columns, f->field_index());
       for (uint j = 0; j < table->s->fields; j++) {
         if (bitmap_is_set(&f->m_default_val_expr->base_columns_map, j)) {
           bitmap_set_bit(table->read_set, j);
@@ -105,7 +103,7 @@ bool COPY_INFO::get_function_default_columns(TABLE *table) {
   }
 
   if (bitmap_is_clear_all(m_function_default_columns))
-    DBUG_RETURN(false);  // no bit set, next step unneeded
+    return false;  // no bit set, next step unneeded
 
   /*
     Remove explicitly assigned columns from the bitmap. The assignment
@@ -118,26 +116,26 @@ bool COPY_INFO::get_function_default_columns(TABLE *table) {
   */
   List<Item> *all_changed_columns[2] = {m_changed_columns, m_changed_columns2};
   for (uint i = 0; i < 2; i++) {
-    if (all_changed_columns[i] != NULL) {
+    if (all_changed_columns[i] != nullptr) {
       List_iterator<Item> lvalue_it(*all_changed_columns[i]);
       Item *lvalue_item;
-      while ((lvalue_item = lvalue_it++) != NULL)
+      while ((lvalue_item = lvalue_it++) != nullptr)
         lvalue_item->walk(
             &Item::remove_column_from_bitmap, enum_walk::SUBQUERY_POSTFIX,
             reinterpret_cast<uchar *>(m_function_default_columns));
     }
   }
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool COPY_INFO::set_function_defaults(TABLE *table) {
-  DBUG_ENTER("COPY_INFO::set_function_defaults");
+  DBUG_TRACE;
 
-  DBUG_ASSERT(m_function_default_columns != NULL);
+  DBUG_ASSERT(m_function_default_columns != nullptr);
 
   /* Quick reject test for checking the case when no defaults are invoked. */
-  if (bitmap_is_clear_all(m_function_default_columns)) DBUG_RETURN(false);
+  if (bitmap_is_clear_all(m_function_default_columns)) return false;
 
   for (uint i = 0; i < table->s->fields; ++i)
     if (bitmap_is_set(m_function_default_columns, i)) {
@@ -151,7 +149,7 @@ bool COPY_INFO::set_function_defaults(TABLE *table) {
           break;
       }
       // If there was an error while executing the default expression
-      if (table->in_use->is_error()) DBUG_RETURN(true);
+      if (table->in_use->is_error()) return true;
     }
 
   /**
@@ -162,12 +160,13 @@ bool COPY_INFO::set_function_defaults(TABLE *table) {
     BLOB value is handled. When update_generated_write_fields() is removed,
     blobs_need_not_keep_old_value() can also be removed.
   */
+  bool res = false;
   if (table->has_gcol()) {
     table->blobs_need_not_keep_old_value();
-    update_generated_write_fields(table->write_set, table);
+    res = update_generated_write_fields(table->write_set, table);
   }
 
-  DBUG_RETURN(false);
+  return res;
 }
 
 bool COPY_INFO::ignore_last_columns(TABLE *table, uint count) {

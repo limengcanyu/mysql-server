@@ -1,26 +1,22 @@
-//>>built
 define("dijit/form/_FormValueMixin", [
 	"dojo/_base/declare", // declare
 	"dojo/dom-attr", // domAttr.set
 	"dojo/keys", // keys.ESCAPE
-	"dojo/_base/sniff", // has("ie"), has("quirks")
+	"dojo/_base/lang",
+	"dojo/on",
+	"dojo/sniff", // has("webkit")
 	"./_FormWidgetMixin"
-], function(declare, domAttr, keys, has, _FormWidgetMixin){
-
-/*=====
-	var _FormWidgetMixin = dijit.form._FormWidgetMixin;
-=====*/
+], function(declare, domAttr, keys, lang, on, has, _FormWidgetMixin){
 
 	// module:
 	//		dijit/form/_FormValueMixin
-	// summary:
-	//		Mixin for widgets corresponding to native HTML elements such as <input> or <select> that have user changeable values.
 
 	return declare("dijit.form._FormValueMixin", _FormWidgetMixin, {
 		// summary:
-		//		Mixin for widgets corresponding to native HTML elements such as <input> or <select> that have user changeable values.
+		//		Mixin for widgets corresponding to native HTML elements such as `<input>` or `<select>`
+		//		that have user changeable values.
 		// description:
-		//		Each _FormValueMixin represents a single input value, and has a (possibly hidden) <input> element,
+		//		Each _FormValueMixin represents a single input value, and has a (possibly hidden) `<input>` element,
 		//		to which it serializes it's input value, so that form submission (either normal submission or via FormBind?)
 		//		works as expected.
 
@@ -31,17 +27,19 @@ define("dijit/form/_FormValueMixin", [
 		readOnly: false,
 
 		_setReadOnlyAttr: function(/*Boolean*/ value){
-			domAttr.set(this.focusNode, 'readOnly', value);
-			this.focusNode.setAttribute("aria-readonly", value);
+			// IE has a Caret Browsing mode (hit F7 to activate) where disabled textboxes can be modified
+			// focusNode enforced readonly if currently disabled to avoid this issue.
+			if (has('trident') && 'disabled' in this) {
+				domAttr.set(this.focusNode, 'readOnly', value || this.disabled);
+			} else {
+				domAttr.set(this.focusNode, 'readOnly', value);
+			}
 			this._set("readOnly", value);
 		},
 
 		postCreate: function(){
 			this.inherited(arguments);
 
-			if(has("ie")){ // IE won't stop the event with keypress
-				this.connect(this.focusNode || this.domNode, "onkeydown", this._onKeyDown);
-			}
 			// Update our reset value if it hasn't yet been set (because this.set()
 			// is only called when there *is* a value)
 			if(this._resetValue === undefined){
@@ -78,19 +76,6 @@ define("dijit/form/_FormValueMixin", [
 			//		Reset the widget's value to what it was at initialization time
 			this._hasBeenBlurred = false;
 			this._setValueAttr(this._resetValue, true);
-		},
-
-		_onKeyDown: function(e){
-			if(e.keyCode == keys.ESCAPE && !(e.ctrlKey || e.altKey || e.metaKey)){
-				var te;
-				if(has("ie") < 9 || (has("ie") && has("quirks"))){
-					e.preventDefault(); // default behavior needs to be stopped here since keypress is too late
-					te = document.createEventObject();
-					te.keyCode = keys.ESCAPE;
-					te.shiftKey = e.shiftKey;
-					e.srcElement.fireEvent('onkeypress', te);
-				}
-			}
 		}
 	});
 });

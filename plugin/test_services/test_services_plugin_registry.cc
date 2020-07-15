@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -67,8 +67,12 @@ static DEFINE_BOOL_METHOD(test1, (int a1, int a2, int *outres)) {
 /** Our own service definition: a struct of function pointers */
 static SERVICE_TYPE(test_services_plugin_registry_service) svc_def = {test1};
 
+using service_type_t =
+    SERVICE_TYPE_NO_CONST(test_services_plugin_registry_service);
+
 /** @ref svc_def converted to a @ref my_h_service */
-static my_h_service h_my_svc = (my_h_service)&svc_def;
+static my_h_service h_my_svc =
+    reinterpret_cast<my_h_service>(const_cast<service_type_t *>(&svc_def));
 
 /**
   Tests the plugin registry service
@@ -91,10 +95,10 @@ static my_h_service h_my_svc = (my_h_service)&svc_def;
 static bool test_plugin_registry(MYSQL_PLUGIN p MY_ATTRIBUTE((unused))) {
   bool result = false;
   SERVICE_TYPE(registry) *r = mysql_plugin_registry_acquire();
-  my_h_service h_reg = NULL;
-  my_h_service h_ret_svc = NULL;
+  my_h_service h_reg = nullptr;
+  my_h_service h_ret_svc = nullptr;
   int int_result = -1;
-  SERVICE_TYPE(registry_registration) *reg = NULL;
+  SERVICE_TYPE(registry_registration) *reg = nullptr;
   SERVICE_TYPE(test_services_plugin_registry_service) * ret;
 
   enum { IDLE, REG_ACQUIRED, MY_SVC_REGISTERED, MY_SVC_ACQUIRED } state = IDLE;
@@ -242,14 +246,13 @@ done:
 */
 
 static int test_services_plugin_init(void *p) {
-  DBUG_ENTER("test_services_plugin_init");
+  DBUG_TRACE;
   int rc;
-  if (init_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs))
-    DBUG_RETURN(1);
+  if (init_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs)) return 1;
 
   rc = test_plugin_registry(reinterpret_cast<MYSQL_PLUGIN>(p)) ? 1 : 0;
 
-  DBUG_RETURN(rc);
+  return rc;
 }
 
 /**
@@ -263,8 +266,8 @@ static int test_services_plugin_init(void *p) {
 
 static int test_services_plugin_deinit(void *) {
   deinit_logging_service_for_plugin(&reg_srv, &log_bi, &log_bs);
-  DBUG_ENTER("test_services_plugin_deinit");
-  DBUG_RETURN(0);
+  DBUG_TRACE;
+  return 0;
 }
 
 static struct st_mysql_daemon test_services_plugin_registry = {
@@ -278,15 +281,15 @@ mysql_declare_plugin(test_services_plugin_registry){
     MYSQL_DAEMON_PLUGIN,
     &test_services_plugin_registry,
     "test_services_plugin_registry",
-    "Oracle",
+    PLUGIN_AUTHOR_ORACLE,
     "test the plugin registry services",
     PLUGIN_LICENSE_GPL,
     test_services_plugin_init,   /* Plugin Init */
-    NULL,                        /* Plugin Check uninstall */
+    nullptr,                     /* Plugin Check uninstall */
     test_services_plugin_deinit, /* Plugin Deinit */
     0x0100 /* 1.0 */,
-    NULL, /* status variables                */
-    NULL, /* system variables                */
-    NULL, /* config options                  */
-    0,    /* flags                           */
+    nullptr, /* status variables                */
+    nullptr, /* system variables                */
+    nullptr, /* config options                  */
+    0,       /* flags                           */
 } mysql_declare_plugin_end;

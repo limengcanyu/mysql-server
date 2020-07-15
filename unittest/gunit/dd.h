@@ -62,10 +62,10 @@ class Json_wrapper;
 
 namespace dd_unittest {
 
+using ::testing::_;
 using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::StrictMock;
-using ::testing::_;
 
 /**
   Mock handler for dictionary operations.
@@ -105,7 +105,7 @@ class Mock_dd_field_longlong : public Base_mock_field_longlong {
     Note: Sun Studio needs a little help in resolving longlong.
   */
   MOCK_METHOD2(store, type_conversion_status(::longlong, bool));
-  MOCK_METHOD0(val_int, ::longlong(void));
+  MOCK_CONST_METHOD0(val_int, ::longlong(void));
   MOCK_METHOD0(val_uint, ::ulonglong(void));
 
   /*
@@ -142,7 +142,7 @@ class Mock_dd_field_varstring : public Base_mock_field_varstring {
   */
   MOCK_METHOD3(store, type_conversion_status(const char *, size_t length,
                                              const CHARSET_INFO *));
-  MOCK_METHOD2(val_str, String *(String *, String *));
+  MOCK_CONST_METHOD2(val_str, String *(String *, String *));
 
   /*
     Add fake methods to set and get expected contents.
@@ -170,7 +170,7 @@ class Mock_dd_field_varstring : public Base_mock_field_varstring {
 */
 inline Fake_TABLE *get_schema_table(THD *thd, handlerton *hton) {
   List<Field> m_field_list;
-  Fake_TABLE *table = NULL;
+  Fake_TABLE *table = nullptr;
   Fake_TABLE_SHARE dummy_share(1);  // Keep Field_varstring constructor happy.
 
   // Add fields
@@ -222,8 +222,7 @@ inline Fake_TABLE *get_schema_table(THD *thd, handlerton *hton) {
   table->s->default_values = new uchar[table->s->reclength];
   table->s->tmp_table = NON_TRANSACTIONAL_TMP_TABLE;
 
-  // Allocate dummy records to avoid failures in the handler functions.
-  table->record[0] = new uchar[table->s->reclength];
+  // Allocate dummy record[1] to avoid failures in the handler functions.
   table->record[1] = new uchar[table->s->reclength];
 
   return table;
@@ -435,7 +434,7 @@ inline void set_attributes(dd::Column_statistics *obj,
 
 template <typename T>
 T *nullp() {
-  return NULL;
+  return nullptr;
 }
 
 }  // namespace dd_unittest

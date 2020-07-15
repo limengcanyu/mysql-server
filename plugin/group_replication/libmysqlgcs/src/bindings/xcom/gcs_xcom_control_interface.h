@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -35,6 +35,7 @@
 #include "plugin/group_replication/libmysqlgcs/include/mysql/gcs/gcs_view.h"
 #include "plugin/group_replication/libmysqlgcs/include/mysql/gcs/xplatform/my_xp_thread.h"
 #include "plugin/group_replication/libmysqlgcs/include/mysql/gcs/xplatform/my_xp_util.h"
+#include "plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_expels_in_progress.h"
 #include "plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_group_management.h"
 #include "plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_group_member_information.h"
 #include "plugin/group_replication/libmysqlgcs/src/bindings/xcom/gcs_xcom_interface.h"
@@ -88,6 +89,7 @@ class Gcs_suspicions_manager {
     add_suspicions method if the non_member_suspect_nodes and
     member_suspect_nodes parameter aren't empty.
 
+    @param[in] config_id Configuration ID of the subsequent node information
     @param[in] xcom_nodes List of all nodes (i.e. alive or dead) with low level
                           information such as timestamp, unique identifier, etc
     @param[in] alive_nodes List of the nodes that currently belong to the group
@@ -98,10 +100,11 @@ class Gcs_suspicions_manager {
                                     m_suspicions
     @param[in] is_killer_node Indicates if node should remove suspect members
                               from the group
+    @param[in] max_synode XCom max synode
   */
 
   void process_view(
-      Gcs_xcom_nodes *xcom_nodes,
+      synode_no const config_id, Gcs_xcom_nodes *xcom_nodes,
       std::vector<Gcs_member_identifier *> alive_nodes,
       std::vector<Gcs_member_identifier *> left_nodes,
       std::vector<Gcs_member_identifier *> member_suspect_nodes,
@@ -248,6 +251,7 @@ class Gcs_suspicions_manager {
                                         m_suspicions
     @param[in] member_suspect_nodes List of previously active nodes to add to
                                     m_suspicions
+    @param[in] max_synode XCom max synode
     @return Indicates if new suspicions were added
   */
 
@@ -329,6 +333,16 @@ class Gcs_suspicions_manager {
     will print a warning message.
   */
   synode_no m_cache_last_removed;
+
+  /*
+    The set of expels we have issued but that have not yet taken effect.
+  */
+  Gcs_xcom_expels_in_progress m_expels_in_progress;
+
+  /*
+    The XCom configuration/membership ID of the last view we processed.
+  */
+  synode_no m_config_id;
 
   /*
     Disabling the copy constructor and assignment operator.
@@ -433,13 +447,15 @@ class Gcs_xcom_control : public Gcs_control_interface {
     callback that is registered in Gcs_xcom_interface should be a simple
     pass-through.
 
+    @param[in] config_id The configuration ID that this view pertains to
     @param[in] message_id the message that conveys the View Change
     @param[in] xcom_nodes Set of nodes that participated in the consensus
                             to deliver the message
     @param[in] same_view  Whether this global view was already delivered.
+    @param[in] max_synode XCom max synode
   */
 
-  bool xcom_receive_global_view(synode_no message_id,
+  bool xcom_receive_global_view(synode_no const config_id, synode_no message_id,
                                 Gcs_xcom_nodes *xcom_nodes, bool same_view,
                                 synode_no max_synode);
 
@@ -451,12 +467,16 @@ class Gcs_xcom_control : public Gcs_control_interface {
     have a view installed or 3) the local node is not present in its current
     view (i.e., it has been expelled).
 
+    @param[in] config_id The configuration ID that this view pertains to
     @param[in] xcom_nodes Set of nodes that participated in the consensus
                           to deliver the message
+    @param[in] max_synode XCom max synode
+
     @return   True if the view was processed;
               False otherwise.
   */
-  bool xcom_receive_local_view(Gcs_xcom_nodes *xcom_nodes,
+  bool xcom_receive_local_view(synode_no const config_id,
+                               Gcs_xcom_nodes *xcom_nodes,
                                synode_no max_synode);
 
   /*
@@ -470,7 +490,9 @@ class Gcs_xcom_control : public Gcs_control_interface {
     to the state exchange.
 
     @param[in] msg message
-    @param[in] protocol_version protocol version in use by control message,
+    @param[in] maximum_supported_protocol_version maximum supported protocol
+    version
+    @param[in] used_protocol_version protocol version in use by control message,
                                 i.e. state exchange message
   */
 
@@ -652,7 +674,6 @@ class Gcs_xcom_control : public Gcs_control_interface {
     Cycle through peers_list and try to open a connection to the peer, if it
     isn't the node itself.
 
-    @param[in] local_node_ip String with the IP and port of the local node
     @param[in] peers_list list of the peers
 
     @return connection descriptor to a peer

@@ -22,8 +22,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
  */
 
-#include "errmsg.h"
-#include "my_inttypes.h"
+#include <cstdint>
+
+#include "errmsg.h"         // NOLINT(build/include_subdir)
+#include "my_config.h"      // NOLINT(build/include_subdir)
+#include "my_macros.h"      // NOLINT(build/include_subdir)
+#include "mysql_version.h"  // NOLINT(build/include_subdir)
+
 #include "plugin/x/generated/mysqlx_error.h"
 #include "plugin/x/generated/mysqlx_version.h"
 #include "unittest/gunit/xplugin/xcl/message_helpers.h"
@@ -38,7 +43,7 @@ const char *expected_pass = "user_pass";
 const char *expected_host = "host";
 const char *expected_socket_file = "socket_file";
 const char *expected_schema = "schema";
-const uint16 expected_port = 1290;
+const uint16_t expected_port = 1290;
 const int expected_error_code = 10;
 const int expected_error_code_success = 0;
 
@@ -180,6 +185,7 @@ TEST_F(Xcl_session_impl_tests_connect, connect_nullptrs) {
       .WillRepeatedly(Return(XError{}));
   EXPECT_CALL(*m_mock_protocol, execute_authenticate("", "", "", "MYSQL41"))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   EXPECT_CALL(*m_mock_protocol, add_notice_handler(_, Handler_position::Begin,
                                                    Handler_priority_low))
@@ -212,6 +218,7 @@ TEST_F(Xcl_session_impl_tests_connect, connect_localhost_nullptrs) {
       .WillRepeatedly(Return(XError{}));
   EXPECT_CALL(*m_mock_protocol, execute_authenticate("", "", "", "MYSQL41"))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   EXPECT_CALL(*m_mock_protocol, add_notice_handler(_, Handler_position::Begin,
                                                    Handler_priority_low))
@@ -244,6 +251,30 @@ struct Open_close_methods {
   static const bool start_disconnected = false;
 };
 
+// clang-format off
+#define CAPABILITIES(value) \
+  "capabilities { capabilities { " value " } }"
+#define CAP_BOOL(key, value) \
+  "name: \"" key "\""        \
+  "value { type: SCALAR scalar { type: V_BOOL v_bool: " value " } }"
+#define CAP_OBJECT(key, value) \
+  "name: \"" key "\""        \
+  "value { type: OBJECT obj { " value " } }"
+#define FLD_STRING(k, v)                 \
+  "fld { key:\"" k "\""                  \
+  "      value { type: SCALAR scalar { " \
+  "        type: V_STRING v_string { value: \"" v "\" } } } }"
+#ifdef _WIN32
+#define FLD_WIN32_STRING(k, v)                 \
+  "fld { key:\"" k "\""                  \
+  "      value { type: SCALAR scalar { " \
+  "        type: V_STRING v_string { value: \"" v "\" } } } }"
+#else
+#define FLD_WIN32_STRING(k, v)
+#endif  // _WIN32
+
+// clang-format on
+
 class Xcl_session_impl_tests_connect_param
     : public Xcl_session_impl_tests_connect,
       public WithParamInterface<Open_close_methods> {
@@ -267,16 +298,27 @@ class Xcl_session_impl_tests_connect_param
   }
 
   const Message_from_str<CapabilitiesSet> m_cap_set_tls{
-      "capabilities { capabilities { "
-      "        name: \"tls\""
-      "        value {type: SCALAR scalar { type: V_BOOL v_bool: 1 } }"
-      "} }"};
+      CAPABILITIES(CAP_BOOL("tls", "1"))};
 
   const Message_from_str<CapabilitiesSet> m_cap_expired{
-      "capabilities { capabilities {"
-      "    name: \"client.pwd_expire_ok\" "
-      "    value { type: SCALAR scalar { type: V_BOOL v_bool: 1 } }"
-      "} }"};
+      CAPABILITIES(CAP_BOOL("client.pwd_expire_ok", "1"))};
+
+  // clang-format off
+  const Message_from_str<CapabilitiesSet> m_cap_connect_attrs{
+    CAPABILITIES(CAP_OBJECT("session_connect_attrs",
+      FLD_STRING("_client_name", HAVE_MYSQLX_FULL_PROTO("libmysqlxclient",
+                                                        "libmysqlxclient_lite"))
+      FLD_STRING("_client_version", PACKAGE_VERSION)
+      FLD_STRING("_os", SYSTEM_TYPE)
+      FLD_STRING("_platform", MACHINE_TYPE)
+      FLD_STRING("_client_license", STRINGIFY_ARG(LICENSE))
+      FLD_STRING("_pid",
+               +std::to_string(static_cast<uint64_t>(
+                   IF_WIN(GetCurrentProcessId(), getpid())))+)
+      FLD_WIN32_STRING("_thread",
+               +std::to_string(static_cast<uint64_t>(GetCurrentThreadId()))+)))
+  };
+  // clang-format on
 };
 
 class Xcl_session_impl_tests_challenge_response_connect_param
@@ -309,6 +351,7 @@ TEST_P(Xcl_session_impl_tests_challenge_response_connect_param,
               execute_authenticate(expected_user, expected_pass,
                                    expected_schema, this->GetParam().m_auth))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
 
@@ -325,12 +368,14 @@ TEST_P(Xcl_session_impl_tests_challenge_response_connect_param,
       .WillRepeatedly(Return(false));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_expired)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_expired.get())))
       .WillOnce(Return(XError{}));
   EXPECT_CALL(*m_mock_protocol,
               execute_authenticate(expected_user, expected_pass,
                                    expected_schema, this->GetParam().m_auth))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   m_sut->set_capability(XSession::Capability_can_handle_expired_password, true);
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
@@ -348,7 +393,8 @@ TEST_P(Xcl_session_impl_tests_challenge_response_connect_param,
       .WillRepeatedly(Return(false));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_expired)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_expired.get())))
       .WillOnce(Return(XError{expected_error_code, ""}));
 
   m_sut->set_capability(XSession::Capability_can_handle_expired_password, true);
@@ -371,7 +417,29 @@ TEST_P(Xcl_session_impl_tests_challenge_response_connect_param,
               execute_authenticate(expected_user, expected_pass,
                                    expected_schema, this->GetParam().m_auth))
       .WillOnce(Return(XError{expected_error_code, ""}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
+  auto error = (this->*GetParam().m_open)(expected_error_code_success);
+
+  ASSERT_EQ(expected_error_code, error.error());
+
+  (this->*GetParam().m_close)();
+}
+
+TEST_P(Xcl_session_impl_tests_challenge_response_connect_param,
+       connect_plain_connect_attrs_caps) {
+  EXPECT_CALL(m_mock_connection_state, is_ssl_activated())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(m_mock_connection_state, is_ssl_configured())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(m_mock_connection_state, get_connection_type())
+      .WillOnce(Return(Connection_type::Tcp));
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_connect_attrs.get())))
+      .WillOnce(Return(XError{expected_error_code}));
+
+  m_sut->set_capability(XSession::Capability_session_connect_attrs,
+                        m_sut->get_connect_attrs());
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
 
   ASSERT_EQ(expected_error_code, error.error());
@@ -391,6 +459,7 @@ TEST_P(Xcl_session_impl_tests_plain_connect_param,
               execute_authenticate(expected_user, expected_pass,
                                    expected_schema, this->GetParam().m_auth))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
 
@@ -407,7 +476,8 @@ TEST_P(Xcl_session_impl_tests_plain_connect_param,
       .WillRepeatedly(Return(true));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_set_tls)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_set_tls.get())))
       .WillOnce(Return(XError{expected_error_code, ""}));
 
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
@@ -425,7 +495,8 @@ TEST_P(Xcl_session_impl_tests_plain_connect_param,
       .WillRepeatedly(Return(true));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_set_tls)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_set_tls.get())))
       .WillOnce(Return(XError{}));
   EXPECT_CALL(m_mock_connection, activate_tls())
       .WillOnce(Return(XError{expected_error_code, ""}));
@@ -445,13 +516,15 @@ TEST_P(Xcl_session_impl_tests_plain_connect_param, connect_plain_tls) {
       .WillRepeatedly(Return(true));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_set_tls)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_set_tls.get())))
       .WillOnce(Return(XError{}));
   EXPECT_CALL(m_mock_connection, activate_tls()).WillOnce(Return(XError{}));
   EXPECT_CALL(*m_mock_protocol,
               execute_authenticate(expected_user, expected_pass,
                                    expected_schema, this->GetParam().m_auth))
       .WillOnce(Return(XError{}));
+  EXPECT_CALL(*m_mock_protocol, use_compression(Compression_algorithm::k_none));
 
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
 
@@ -468,10 +541,32 @@ TEST_P(Xcl_session_impl_tests_plain_connect_param,
       .WillRepeatedly(Return(true));
   EXPECT_CALL(m_mock_connection_state, get_connection_type())
       .WillOnce(Return(Connection_type::Tcp));
-  EXPECT_CALL(*m_mock_protocol, execute_set_capability(Cmp_msg(m_cap_expired)))
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_expired.get())))
       .WillOnce(Return(XError{expected_error_code}));
 
   m_sut->set_capability(XSession::Capability_can_handle_expired_password, true);
+  auto error = (this->*GetParam().m_open)(expected_error_code_success);
+
+  ASSERT_EQ(expected_error_code, error.error());
+
+  (this->*GetParam().m_close)();
+}
+
+TEST_P(Xcl_session_impl_tests_plain_connect_param,
+       connect_plain_connect_attrs_caps) {
+  EXPECT_CALL(m_mock_connection_state, is_ssl_activated())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(m_mock_connection_state, is_ssl_configured())
+      .WillRepeatedly(Return(false));
+  EXPECT_CALL(m_mock_connection_state, get_connection_type())
+      .WillOnce(Return(Connection_type::Tcp));
+  EXPECT_CALL(*m_mock_protocol,
+              execute_set_capability(Cmp_msg(m_cap_connect_attrs.get())))
+      .WillOnce(Return(XError{expected_error_code}));
+
+  m_sut->set_capability(XSession::Capability_session_connect_attrs,
+                        m_sut->get_connect_attrs());
   auto error = (this->*GetParam().m_open)(expected_error_code_success);
 
   ASSERT_EQ(expected_error_code, error.error());
@@ -535,6 +630,13 @@ INSTANTIATE_TEST_CASE_P(
            param_pack_builder_connect("SHA256_MEMORY"),
            param_pack_builder_connect_to_localhost("SHA256_MEMORY"),
            param_pack_builder_reauthenticate("SHA256_MEMORY")));
+
+TEST(get_connect_attrs, not_empty_macro_definitions) {
+  ASSERT_FALSE(std::string(PACKAGE_VERSION).empty());
+  ASSERT_FALSE(std::string(SYSTEM_TYPE).empty());
+  ASSERT_FALSE(std::string(MACHINE_TYPE).empty());
+  ASSERT_FALSE(std::string(STRINGIFY_ARG(LICENSE)).empty());
+}
 
 }  // namespace test
 }  // namespace xcl

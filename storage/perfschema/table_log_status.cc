@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -58,8 +58,8 @@ Plugin_table table_log_status::m_table_def(
 PFS_engine_table_share table_log_status::m_share = {
     &pfs_readonly_acl,
     table_log_status::create,
-    NULL,                            /* write_row */
-    NULL,                            /* delete_all_rows */
+    nullptr,                         /* write_row */
+    nullptr,                         /* delete_all_rows */
     table_log_status::get_row_count, /* records */
     sizeof(PFS_simple_index),        /* ref length */
     &m_table_lock,
@@ -134,14 +134,14 @@ static bool iter_storage_engines_register(THD *, plugin_ref plugin, void *arg) {
 }
 
 int table_log_status::make_row() {
-  DBUG_ENTER("table_log_status::make_row");
+  DBUG_TRACE;
   THD *thd = current_thd;
 
   /* Report an error if THD has no BACKUP_ADMIN privilege */
   Security_context *sctx = thd->security_context();
   if (!sctx->has_global_grant(STRING_WITH_LEN("BACKUP_ADMIN")).first) {
     my_error(ER_SPECIFIC_ACCESS_DENIED_ERROR, MYF(0), "BACKUP_ADMIN");
-    DBUG_RETURN(HA_ERR_RECORD_DELETED);
+    return HA_ERR_RECORD_DELETED;
   }
 
   /* Lock instance to collect log information */
@@ -307,7 +307,7 @@ end:
     }
   }
 
-  DBUG_RETURN(error ? HA_ERR_RECORD_DELETED : 0);
+  return error ? HA_ERR_RECORD_DELETED : 0;
 }
 
 int table_log_status::read_row_values(TABLE *table MY_ATTRIBUTE((unused)),
@@ -320,8 +320,8 @@ int table_log_status::read_row_values(TABLE *table MY_ATTRIBUTE((unused)),
   buf[0] = 0;
 
   for (; (f = *fields); fields++) {
-    if (read_all || bitmap_is_set(table->read_set, f->field_index)) {
-      switch (f->field_index) {
+    if (read_all || bitmap_is_set(table->read_set, f->field_index())) {
+      switch (f->field_index()) {
         case 0: /*server_uuid*/
           set_field_char_utf8(f, m_row.server_uuid, UUID_LENGTH);
           break;

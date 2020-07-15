@@ -28,8 +28,8 @@ if(!_f.started&&!_f._started){
 _f.startup();
 }
 });
-this.resize();
 this.layout();
+this.resize();
 },resize:function(){
 _6.forEach(this.getChildren(),function(_10){
 if(typeof _10.resize=="function"){
@@ -127,6 +127,7 @@ if(this.table){
 this.table.cellspacing=Number(_2d);
 }
 }});
-_2.extend(_9,{label:"",title:"",spanLabel:false,colspan:1});
+_b.ChildWidgetProperties={label:"",title:"",spanLabel:false,colspan:1};
+_2.extend(_9,_b.ChildWidgetProperties);
 return _b;
 });

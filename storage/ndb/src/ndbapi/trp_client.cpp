@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2010, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -360,9 +360,14 @@ trp_client::isSendEnabled(NodeId node) const
 }
 
 Uint32 *
-trp_client::getWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio,
-                        Uint32 max_use)
+trp_client::getWritePtr(NodeId node,
+                        TrpId trp_id,
+                        Uint32 lenBytes,
+                        Uint32 prio,
+                        Uint32 max_use,
+                        SendStatus *error)
 {
+  (void)trp_id;
   assert(isSendEnabled(node));
   
   TFBuffer* b = m_send_buffers+node;
@@ -385,25 +390,33 @@ trp_client::getWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio,
     m_send_nodes_cnt = cnt + 1;
   }
 
-  TFPage* page = m_facade->alloc_sb_page(node);
-  if (likely(page != 0))
+  if (unlikely(lenBytes > TFPage::max_data_bytes()))
   {
-    page->init();
+    *error = SEND_MESSAGE_TOO_BIG;
+  }
+  else
+  {
+    TFPage* page = m_facade->alloc_sb_page(node);
+    if (likely(page != 0))
+    {
+      page->init();
 
-    if (b->m_tail == NULL)
-    {
-      assert(!found);
-      b->m_head = page;
-      b->m_tail = page;
+      if (b->m_tail == NULL)
+      {
+        assert(!found);
+        b->m_head = page;
+        b->m_tail = page;
+      }
+      else
+      {
+        assert(found);
+        assert(b->m_head != NULL);
+        b->m_tail->m_next = page;
+        b->m_tail = page;
+      }
+      return (Uint32 *)(page->m_data);
     }
-    else
-    {
-      assert(found);
-      assert(b->m_head != NULL);
-      b->m_tail->m_next = page;
-      b->m_tail = page;
-    }
-    return (Uint32 *)(page->m_data);
+    *error = SEND_BUFFER_FULL;
   }
 
   if (b->m_tail == 0)
@@ -421,8 +434,12 @@ trp_client::getWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio,
 }
 
 Uint32
-trp_client::updateWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio)
+trp_client::updateWritePtr(NodeId node,
+                           TrpId trp_id,
+                           Uint32 lenBytes,
+                           Uint32 prio)
 {
+  (void)trp_id;
   TFBuffer* b = m_send_buffers+node;
   TFBufferGuard g0(* b);
   assert(m_send_nodes_mask.get(node));
@@ -466,7 +483,7 @@ trp_client::getSendBufferLevel(NodeId node, SB_LevelType &level)
 }
 
 bool
-trp_client::forceSend(NodeId node)
+trp_client::forceSend(NodeId, TrpId)
 {
   do_forceSend();
   return true;

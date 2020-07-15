@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2018, 2020, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -26,7 +26,8 @@
 #include <utility>
 #include <vector>
 
-#include "binlog_event.h"
+#include "debug_sync.h"
+#include "libbinlogevents/include/binlog_event.h"
 #include "my_inttypes.h"
 #include "my_sqlcommand.h"
 #include "sql/binlog.h"
@@ -48,9 +49,9 @@ Logical_clock::Logical_clock() : state(SEQ_UNINIT), offset(0) {}
  */
 inline int64 Logical_clock::get_timestamp() {
   int64 retval = 0;
-  DBUG_ENTER("Logical_clock::get_timestamp");
+  DBUG_TRACE;
   retval = state.load();
-  DBUG_RETURN(retval);
+  return retval;
 }
 
 /**
@@ -80,10 +81,10 @@ inline int64 Logical_clock::step() {
   @return a (new) value of state member regardless whether it's changed or not.
  */
 inline int64 Logical_clock::set_if_greater(int64 new_val) {
-  longlong old_val = new_val - 1;
+  int64 old_val = new_val - 1;
   bool cas_rc;
 
-  DBUG_ENTER("Logical_clock::set_if_greater");
+  DBUG_TRACE;
 
   DBUG_ASSERT(new_val > 0);
 
@@ -94,7 +95,7 @@ inline int64 Logical_clock::set_if_greater(int64 new_val) {
       transaction does not change the clock, similarly to how
       its timestamps are handled at flushing.
     */
-    DBUG_RETURN(SEQ_UNINIT);
+    return SEQ_UNINIT;
   }
 
   DBUG_ASSERT(new_val > 0);
@@ -108,7 +109,7 @@ inline int64 Logical_clock::set_if_greater(int64 new_val) {
 
   DBUG_ASSERT(cas_rc || old_val >= new_val);
 
-  DBUG_RETURN(cas_rc ? new_val : old_val);
+  return cas_rc ? new_val : old_val;
 }
 
 /*
@@ -242,6 +243,7 @@ void Writeset_trx_dependency_tracker::get_dependency(THD *thd,
       !write_set_ctx->get_has_related_foreign_keys();
   bool exceeds_capacity = false;
 
+  mysql_mutex_lock(&LOCK_slave_trans_dep_tracker);
   if (can_use_writesets) {
     /*
      Check if adding this transaction exceeds the capacity of the writeset
@@ -255,6 +257,7 @@ void Writeset_trx_dependency_tracker::get_dependency(THD *thd,
      Compute the greatest sequence_number among all conflicts and add the
      transaction's row hashes to the history.
     */
+    DEBUG_SYNC(thd, "wait_in_get_dependency");
     int64 last_parent = m_writeset_history_start;
     for (std::vector<uint64>::iterator it = writeset->begin();
          it != writeset->end(); ++it) {
@@ -290,6 +293,7 @@ void Writeset_trx_dependency_tracker::get_dependency(THD *thd,
     m_writeset_history_start = sequence_number;
     m_writeset_history.clear();
   }
+  mysql_mutex_unlock(&LOCK_slave_trans_dep_tracker);
 }
 
 void Writeset_trx_dependency_tracker::rotate(int64 start) {
@@ -328,7 +332,7 @@ void Transaction_dependency_tracker::get_dependency(THD *thd,
                                                     int64 &commit_parent) {
   sequence_number = commit_parent = 0;
 
-  switch (m_opt_tracking_mode) {
+  switch (m_opt_tracking_mode.load(std::memory_order_relaxed)) {
     case DEPENDENCY_TRACKING_COMMIT_ORDER:
       m_commit_order.get_dependency(thd, sequence_number, commit_parent);
       break;

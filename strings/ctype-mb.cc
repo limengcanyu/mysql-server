@@ -28,6 +28,8 @@
 #include <string.h>
 #include <sys/types.h>
 
+#include <algorithm>
+
 #include "m_ctype.h"
 #include "m_string.h"
 #include "my_compiler.h"
@@ -74,8 +76,8 @@ size_t my_casedn_str_mb(const CHARSET_INFO *cs, char *str) {
 static inline const MY_UNICASE_CHARACTER *get_case_info_for_ch(
     const CHARSET_INFO *cs, uint page, uint offs) {
   const MY_UNICASE_CHARACTER *p;
-  return cs->caseinfo ? ((p = cs->caseinfo->page[page]) ? &p[offs] : NULL)
-                      : NULL;
+  return cs->caseinfo ? ((p = cs->caseinfo->page[page]) ? &p[offs] : nullptr)
+                      : nullptr;
 }
 
 /*
@@ -208,12 +210,12 @@ int my_strcasecmp_mb(const CHARSET_INFO *cs, const char *s, const char *t) {
   return (*t != *s);
 }
 
-  /*
-  ** Compare string against string with wildcard
-  **	0 if matched
-  **	-1 if not matched with wildcard
-  **	 1 if matched with wildcard
-  */
+/*
+** Compare string against string with wildcard
+**	0 if matched
+**	-1 if not matched with wildcard
+**	 1 if matched with wildcard
+*/
 
 #define INC_PTR(cs, A, B) \
   A += (my_ismbchar(cs, A, B) ? my_ismbchar(cs, A, B) : 1)
@@ -221,10 +223,12 @@ int my_strcasecmp_mb(const CHARSET_INFO *cs, const char *s, const char *t) {
 #define likeconv(s, A) (uchar)(s)->sort_order[(uchar)(A)]
 
 static int my_wildcmp_mb_impl(const CHARSET_INFO *cs, const char *str,
-                              const char *str_end, const char *wildstr,
-                              const char *wildend, int escape, int w_one,
+                              const char *str_end, const char *wildstr_arg,
+                              const char *wildend_arg, int escape, int w_one,
                               int w_many, int recurse_level) {
   int result = -1; /* Not found, using wildcards */
+  const uchar *wildstr = pointer_cast<const uchar *>(wildstr_arg);
+  const uchar *wildend = pointer_cast<const uchar *>(wildend_arg);
 
   if (my_string_stack_guard && my_string_stack_guard(recurse_level)) return 1;
   while (wildstr != wildend) {
@@ -252,7 +256,7 @@ static int my_wildcmp_mb_impl(const CHARSET_INFO *cs, const char *str,
     }
     if (*wildstr == w_many) { /* Found w_many */
       uchar cmp;
-      const char *mb = wildstr;
+      const uchar *mb = wildstr;
       int mb_len = 0;
 
       wildstr++;
@@ -292,9 +296,9 @@ static int my_wildcmp_mb_impl(const CHARSET_INFO *cs, const char *str,
           INC_PTR(cs, str, str_end);
         }
         {
-          int tmp =
-              my_wildcmp_mb_impl(cs, str, str_end, wildstr, wildend, escape,
-                                 w_one, w_many, recurse_level + 1);
+          int tmp = my_wildcmp_mb_impl(
+              cs, str, str_end, pointer_cast<const char *>(wildstr),
+              wildend_arg, escape, w_one, w_many, recurse_level + 1);
           if (tmp <= 0) return (tmp);
         }
       } while (str != str_end);
@@ -376,7 +380,8 @@ uint my_instr_mb(const CHARSET_INFO *cs, const char *b, size_t b_length,
       int mb_len;
 
       if (!cs->coll->strnncoll(cs, pointer_cast<const uchar *>(b), s_length,
-                               pointer_cast<const uchar *>(s), s_length, 0)) {
+                               pointer_cast<const uchar *>(s), s_length,
+                               false)) {
         if (nmatch) {
           match[0].beg = 0;
           match[0].end = (uint)(b - b0);
@@ -403,7 +408,7 @@ uint my_instr_mb(const CHARSET_INFO *cs, const char *b, size_t b_length,
 int my_strnncoll_mb_bin(const CHARSET_INFO *cs MY_ATTRIBUTE((unused)),
                         const uchar *s, size_t slen, const uchar *t,
                         size_t tlen, bool t_is_prefix) {
-  size_t len = MY_MIN(slen, tlen);
+  size_t len = std::min(slen, tlen);
   int cmp = len == 0 ? 0 : memcmp(s, t, len);
   return cmp ? cmp : (int)((t_is_prefix ? len : slen) - tlen);
 }
@@ -437,7 +442,7 @@ int my_strnncollsp_mb_bin(const CHARSET_INFO *cs MY_ATTRIBUTE((unused)),
   size_t length;
   int res;
 
-  end = a + (length = MY_MIN(a_length, b_length));
+  end = a + (length = std::min(a_length, b_length));
   while (a < end) {
     if (*a++ != *b++) return ((int)a[-1] - (int)b[-1]);
   }
@@ -695,7 +700,7 @@ bool my_like_range_mb(const CHARSET_INFO *cs, const char *ptr,
 
       *max_length = res_length;
       pad_max_char(cs, max_str, max_end);
-      return 0;
+      return false;
     }
     if ((mb_len = my_ismbchar(cs, ptr, end)) > 1) {
       if (ptr + mb_len > end || min_str + mb_len > min_end) break;
@@ -772,7 +777,7 @@ bool my_like_range_mb(const CHARSET_INFO *cs, const char *ptr,
   *min_length = *max_length = (size_t)(min_str - min_org);
   while (min_str != min_end)
     *min_str++ = *max_str++ = ' '; /* Because if key compression */
-  return 0;
+  return false;
 }
 
 /**
@@ -949,10 +954,12 @@ pad_min_max:
 }
 
 static int my_wildcmp_mb_bin_impl(const CHARSET_INFO *cs, const char *str,
-                                  const char *str_end, const char *wildstr,
-                                  const char *wildend, int escape, int w_one,
-                                  int w_many, int recurse_level) {
+                                  const char *str_end, const char *wildstr_arg,
+                                  const char *wildend_arg, int escape,
+                                  int w_one, int w_many, int recurse_level) {
   int result = -1; /* Not found, using wildcards */
+  const uchar *wildstr = pointer_cast<const uchar *>(wildstr_arg);
+  const uchar *wildend = pointer_cast<const uchar *>(wildend_arg);
 
   if (my_string_stack_guard && my_string_stack_guard(recurse_level)) return 1;
   while (wildstr != wildend) {
@@ -963,7 +970,7 @@ static int my_wildcmp_mb_bin_impl(const CHARSET_INFO *cs, const char *str,
         if (str + l > str_end || memcmp(str, wildstr, l) != 0) return 1;
         str += l;
         wildstr += l;
-      } else if (str == str_end || *wildstr++ != *str++)
+      } else if (str == str_end || *wildstr++ != static_cast<uchar>(*str++))
         return (1); /* No match */
       if (wildstr == wildend)
         return (str != str_end); /* Match if both are at end */
@@ -979,7 +986,7 @@ static int my_wildcmp_mb_bin_impl(const CHARSET_INFO *cs, const char *str,
     }
     if (*wildstr == w_many) { /* Found w_many */
       int cmp;
-      const char *mb = wildstr;
+      const uchar *mb = wildstr;
       int mb_len = 0;
 
       wildstr++;
@@ -1010,16 +1017,17 @@ static int my_wildcmp_mb_bin_impl(const CHARSET_INFO *cs, const char *str,
               str += mb_len;
               break;
             }
-          } else if (!my_ismbchar(cs, str, str_end) && *str == cmp) {
+          } else if (!my_ismbchar(cs, str, str_end) &&
+                     static_cast<uchar>(*str) == cmp) {
             str++;
             break;
           }
           INC_PTR(cs, str, str_end);
         }
         {
-          int tmp =
-              my_wildcmp_mb_bin_impl(cs, str, str_end, wildstr, wildend, escape,
-                                     w_one, w_many, recurse_level + 1);
+          int tmp = my_wildcmp_mb_bin_impl(
+              cs, str, str_end, pointer_cast<const char *>(wildstr),
+              wildend_arg, escape, w_one, w_many, recurse_level + 1);
           if (tmp <= 0) return (tmp);
         }
       } while (str != str_end);
@@ -1226,43 +1234,58 @@ static const struct {
   int page;
   const char *p;
 } utr11_data[256] = {
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, pg11}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, pg23}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, pg2E}, {0, pg2F}, {0, pg30},
-    {0, pg31}, {0, pg32}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {0, pg4D}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {0, pg9F}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {0, pgA4}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL},
-    {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {1, NULL}, {0, pgD7}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, NULL}, {0, NULL}, {1, NULL}, {0, pgFA}, {0, NULL},
-    {0, NULL}, {0, NULL}, {0, pgFE}, {0, pgFF}};
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, pg11},    {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, pg23},    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, pg2E},    {0, pg2F},    {0, pg30},    {0, pg31},
+    {0, pg32},    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {0, pg4D},    {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {0, pg9F},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {0, pgA4},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr}, {1, nullptr},
+    {0, pgD7},    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr},
+    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, nullptr}, {1, nullptr},
+    {0, pgFA},    {0, nullptr}, {0, nullptr}, {0, nullptr}, {0, pgFE},
+    {0, pgFF}};
 
 size_t my_numcells_mb(const CHARSET_INFO *cs, const char *b, const char *e) {
   my_wc_t wc;

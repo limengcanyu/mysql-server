@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2008, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -98,7 +98,7 @@ Plugin_table table_events_waits_current::m_table_def(
 PFS_engine_table_share table_events_waits_current::m_share = {
     &pfs_truncatable_acl,
     table_events_waits_current::create,
-    NULL, /* write_row */
+    nullptr, /* write_row */
     table_events_waits_current::delete_all_rows,
     table_events_waits_current::get_row_count,
     sizeof(pos_events_waits_current), /* ref length */
@@ -146,7 +146,7 @@ Plugin_table table_events_waits_history::m_table_def(
 PFS_engine_table_share table_events_waits_history::m_share = {
     &pfs_truncatable_acl,
     table_events_waits_history::create,
-    NULL, /* write_row */
+    nullptr, /* write_row */
     table_events_waits_history::delete_all_rows,
     table_events_waits_history::get_row_count,
     sizeof(pos_events_waits_history), /* ref length */
@@ -193,7 +193,7 @@ Plugin_table table_events_waits_history_long::m_table_def(
 PFS_engine_table_share table_events_waits_history_long::m_share = {
     &pfs_truncatable_acl,
     table_events_waits_history_long::create,
-    NULL, /* write_row */
+    nullptr, /* write_row */
     table_events_waits_history_long::delete_all_rows,
     table_events_waits_history_long::get_row_count,
     sizeof(PFS_simple_index), /* ref length */
@@ -224,7 +224,7 @@ int table_events_waits_common::make_table_object_columns(
   PFS_table_share *safe_table_share;
 
   safe_table_share = sanitize_table_share(wait->m_weak_table_share);
-  if (unlikely(safe_table_share == NULL)) {
+  if (unlikely(safe_table_share == nullptr)) {
     return 1;
   }
 
@@ -263,7 +263,7 @@ int table_events_waits_common::make_table_object_columns(
       PFS_table_share_index *index_stat;
       index_stat = safe_table_share->find_index_stat(safe_index);
 
-      if (index_stat != NULL) {
+      if (index_stat != nullptr) {
         m_row.m_index_name_length = index_stat->m_key.m_name_length;
 
         if (unlikely(
@@ -295,7 +295,7 @@ int table_events_waits_common::make_file_object_columns(
   PFS_file *safe_file;
 
   safe_file = sanitize_file(wait->m_weak_file);
-  if (unlikely(safe_file == NULL)) {
+  if (unlikely(safe_file == nullptr)) {
     return 1;
   }
 
@@ -327,7 +327,7 @@ int table_events_waits_common::make_socket_object_columns(
   PFS_socket *safe_socket;
 
   safe_socket = sanitize_socket(wait->m_weak_socket);
-  if (unlikely(safe_socket == NULL)) {
+  if (unlikely(safe_socket == nullptr)) {
     return 1;
   }
 
@@ -351,7 +351,7 @@ int table_events_waits_common::make_socket_object_columns(
                                     safe_socket->m_addr_len);
 
     /* Convert port number to a string (length includes ':') */
-    size_t port_len = int10_to_str(port, (port_str + 1), 10) - port_str + 1;
+    size_t port_len = longlong10_to_str(port, (port_str + 1), 10) - port_str;
 
     /* OBJECT NAME */
     m_row.m_object_name_length = ip_len + port_len;
@@ -378,7 +378,7 @@ int table_events_waits_common::make_metadata_lock_object_columns(
   PFS_metadata_lock *safe_metadata_lock;
 
   safe_metadata_lock = sanitize_metadata_lock(wait->m_weak_metadata_lock);
-  if (unlikely(safe_metadata_lock == NULL)) {
+  if (unlikely(safe_metadata_lock == nullptr)) {
     return 1;
   }
 
@@ -643,7 +643,7 @@ int table_events_waits_common::make_row(PFS_events_waits *wait) {
       return HA_ERR_RECORD_DELETED;
   }
 
-  if (unlikely(safe_class == NULL)) {
+  if (unlikely(safe_class == nullptr)) {
     return HA_ERR_RECORD_DELETED;
   }
 
@@ -687,93 +687,97 @@ int table_events_waits_common::make_row(PFS_events_waits *wait) {
   Different similar operations (CLOSE vs STREAMCLOSE) are displayed
   with the same name 'close'.
 */
-static const LEX_STRING operation_names_map[] = {
+static const LEX_CSTRING operation_names_map[] = {
     /* Mutex operations */
-    {C_STRING_WITH_LEN("lock")},
-    {C_STRING_WITH_LEN("try_lock")},
+    {STRING_WITH_LEN("lock")},
+    {STRING_WITH_LEN("try_lock")},
 
     /* RWLock operations (RW-lock) */
-    {C_STRING_WITH_LEN("read_lock")},
-    {C_STRING_WITH_LEN("write_lock")},
-    {C_STRING_WITH_LEN("try_read_lock")},
-    {C_STRING_WITH_LEN("try_write_lock")},
+    {STRING_WITH_LEN("read_lock")},
+    {STRING_WITH_LEN("write_lock")},
+    {STRING_WITH_LEN("try_read_lock")},
+    {STRING_WITH_LEN("try_write_lock")},
+    {STRING_WITH_LEN("unlock")},
 
     /* RWLock operations (SX-lock) */
-    {C_STRING_WITH_LEN("shared_lock")},
-    {C_STRING_WITH_LEN("shared_exclusive_lock")},
-    {C_STRING_WITH_LEN("exclusive_lock")},
-    {C_STRING_WITH_LEN("try_shared_lock")},
-    {C_STRING_WITH_LEN("try_shared_exclusive_lock")},
-    {C_STRING_WITH_LEN("try_exclusive_lock")},
+    {STRING_WITH_LEN("shared_lock")},
+    {STRING_WITH_LEN("shared_exclusive_lock")},
+    {STRING_WITH_LEN("exclusive_lock")},
+    {STRING_WITH_LEN("try_shared_lock")},
+    {STRING_WITH_LEN("try_shared_exclusive_lock")},
+    {STRING_WITH_LEN("try_exclusive_lock")},
+    {STRING_WITH_LEN("shared_unlock")},
+    {STRING_WITH_LEN("shared_exclusive_unlock")},
+    {STRING_WITH_LEN("exclusive_unlock")},
 
     /* Condition operations */
-    {C_STRING_WITH_LEN("wait")},
-    {C_STRING_WITH_LEN("timed_wait")},
+    {STRING_WITH_LEN("wait")},
+    {STRING_WITH_LEN("timed_wait")},
 
     /* File operations */
-    {C_STRING_WITH_LEN("create")},
-    {C_STRING_WITH_LEN("create")}, /* create tmp */
-    {C_STRING_WITH_LEN("open")},
-    {C_STRING_WITH_LEN("open")}, /* stream open */
-    {C_STRING_WITH_LEN("close")},
-    {C_STRING_WITH_LEN("close")}, /* stream close */
-    {C_STRING_WITH_LEN("read")},
-    {C_STRING_WITH_LEN("write")},
-    {C_STRING_WITH_LEN("seek")},
-    {C_STRING_WITH_LEN("tell")},
-    {C_STRING_WITH_LEN("flush")},
-    {C_STRING_WITH_LEN("stat")},
-    {C_STRING_WITH_LEN("stat")}, /* fstat */
-    {C_STRING_WITH_LEN("chsize")},
-    {C_STRING_WITH_LEN("delete")},
-    {C_STRING_WITH_LEN("rename")},
-    {C_STRING_WITH_LEN("sync")},
+    {STRING_WITH_LEN("create")},
+    {STRING_WITH_LEN("create")}, /* create tmp */
+    {STRING_WITH_LEN("open")},
+    {STRING_WITH_LEN("open")}, /* stream open */
+    {STRING_WITH_LEN("close")},
+    {STRING_WITH_LEN("close")}, /* stream close */
+    {STRING_WITH_LEN("read")},
+    {STRING_WITH_LEN("write")},
+    {STRING_WITH_LEN("seek")},
+    {STRING_WITH_LEN("tell")},
+    {STRING_WITH_LEN("flush")},
+    {STRING_WITH_LEN("stat")},
+    {STRING_WITH_LEN("stat")}, /* fstat */
+    {STRING_WITH_LEN("chsize")},
+    {STRING_WITH_LEN("delete")},
+    {STRING_WITH_LEN("rename")},
+    {STRING_WITH_LEN("sync")},
 
     /* Table I/O operations */
-    {C_STRING_WITH_LEN("fetch")},
-    {C_STRING_WITH_LEN("insert")}, /* write row */
-    {C_STRING_WITH_LEN("update")}, /* update row */
-    {C_STRING_WITH_LEN("delete")}, /* delete row */
+    {STRING_WITH_LEN("fetch")},
+    {STRING_WITH_LEN("insert")}, /* write row */
+    {STRING_WITH_LEN("update")}, /* update row */
+    {STRING_WITH_LEN("delete")}, /* delete row */
 
     /* Table lock operations */
-    {C_STRING_WITH_LEN("read normal")},
-    {C_STRING_WITH_LEN("read with shared locks")},
-    {C_STRING_WITH_LEN("read high priority")},
-    {C_STRING_WITH_LEN("read no inserts")},
-    {C_STRING_WITH_LEN("write allow write")},
-    {C_STRING_WITH_LEN("write concurrent insert")},
-    {C_STRING_WITH_LEN("write low priority")},
-    {C_STRING_WITH_LEN("write normal")},
-    {C_STRING_WITH_LEN("read external")},
-    {C_STRING_WITH_LEN("write external")},
+    {STRING_WITH_LEN("read normal")},
+    {STRING_WITH_LEN("read with shared locks")},
+    {STRING_WITH_LEN("read high priority")},
+    {STRING_WITH_LEN("read no inserts")},
+    {STRING_WITH_LEN("write allow write")},
+    {STRING_WITH_LEN("write concurrent insert")},
+    {STRING_WITH_LEN("write low priority")},
+    {STRING_WITH_LEN("write normal")},
+    {STRING_WITH_LEN("read external")},
+    {STRING_WITH_LEN("write external")},
 
     /* Socket operations */
-    {C_STRING_WITH_LEN("create")},
-    {C_STRING_WITH_LEN("connect")},
-    {C_STRING_WITH_LEN("bind")},
-    {C_STRING_WITH_LEN("close")},
-    {C_STRING_WITH_LEN("send")},
-    {C_STRING_WITH_LEN("recv")},
-    {C_STRING_WITH_LEN("sendto")},
-    {C_STRING_WITH_LEN("recvfrom")},
-    {C_STRING_WITH_LEN("sendmsg")},
-    {C_STRING_WITH_LEN("recvmsg")},
-    {C_STRING_WITH_LEN("seek")},
-    {C_STRING_WITH_LEN("opt")},
-    {C_STRING_WITH_LEN("stat")},
-    {C_STRING_WITH_LEN("shutdown")},
-    {C_STRING_WITH_LEN("select")},
+    {STRING_WITH_LEN("create")},
+    {STRING_WITH_LEN("connect")},
+    {STRING_WITH_LEN("bind")},
+    {STRING_WITH_LEN("close")},
+    {STRING_WITH_LEN("send")},
+    {STRING_WITH_LEN("recv")},
+    {STRING_WITH_LEN("sendto")},
+    {STRING_WITH_LEN("recvfrom")},
+    {STRING_WITH_LEN("sendmsg")},
+    {STRING_WITH_LEN("recvmsg")},
+    {STRING_WITH_LEN("seek")},
+    {STRING_WITH_LEN("opt")},
+    {STRING_WITH_LEN("stat")},
+    {STRING_WITH_LEN("shutdown")},
+    {STRING_WITH_LEN("select")},
 
     /* Idle operations */
-    {C_STRING_WITH_LEN("idle")},
+    {STRING_WITH_LEN("idle")},
 
     /* Medatada lock operations */
-    {C_STRING_WITH_LEN("metadata lock")}};
+    {STRING_WITH_LEN("metadata lock")}};
 
 int table_events_waits_common::read_row_values(TABLE *table, unsigned char *buf,
                                                Field **fields, bool read_all) {
   Field *f;
-  const LEX_STRING *operation;
+  const LEX_CSTRING *operation;
 
   static_assert(COUNT_OPERATION_TYPE == array_elements(operation_names_map),
                 "COUNT_OPERATION_TYPE needs to be the last element.");
@@ -792,8 +796,8 @@ int table_events_waits_common::read_row_values(TABLE *table, unsigned char *buf,
     - OBJECT_NAME (m_object_name joins with PFS_table_share)
   */
   for (; (f = *fields); fields++) {
-    if (read_all || bitmap_is_set(table->read_set, f->field_index)) {
-      switch (f->field_index) {
+    if (read_all || bitmap_is_set(table->read_set, f->field_index())) {
+      switch (f->field_index()) {
         case 0: /* THREAD_ID */
           set_field_ulonglong(f, m_row.m_thread_internal_id);
           break;
@@ -828,7 +832,8 @@ int table_events_waits_common::read_row_values(TABLE *table, unsigned char *buf,
           }
           break;
         case 7: /* TIMER_WAIT */
-          if (m_row.m_timer_wait != 0) {
+          /* TIMER_START != 0 when TIMED=YES. */
+          if (m_row.m_timer_start != 0) {
             set_field_ulonglong(f, m_row.m_timer_wait);
           } else {
             f->set_null();
@@ -955,12 +960,12 @@ PFS_events_waits *table_events_waits_current::get_wait(
   if (safe_current == top_wait) {
     /* Display the last top level wait, when completed */
     if (m_pos.m_index_2 >= 1) {
-      return NULL;
+      return nullptr;
     }
   } else {
     /* Display all pending waits, when in progress */
     if (wait >= safe_current) {
-      return NULL;
+      return nullptr;
     }
   }
 #endif
@@ -970,7 +975,7 @@ PFS_events_waits *table_events_waits_current::get_wait(
       This locker does not exist.
       There can not be more lockers in the stack, skip to the next thread
     */
-    return NULL;
+    return nullptr;
   }
 
   return wait;
@@ -983,9 +988,9 @@ int table_events_waits_current::rnd_next(void) {
 
   for (m_pos.set_at(&m_next_pos); has_more_thread; m_pos.next_thread()) {
     pfs_thread = global_thread_container.get(m_pos.m_index_1, &has_more_thread);
-    if (pfs_thread != NULL) {
+    if (pfs_thread != nullptr) {
       wait = get_wait(pfs_thread, m_pos.m_index_2);
-      if (wait != NULL) {
+      if (wait != nullptr) {
         /* Next iteration, look for the next locker in this thread */
         m_next_pos.set_after(&m_pos);
         return make_row(pfs_thread, wait);
@@ -1003,10 +1008,10 @@ int table_events_waits_current::rnd_pos(const void *pos) {
   set_position(pos);
 
   pfs_thread = global_thread_container.get(m_pos.m_index_1);
-  if (pfs_thread != NULL) {
+  if (pfs_thread != nullptr) {
     DBUG_ASSERT(m_pos.m_index_2 < WAIT_STACK_LOGICAL_SIZE);
     wait = get_wait(pfs_thread, m_pos.m_index_2);
-    if (wait != NULL) {
+    if (wait != nullptr) {
       return make_row(pfs_thread, wait);
     }
   }
@@ -1031,11 +1036,11 @@ int table_events_waits_current::index_next(void) {
 
   for (m_pos.set_at(&m_next_pos); has_more_thread; m_pos.next_thread()) {
     pfs_thread = global_thread_container.get(m_pos.m_index_1, &has_more_thread);
-    if (pfs_thread != NULL) {
+    if (pfs_thread != nullptr) {
       if (m_opened_index->match(pfs_thread)) {
         do {
           wait = get_wait(pfs_thread, m_pos.m_index_2);
-          if (wait != NULL) {
+          if (wait != nullptr) {
             if (m_opened_index->match(wait)) {
               if (!make_row(pfs_thread, wait)) {
                 /* Next iteration, look for the next locker in this thread */
@@ -1045,7 +1050,7 @@ int table_events_waits_current::index_next(void) {
             }
             m_pos.set_after(&m_pos);
           }
-        } while (wait != NULL);
+        } while (wait != nullptr);
       }
     }
   }
@@ -1098,18 +1103,18 @@ PFS_events_waits *table_events_waits_history::get_wait(PFS_thread *pfs_thread,
 
   if (index_2 >= events_waits_history_per_thread) {
     /* This thread does not have more (full) history */
-    return NULL;
+    return nullptr;
   }
 
   if (!pfs_thread->m_waits_history_full &&
       (index_2 >= pfs_thread->m_waits_history_index)) {
     /* This thread does not have more (not full) history */
-    return NULL;
+    return nullptr;
   }
 
   wait = &pfs_thread->m_waits_history[index_2];
   if (wait->m_wait_class == NO_WAIT_CLASS) {
-    return NULL;
+    return nullptr;
   }
 
   return wait;
@@ -1126,9 +1131,9 @@ int table_events_waits_history::rnd_next(void) {
 
   for (m_pos.set_at(&m_next_pos); has_more_thread; m_pos.next_thread()) {
     pfs_thread = global_thread_container.get(m_pos.m_index_1, &has_more_thread);
-    if (pfs_thread != NULL) {
+    if (pfs_thread != nullptr) {
       wait = get_wait(pfs_thread, m_pos.m_index_2);
-      if (wait != NULL) {
+      if (wait != nullptr) {
         /* Next iteration, look for the next history in this thread */
         m_next_pos.set_after(&m_pos);
         return make_row(pfs_thread, wait);
@@ -1147,11 +1152,11 @@ int table_events_waits_history::rnd_pos(const void *pos) {
   set_position(pos);
 
   pfs_thread = global_thread_container.get(m_pos.m_index_1);
-  if (pfs_thread != NULL) {
+  if (pfs_thread != nullptr) {
     DBUG_ASSERT(m_pos.m_index_2 < events_waits_history_per_thread);
 
     wait = get_wait(pfs_thread, m_pos.m_index_2);
-    if (wait != NULL) {
+    if (wait != nullptr) {
       return make_row(pfs_thread, wait);
     }
   }
@@ -1180,11 +1185,11 @@ int table_events_waits_history::index_next(void) {
 
   for (m_pos.set_at(&m_next_pos); has_more_thread; m_pos.next_thread()) {
     pfs_thread = global_thread_container.get(m_pos.m_index_1, &has_more_thread);
-    if (pfs_thread != NULL) {
+    if (pfs_thread != nullptr) {
       if (m_opened_index->match(pfs_thread)) {
         do {
           wait = get_wait(pfs_thread, m_pos.m_index_2);
-          if (wait != NULL) {
+          if (wait != nullptr) {
             if (m_opened_index->match(wait)) {
               if (!make_row(pfs_thread, wait)) {
                 /* Next iteration, look for the next history in this thread */
@@ -1194,7 +1199,7 @@ int table_events_waits_history::index_next(void) {
             }
             m_pos.set_after(&m_pos);
           }
-        } while (wait != NULL);
+        } while (wait != nullptr);
       }
     }
   }

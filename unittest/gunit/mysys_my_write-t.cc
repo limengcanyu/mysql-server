@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -41,10 +41,10 @@ extern ssize_t (*mock_write)(int fd, const void *buf, size_t count);
 
 namespace mysys_my_write_unittest {
 
+using ::testing::_;
 using ::testing::InSequence;
 using ::testing::Return;
 using ::testing::SetErrnoAndReturn;
-using ::testing::_;
 
 class MockWrite {
  public:
@@ -52,7 +52,7 @@ class MockWrite {
   MOCK_METHOD3(mockwrite, ssize_t(int, const void *, size_t));
 };
 
-MockWrite *mockfs = NULL;
+MockWrite *mockfs = nullptr;
 
 ssize_t mockfs_write(int fd, const void *buf, size_t count) {
   return mockfs->mockwrite(fd, buf, count);
@@ -66,7 +66,7 @@ class MysysMyWriteTest : public ::testing::Test {
   virtual void TearDown() {
     mock_write = nullptr;
     delete mockfs;
-    mockfs = NULL;
+    mockfs = nullptr;
   }
 };
 

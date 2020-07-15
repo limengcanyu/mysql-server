@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -33,10 +33,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 #include <string.h>
 
 /* For MY_STAT */
+#include "my_compiler.h"
 #include "my_dir.h"
 #include "my_io.h"
-/* For my_chsize */
-#include "my_sys.h"
 #include "mysql/psi/psi_socket.h"
 /* For socket api */
 #ifdef _WIN32
@@ -96,8 +95,8 @@ static inline void mysql_socket_set_address(
 #endif
 ) {
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (socket.m_psi != NULL) {
-    PSI_SOCKET_CALL(set_socket_info)(socket.m_psi, NULL, addr, addr_len);
+  if (socket.m_psi != nullptr) {
+    PSI_SOCKET_CALL(set_socket_info)(socket.m_psi, nullptr, addr, addr_len);
   }
 #endif
 }
@@ -114,7 +113,7 @@ static inline void mysql_socket_set_thread_owner(
 #endif
 ) {
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (socket.m_psi != NULL) {
+  if (socket.m_psi != nullptr) {
     PSI_SOCKET_CALL(set_socket_thread_owner)(socket.m_psi);
   }
 #endif
@@ -137,7 +136,7 @@ static inline my_socket mysql_socket_getfd(MYSQL_SOCKET mysql_socket) {
 */
 static inline void mysql_socket_setfd(MYSQL_SOCKET *mysql_socket,
                                       my_socket fd) {
-  if (likely(mysql_socket != NULL)) {
+  if (likely(mysql_socket != nullptr)) {
     mysql_socket->fd = fd;
   }
 }
@@ -224,11 +223,11 @@ static inline struct PSI_socket_locker *inline_mysql_start_socket_wait(
     enum PSI_socket_operation op, size_t byte_count, const char *src_file,
     int src_line) {
   struct PSI_socket_locker *locker;
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     locker = PSI_SOCKET_CALL(start_socket_wait)(state, mysql_socket.m_psi, op,
                                                 byte_count, src_file, src_line);
   } else {
-    locker = NULL;
+    locker = nullptr;
   }
   return locker;
 }
@@ -239,7 +238,7 @@ static inline struct PSI_socket_locker *inline_mysql_start_socket_wait(
 */
 static inline void inline_mysql_end_socket_wait(
     struct PSI_socket_locker *locker, size_t byte_count) {
-  if (locker != NULL) {
+  if (locker != nullptr) {
     PSI_SOCKET_CALL(end_socket_wait)(locker, byte_count);
   }
 }
@@ -252,21 +251,21 @@ static inline void inline_mysql_end_socket_wait(
 */
 static inline void inline_mysql_socket_set_state(MYSQL_SOCKET socket,
                                                  enum PSI_socket_state state) {
-  if (socket.m_psi != NULL) {
+  if (socket.m_psi != nullptr) {
     PSI_SOCKET_CALL(set_socket_state)(socket.m_psi, state);
   }
 }
 #endif /* HAVE_PSI_SOCKET_INTERFACE */
 
-  /**
-    @def mysql_socket_socket(K, D, T, P)
-    Create a socket.
-    @c mysql_socket_socket is a replacement for @c socket.
-    @param K PSI_socket_key for this instrumented socket
-    @param D Socket domain
-    @param T Protocol type
-    @param P Transport protocol
-  */
+/**
+  @def mysql_socket_socket(K, D, T, P)
+  Create a socket.
+  @c mysql_socket_socket is a replacement for @c socket.
+  @param K PSI_socket_key for this instrumented socket
+  @param D Socket domain
+  @param T Protocol type
+  @param P Transport protocol
+*/
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
 #define mysql_socket_socket(K, D, T, P) inline_mysql_socket_socket(K, D, T, P)
@@ -533,7 +532,7 @@ static inline MYSQL_SOCKET inline_mysql_socket_socket(
 #ifdef HAVE_PSI_SOCKET_INTERFACE
   if (likely(mysql_socket.fd != INVALID_SOCKET)) {
     mysql_socket.m_psi = PSI_SOCKET_CALL(init_socket)(
-        key, (const my_socket *)&mysql_socket.fd, NULL, 0);
+        key, (const my_socket *)&mysql_socket.fd, nullptr, 0);
   }
 #endif
   return mysql_socket;
@@ -549,7 +548,7 @@ static inline int inline_mysql_socket_bind(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker_state state;
     PSI_socket_locker *locker;
@@ -562,10 +561,10 @@ static inline int inline_mysql_socket_bind(
 
     /* Instrumentation end */
     if (result == 0) {
-      PSI_SOCKET_CALL(set_socket_info)(mysql_socket.m_psi, NULL, addr, len);
+      PSI_SOCKET_CALL(set_socket_info)(mysql_socket.m_psi, nullptr, addr, len);
     }
 
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -588,7 +587,7 @@ static inline int inline_mysql_socket_getsockname(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -600,7 +599,7 @@ static inline int inline_mysql_socket_getsockname(
     result = getsockname(mysql_socket.fd, addr, len);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -624,7 +623,7 @@ static inline int inline_mysql_socket_connect(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -636,7 +635,7 @@ static inline int inline_mysql_socket_connect(
     result = connect(mysql_socket.fd, addr, len);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -660,7 +659,7 @@ static inline int inline_mysql_socket_getpeername(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -672,7 +671,7 @@ static inline int inline_mysql_socket_getpeername(
     result = getpeername(mysql_socket.fd, addr, len);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -696,7 +695,7 @@ static inline ssize_t inline_mysql_socket_send(
   ssize_t result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -707,7 +706,7 @@ static inline ssize_t inline_mysql_socket_send(
     result = send(mysql_socket.fd, buf, IF_WIN((int), ) n, flags);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       size_t bytes_written;
       bytes_written = (result > -1) ? result : 0;
       PSI_SOCKET_CALL(end_socket_wait)(locker, bytes_written);
@@ -733,7 +732,7 @@ static inline ssize_t inline_mysql_socket_recv(
   ssize_t result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -745,7 +744,7 @@ static inline ssize_t inline_mysql_socket_recv(
     result = recv(mysql_socket.fd, buf, IF_WIN((int), ) n, flags);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       size_t bytes_read;
       bytes_read = (result > -1) ? result : 0;
       PSI_SOCKET_CALL(end_socket_wait)(locker, bytes_read);
@@ -772,7 +771,7 @@ static inline ssize_t inline_mysql_socket_sendto(
   ssize_t result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -784,7 +783,7 @@ static inline ssize_t inline_mysql_socket_sendto(
         sendto(mysql_socket.fd, buf, IF_WIN((int), ) n, flags, addr, addr_len);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       size_t bytes_written;
       bytes_written = (result > -1) ? result : 0;
       PSI_SOCKET_CALL(end_socket_wait)(locker, bytes_written);
@@ -812,7 +811,7 @@ static inline ssize_t inline_mysql_socket_recvfrom(
   ssize_t result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -825,7 +824,7 @@ static inline ssize_t inline_mysql_socket_recvfrom(
                       addr_len);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       size_t bytes_read;
       bytes_read = (result > -1) ? result : 0;
       PSI_SOCKET_CALL(end_socket_wait)(locker, bytes_read);
@@ -853,7 +852,7 @@ static inline int inline_mysql_socket_getsockopt(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -865,7 +864,7 @@ static inline int inline_mysql_socket_getsockopt(
     result = getsockopt(mysql_socket.fd, level, optname, optval, optlen);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -902,7 +901,7 @@ static inline int inline_mysql_socket_setsockopt(
     result = setsockopt(mysql_socket.fd, level, optname, optval, optlen);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -970,7 +969,7 @@ static inline int inline_mysql_sock_set_nonblocking(
     result = set_socket_nonblock(mysql_socket.fd);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -994,7 +993,7 @@ static inline int inline_mysql_socket_listen(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -1006,7 +1005,7 @@ static inline int inline_mysql_socket_listen(
     result = listen(mysql_socket.fd, backlog);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -1028,10 +1027,10 @@ static inline MYSQL_SOCKET inline_mysql_socket_accept(
 #endif
     MYSQL_SOCKET socket_listen, struct sockaddr *addr, socklen_t *addr_len) {
   MYSQL_SOCKET socket_accept = MYSQL_INVALID_SOCKET;
-  socklen_t addr_length = (addr_len != NULL) ? *addr_len : 0;
+  socklen_t addr_length = (addr_len != nullptr) ? *addr_len : 0;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (socket_listen.m_psi != NULL) {
+  if (socket_listen.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -1043,7 +1042,7 @@ static inline MYSQL_SOCKET inline_mysql_socket_accept(
     socket_accept.fd = accept(socket_listen.fd, addr, &addr_length);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
   } else
@@ -1074,7 +1073,7 @@ static inline int inline_mysql_socket_close(
   int result;
 
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     /* Instrumentation start */
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
@@ -1086,11 +1085,11 @@ static inline int inline_mysql_socket_close(
     result = closesocket(mysql_socket.fd);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
     /* Remove the instrumentation for this socket. */
-    if (mysql_socket.m_psi != NULL) {
+    if (mysql_socket.m_psi != nullptr) {
       PSI_SOCKET_CALL(destroy_socket)(mysql_socket.m_psi);
     }
 
@@ -1126,7 +1125,7 @@ static inline int inline_mysql_socket_shutdown(
 
 /* Instrumentation start */
 #ifdef HAVE_PSI_SOCKET_INTERFACE
-  if (mysql_socket.m_psi != NULL) {
+  if (mysql_socket.m_psi != nullptr) {
     PSI_socket_locker *locker;
     PSI_socket_locker_state state;
     locker = PSI_SOCKET_CALL(start_socket_wait)(&state, mysql_socket.m_psi,
@@ -1145,7 +1144,7 @@ static inline int inline_mysql_socket_shutdown(
       result = shutdown(mysql_socket.fd, how);
 
     /* Instrumentation end */
-    if (locker != NULL) {
+    if (locker != nullptr) {
       PSI_SOCKET_CALL(end_socket_wait)(locker, (size_t)0);
     }
 
@@ -1167,6 +1166,6 @@ static inline int inline_mysql_socket_shutdown(
   return result;
 }
 
-  /** @} (end of group psi_api_socket) */
+/** @} (end of group psi_api_socket) */
 
 #endif

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -49,7 +49,7 @@ static void raise_query_rewritten_note(THD *thd, const char *original_query,
 
 void invoke_pre_parse_rewrite_plugins(THD *thd) {
   Diagnostics_area *plugin_da = thd->get_query_rewrite_plugin_da();
-  if (plugin_da == NULL) return;
+  if (plugin_da == nullptr) return;
   plugin_da->reset_diagnostics_area();
   plugin_da->reset_condition_info(thd);
 
@@ -57,7 +57,7 @@ void invoke_pre_parse_rewrite_plugins(THD *thd) {
   thd->push_diagnostics_area(plugin_da, false);
   mysql_event_parse_rewrite_plugin_flag flags =
       MYSQL_AUDIT_PARSE_REWRITE_PLUGIN_NONE;
-  LEX_CSTRING rewritten_query = {NULL, 0};
+  LEX_CSTRING rewritten_query = {nullptr, 0};
   mysql_audit_notify(thd, AUDIT_EVENT(MYSQL_AUDIT_PARSE_PREPARSE), &flags,
                      &rewritten_query);
 
@@ -66,11 +66,11 @@ void invoke_pre_parse_rewrite_plugins(THD *thd) {
       flags & MYSQL_AUDIT_PARSE_REWRITE_PLUGIN_QUERY_REWRITTEN) {
     // It is a rewrite fulltext plugin and we need a rewrite we must have
     // generated a new query then.
-    DBUG_ASSERT(rewritten_query.str != NULL && rewritten_query.length > 0);
+    DBUG_ASSERT(rewritten_query.str != nullptr && rewritten_query.length > 0);
     raise_query_rewritten_note(thd, thd->query().str, rewritten_query.str);
     alloc_query(thd, rewritten_query.str, rewritten_query.length);
     thd->m_parser_state->init(thd, thd->query().str, thd->query().length);
-    my_free((void *)rewritten_query.str);
+    my_free(const_cast<char *>(rewritten_query.str));
   }
 
   da->copy_non_errors_from_da(thd, plugin_da);
@@ -106,10 +106,10 @@ bool invoke_post_parse_rewrite_plugins(THD *thd, bool is_prepared) {
   thd->push_diagnostics_area(plugin_da, false);
 
   {
-  /*
-     We have to call a function in rules_table_service.cc, or the service
-     won't be visible to plugins.
-  */
+    /*
+       We have to call a function in rules_table_service.cc, or the service
+       won't be visible to plugins.
+    */
 #ifndef DBUG_OFF
     int dummy =
 #endif
@@ -120,7 +120,7 @@ bool invoke_post_parse_rewrite_plugins(THD *thd, bool is_prepared) {
 #ifndef DBUG_OFF
     dummy =
 #endif
-        ssl_wrappe_service::
+        ssl_wrapper_service::
             dummy_function_to_ensure_we_are_linked_into_the_server();
     DBUG_ASSERT(dummy == 1);
   }
@@ -131,7 +131,7 @@ bool invoke_post_parse_rewrite_plugins(THD *thd, bool is_prepared) {
   bool err = false;
   const char *original_query = thd->query().str;
   mysql_audit_notify(thd, AUDIT_EVENT(MYSQL_AUDIT_PARSE_POSTPARSE), &flags,
-                     NULL);
+                     nullptr);
 
   if (flags & MYSQL_AUDIT_PARSE_REWRITE_PLUGIN_QUERY_REWRITTEN) {
     raise_query_rewritten_note(thd, original_query, thd->query().str);

@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -46,6 +46,8 @@ class Handler;
 class HARNESS_EXPORT Registry {
  public:
   const static std::map<std::string, LogLevel> kLogLevels;
+  const static std::map<std::string, LogTimestampPrecision>
+      kLogTimestampPrecisions;
 
   Registry() = default;
   Registry(const Registry &) = delete;
@@ -88,6 +90,20 @@ class HARNESS_EXPORT Registry {
    * @throws std::logic_error if no logger is registered for given module name
    */
   Logger get_logger(const std::string &name) const;
+
+  /**
+   * Return logger for particular module.
+   *
+   * if it doesn't exist, get the default logger.
+   *
+   * @param name Logger id (log domain it services)
+   * @param default_name name of the default logger
+   *
+   * @throws std::logic_error if neither logger is registered for given module
+   * name
+   */
+  Logger get_logger_or_default(const std::string &name,
+                               const std::string &default_name) const;
 
   /**
    * Update logger for particular module
@@ -137,12 +153,21 @@ class HARNESS_EXPORT Registry {
    *
    * @throws std::logic_error if no handler is registered for given name
    */
-  std::shared_ptr<Handler> get_handler(std::string name) const;
+  std::shared_ptr<Handler> get_handler(const std::string &name) const;
 
   /**
    * Get the handler names from the internal registry
    */
   std::set<std::string> get_handler_names() const;
+
+  /**
+   * Check if a log-level is handled by at least one handler.
+   *
+   * @returns if at least one handler handles the log-level
+   * @retval true at least one handler
+   * @retval false log-level will be ignored.
+   */
+  bool is_handled(LogLevel level) const;
 
   /**
    * Flag that the registry has been initialized
@@ -164,9 +189,11 @@ class HARNESS_EXPORT Registry {
   bool is_ready() const noexcept { return ready_; }
 
   /**
-   * Force the flush (reopen) on all registered logger handlers
+   * Force the flush (reopen) on all registered logger handlers, while moving
+   * old logger file to dst.
+   * @param dst destination filename for old log
    */
-  void flush_all_loggers();
+  void flush_all_loggers(const std::string dst = "");
 
  private:
   mutable std::mutex mtx_;
@@ -207,6 +234,16 @@ HARNESS_EXPORT
 LogLevel get_default_log_level(const Config &config, bool raw_mode = false);
 
 /**
+ * Get default log filename
+ *
+ * Fetches default log filename set in the configuration file
+ *
+ * @param config   Configuration items from configuration file
+ */
+HARNESS_EXPORT
+std::string get_default_log_filename(const Config &config);
+
+/**
  * Attach handler to all loggers
  *
  * @param registry Registry object, typically managed by DIM
@@ -223,6 +260,37 @@ void attach_handler_to_all_loggers(Registry &registry, std::string name);
  */
 HARNESS_EXPORT
 void set_log_level_for_all_loggers(Registry &registry, LogLevel level);
+
+/**
+ * Converts string with log timestamp precision description to
+ * LogTimestampPrecision type.
+ *
+ * @param name string with log timestamp precision description
+ *
+ * @throws std::invalid_argument if log timestamp precision string is invalid
+ */
+HARNESS_EXPORT
+LogTimestampPrecision log_timestamp_precision_from_string(std::string name);
+
+/**
+ * Get default timestamp precision
+ *
+ * Fetches default timestamp precision for logfiles
+ *
+ * @param config   Configuration items from configuration file
+ */
+HARNESS_EXPORT
+LogTimestampPrecision get_default_timestamp_precision(const Config &config);
+
+/**
+ * Set timestamp precision for all the loggers
+ *
+ * @param registry Registry object, typically managed by DIM
+ * @param precision Precision of timestamps
+ */
+HARNESS_EXPORT
+void set_timestamp_precision_for_all_loggers(Registry &registry,
+                                             LogTimestampPrecision precision);
 
 /**
  * Clear registry
@@ -314,6 +382,10 @@ void create_main_log_handler(Registry &registry, const std::string &program,
 /** Set log level for all registered loggers. */
 HARNESS_EXPORT
 void set_log_level_for_all_loggers(LogLevel level);
+
+/** Set timestamp precision for all registered loggers. */
+HARNESS_EXPORT
+void set_timestamp_precison_for_all_loggers(LogTimestampPrecision precision);
 
 /**
  * Register handler for all plugins.

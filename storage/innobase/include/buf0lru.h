@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1995, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1995, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -57,17 +57,16 @@ These are low-level functions
 #define BUF_LRU_OLD_MIN_LEN 512 /* 8 megabytes of 16k pages */
 #endif                          /* !UNIV_HOTBACKUP */
 
-/** Flushes all dirty pages or removes all pages belonging
- to a given tablespace. A PROBLEM: if readahead is being started, what
- guarantees that it will not try to read in pages after this operation
- has completed? */
-void buf_LRU_flush_or_remove_pages(
-    space_id_t id,           /*!< in: space id */
-    buf_remove_t buf_remove, /*!< in: remove or flush strategy */
-    const trx_t *trx,        /*!< to check if the operation must
-                             be interrupted */
-    bool strict = true);     /*!< in: true, if no page from tablespace
-                             can be in buffer pool just after flush */
+/** Flushes all dirty pages or removes all pages belonging to a given
+tablespace. A PROBLEM: if readahead is being started, what guarantees
+that it will not try to read in pages after this operation has completed?
+@param[in]  id          tablespace ID
+@param[in]  buf_remove  remove or flush strategy
+@param[in]  trx         to check if the operation must be interrupted
+@param[in]  strict      true, if no page from tablespace can be in
+                        buffer pool just after flush */
+void buf_LRU_flush_or_remove_pages(space_id_t id, buf_remove_t buf_remove,
+                                   const trx_t *trx, bool strict = true);
 
 #ifndef UNIV_HOTBACKUP
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
@@ -144,12 +143,11 @@ void buf_LRU_block_free_non_file_page(buf_block_t *block);
 /** Adds a block to the LRU list. Please make sure that the page_size is
  already set when invoking the function, so that we can get correct
  page_size from the buffer page when adding a block into LRU */
-void buf_LRU_add_block(
-    buf_page_t *bpage, /*!< in: control block */
-    ibool old);        /*!< in: TRUE if should be put to the old
-                       blocks in the LRU list, else put to the
-                       start; if the LRU list is very short, added to
-                       the start regardless of this parameter */
+void buf_LRU_add_block(buf_page_t *bpage, /*!< in: control block */
+                       ibool old); /*!< in: TRUE if should be put to the old
+                                   blocks in the LRU list, else put to the
+                                   start; if the LRU list is very short, added
+                                   to the start regardless of this parameter */
 
 /** Adds a block to the LRU list of decompressed zip pages.
 @param[in]	block	control block
@@ -247,8 +245,6 @@ extern buf_LRU_stat_t buf_LRU_stat_sum;
 #define buf_LRU_stat_inc_io() buf_LRU_stat_cur.io++
 /** Increments the page_zip_decompress() counter in buf_LRU_stat_cur. */
 #define buf_LRU_stat_inc_unzip() buf_LRU_stat_cur.unzip++
-
-#include "buf0lru.ic"
 
 #endif /* !UNIV_HOTBACKUP */
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include <mysql/group_replication_priv.h>
 #include "my_inttypes.h"
 #include "plugin/group_replication/include/gcs_plugin_messages.h"
 #include "plugin/group_replication/include/plugin_psi.h"
@@ -37,24 +38,6 @@
     FCM_QUOTA introduces a delay only on transactions the exceed a quota
 */
 enum Flow_control_mode { FCM_DISABLED = 0, FCM_QUOTA };
-extern ulong flow_control_mode_var;
-
-/**
-  Flow control queue threshold for certifier and for applier.
-*/
-extern long flow_control_certifier_threshold_var;
-extern long flow_control_applier_threshold_var;
-
-/**
-  Options to fine-tune flow-control behaviour
-*/
-extern long flow_control_min_quota_var;
-extern long flow_control_min_recovery_quota_var;
-extern long flow_control_max_quota_var;
-extern int flow_control_member_quota_percent_var;
-extern int flow_control_period_var;
-extern int flow_control_hold_percent_var;
-extern int flow_control_release_percent_var;
 
 /**
   @class Pipeline_stats_member_message
@@ -438,6 +421,13 @@ class Pipeline_member_stats {
   Pipeline_member_stats(Pipeline_stats_member_message &msg);
 
   /**
+    Constructor.
+  */
+  Pipeline_member_stats(Pipeline_stats_member_collector *pipeline_stats,
+                        ulonglong applier_queue, ulonglong negative_certified,
+                        ulonglong certificatin_size);
+
+  /**
     Updates member statistics with a new message from the network
   */
   void update_member_stats(Pipeline_stats_member_message &msg, uint64 stamp);
@@ -497,18 +487,24 @@ class Pipeline_member_stats {
   int64 get_transactions_rows_validating();
 
   /**
-    Get set of stable group transactions.
-
-    @return the transaction identifier.
+    Get the stable group transactions.
   */
-  const std::string &get_transaction_committed_all_members();
+  void get_transaction_committed_all_members(std::string &value);
 
   /**
-    Get last positive certified transaction.
-
-    @return the transaction identifier.
+    Set the stable group transactions.
   */
-  const std::string &get_transaction_last_conflict_free();
+  void set_transaction_committed_all_members(char *str, size_t len);
+
+  /**
+    Get the last positive certified transaction.
+  */
+  void get_transaction_last_conflict_free(std::string &value);
+
+  /**
+    Set the last positive certified transaction.
+  */
+  void set_transaction_last_conflict_free(std::string &value);
 
   /**
     Get local member transactions negatively certified.
@@ -648,6 +644,10 @@ class Flow_control_module {
   mysql_cond_t m_flow_control_cond;
 
   Flow_control_module_info m_info;
+  /*
+    A rw lock to protect the Flow_control_module_info map.
+  */
+  Checkable_rwlock *m_flow_control_module_info_lock;
 
   /*
     Number of members that did have waiting transactions on

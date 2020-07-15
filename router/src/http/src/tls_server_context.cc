@@ -30,9 +30,7 @@
 #include <openssl/dh.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
-#if !defined(LIBWOLFSSL_VERSION_HEX)
 #include <openssl/safestack.h>
-#endif
 #include <openssl/ssl.h>
 
 #include "mysql/harness/utility/string.h"
@@ -66,7 +64,15 @@ TlsServerContext::TlsServerContext(TlsVersion min_ver, TlsVersion max_ver)
     : TlsContext(server_method) {
   version_range(min_ver, max_ver);
 #if OPENSSL_VERSION_NUMBER >= ROUTER_OPENSSL_VERSION(1, 0, 2)
-  SSL_CTX_set_ecdh_auto(ssl_ctx_.get(), 1);
+  (void)SSL_CTX_set_ecdh_auto(ssl_ctx_.get(), 1);
+#elif OPENSSL_VERSION_NUMBER >= ROUTER_OPENSSL_VERSION(1, 0, 1)
+  // openssl 1.0.1 has no ecdh_auto(), and needs an explicit EC curve set
+  // to make ECDHE ciphers work out of the box.
+  {
+    std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)> curve(
+        EC_KEY_new_by_curve_name(NID_X9_62_prime256v1), &EC_KEY_free);
+    if (curve) SSL_CTX_set_tmp_ecdh(ssl_ctx_.get(), curve.get());
+  }
 #endif
   SSL_CTX_set_options(ssl_ctx_.get(), SSL_OP_NO_COMPRESSION);
   cipher_list("ALL");  // ALL - unacceptable ciphers
@@ -138,12 +144,12 @@ void TlsServerContext::init_tmp_dh(const std::string &dh_params) {
       throw std::runtime_error("failed to open dh-param file '" + dh_params +
                                "'");
     }
-    dh2048.reset(PEM_read_bio_DHparams(pem_bio.get(), NULL, NULL, NULL));
+    dh2048.reset(
+        PEM_read_bio_DHparams(pem_bio.get(), nullptr, nullptr, nullptr));
     if (!dh2048) {
       throw TlsError("failed to parse dh-param file");
     }
 
-#if !defined(LIBWOLFSSL_VERSION_HEX)
     int codes = 0;
     if (1 != DH_check(dh2048.get(), &codes)) {
       throw TlsError("DH_check() failed");
@@ -152,7 +158,6 @@ void TlsServerContext::init_tmp_dh(const std::string &dh_params) {
     if (codes != 0) {
       throw std::runtime_error("check of DH params failed: ");
     }
-#endif
 
     if (DH_bits(dh2048.get()) < kMinDhKeySize) {
       throw std::runtime_error("key size of DH param " + dh_params +
@@ -212,7 +217,7 @@ void TlsServerContext::verify(TlsVerify verify, std::bitset<2> tls_opts) {
   if (tls_opts.test(TlsVerifyOpts::kFailIfNoPeerCert)) {
     mode |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
   }
-  SSL_CTX_set_verify(ssl_ctx_.get(), mode, NULL);
+  SSL_CTX_set_verify(ssl_ctx_.get(), mode, nullptr);
 }
 
 void TlsServerContext::cipher_list(const std::string &ciphers) {

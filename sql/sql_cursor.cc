@@ -1,4 +1,4 @@
-/* Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2005, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -76,7 +76,7 @@ class Materialized_cursor final : public Server_side_cursor {
   Materialized_cursor(Query_result *result, TABLE *table);
 
   int send_result_set_metadata(THD *thd, List<Item> &send_result_set_metadata);
-  bool is_open() const override { return table != 0; }
+  bool is_open() const override { return table != nullptr; }
   int open(THD *, JOIN *) override;
   bool fetch(ulong num_rows) override;
   void close() override;
@@ -97,11 +97,13 @@ class Query_result_materialize final : public Query_result_union {
  public:
   Materialized_cursor *materialized_cursor;
   Query_result_materialize(Query_result *result_arg)
-      : Query_result_union(), result(result_arg), materialized_cursor(0) {}
+      : Query_result_union(),
+        result(result_arg),
+        materialized_cursor(nullptr) {}
   bool send_result_set_metadata(THD *thd, List<Item> &list,
                                 uint flags) override;
   void cleanup(THD *) override {
-    table = NULL;  // Pass table object to Materialized_cursor
+    table = nullptr;  // Pass table object to Materialized_cursor
   }
 };
 
@@ -141,8 +143,8 @@ bool mysql_open_cursor(THD *thd, Query_result *result,
 
   parent_digest = thd->m_digest;
   parent_locker = thd->m_statement_psi;
-  thd->m_digest = NULL;
-  thd->m_statement_psi = NULL;
+  thd->m_digest = nullptr;
+  thd->m_statement_psi = nullptr;
   bool rc = mysql_execute_command(thd);
   thd->m_digest = parent_digest;
   DEBUG_SYNC(thd, "after_table_close");
@@ -203,7 +205,7 @@ Server_side_cursor::~Server_side_cursor() {}
 
 void Server_side_cursor::operator delete(void *ptr,
                                          size_t size MY_ATTRIBUTE((unused))) {
-  DBUG_ENTER("Server_side_cursor::operator delete");
+  DBUG_TRACE;
   Server_side_cursor *cursor = (Server_side_cursor *)ptr;
   /*
     If this cursor has never been opened, mem_root is empty. Otherwise,
@@ -215,7 +217,6 @@ void Server_side_cursor::operator delete(void *ptr,
 
   TRASH(ptr, size);
   free_root(&own_root, MYF(0));
-  DBUG_VOID_RETURN;
 }
 
 /***************************************************************************
@@ -229,7 +230,7 @@ Materialized_cursor::Materialized_cursor(Query_result *result_arg,
       table(table_arg),
       fetch_limit(0),
       fetch_count(0),
-      is_rnd_inited(0) {}
+      is_rnd_inited(false) {}
 
 /**
   Preserve the original metadata to be sent to the client.
@@ -370,7 +371,7 @@ void Materialized_cursor::close() {
   m_arena.mem_root =
       new (&table->s->mem_root) MEM_ROOT(std::move(table->s->mem_root));
   free_tmp_table(table->in_use, table);
-  table = 0;
+  table = nullptr;
 }
 
 Materialized_cursor::~Materialized_cursor() {
@@ -384,7 +385,7 @@ Materialized_cursor::~Materialized_cursor() {
 bool Query_result_materialize::send_result_set_metadata(THD *thd,
                                                         List<Item> &list,
                                                         uint) {
-  DBUG_ASSERT(table == 0);
+  DBUG_ASSERT(table == nullptr);
   if (create_result_table(thd, unit->get_field_list(), false,
                           thd->variables.option_bits | TMP_TABLE_ALL_COLUMNS,
                           "", false, true))
@@ -395,14 +396,14 @@ bool Query_result_materialize::send_result_set_metadata(THD *thd,
 
   if (!materialized_cursor) {
     free_tmp_table(table->in_use, table);
-    table = 0;
+    table = nullptr;
     return true;
   }
 
   if (materialized_cursor->send_result_set_metadata(thd, list)) {
     delete materialized_cursor;
-    table = 0;
-    materialized_cursor = 0;
+    table = nullptr;
+    materialized_cursor = nullptr;
     return true;
   }
 
@@ -411,7 +412,8 @@ bool Query_result_materialize::send_result_set_metadata(THD *thd,
     will close all tables except the cursor temporary table. Hence set the
     orig_table in the field definition to NULL.
   */
-  for (Field **fld = this->table->field; *fld; fld++) (*fld)->orig_table = NULL;
+  for (Field **fld = this->table->field; *fld; fld++)
+    (*fld)->orig_table = nullptr;
 
   return false;
 }

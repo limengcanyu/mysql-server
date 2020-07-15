@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -23,11 +23,12 @@
 #ifndef CONNECTION_DELAY_H
 #define CONNECTION_DELAY_H
 
-#include <mysql_com.h> /* USERNAME_LENGTH */
 #include <atomic>
 
-#include "lf.h" /* LF Hash */
+#include "lf.h"          /* LF Hash */
+#include "my_hostname.h" /* HOSTNAME_LENGTH */
 #include "my_inttypes.h"
+#include "mysql_com.h" /* USERNAME_LENGTH */
 #include "plugin/connection_control/connection_control_data.h" /* variables and status */
 #include "plugin/connection_control/connection_control_interfaces.h" /* Observer interface */
 #include "plugin/connection_control/connection_control_memory.h" /* Connection_control_alloc */
@@ -127,7 +128,7 @@ class Connection_delay_action : public Connection_event_observer,
   /** Destructor */
   ~Connection_delay_action() {
     deinit();
-    m_lock = 0;
+    m_lock = nullptr;
   }
 
   void init(Connection_event_coordinator_services *coordinator);
@@ -136,10 +137,6 @@ class Connection_delay_action : public Connection_event_observer,
     Set threshold value.
 
     @param threshold [in]        New threshold value
-
-    @returns whether threshold value was changed successfully or not
-      @retval true  Success
-      @retval false Failure. Invalid threshold value specified.
   */
 
   void set_threshold(int64 threshold) {

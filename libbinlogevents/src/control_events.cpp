@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -21,12 +21,15 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
 #include "control_events.h"
+#include <sstream>
+#include "codecs/factory.h"
+#include "compression/base.h"
 #include "event_reader_macros.h"
 
 namespace binary_log {
 
 Rotate_event::Rotate_event(const char *buf, const Format_description_event *fde)
-    : Binary_log_event(&buf, fde), new_log_ident(0), flags(DUP_NAME) {
+    : Binary_log_event(&buf, fde), new_log_ident(nullptr), flags(DUP_NAME) {
   BAPI_ENTER("Rotate_event::Rotate_event(const char*, ...)");
   READER_TRY_INITIALIZATION;
 #ifndef DBUG_OFF
@@ -54,7 +57,7 @@ Rotate_event::Rotate_event(const char *buf, const Format_description_event *fde)
   if (ident_len > FN_REFLEN - 1) ident_len = FN_REFLEN - 1;
 
   READER_TRY_SET(new_log_ident, strndup<const char *>, ident_len);
-  if (new_log_ident == 0)
+  if (new_log_ident == nullptr)
     READER_THROW("Invalid binary log file name in Rotate event");
 
   READER_CATCH_ERROR;
@@ -69,7 +72,7 @@ Format_description_event::Format_description_event(uint8_t binlog_ver,
     : Binary_log_event(FORMAT_DESCRIPTION_EVENT),
       created(0),
       binlog_version(BINLOG_VERSION),
-      dont_set_created(0) {
+      dont_set_created(false) {
   binlog_version = binlog_ver;
   switch (binlog_ver) {
     case 4: /* MySQL 5.0 and above*/
@@ -134,6 +137,7 @@ Format_description_event::Format_description_event(uint8_t binlog_ver,
           VIEW_CHANGE_HEADER_LEN,
           XA_PREPARE_HEADER_LEN,
           ROWS_HEADER_LEN_V2,
+          TRANSACTION_PAYLOAD_EVENT,
       };
       /*
         Allows us to sanity-check that all events initialized their
@@ -230,7 +234,7 @@ Format_description_event::Format_description_event(
 
   READER_ASSERT_POSITION(LOG_EVENT_MINIMAL_HEADER_LEN + ST_CREATED_OFFSET);
   READER_TRY_SET(created, read_and_letoh<uint64_t>, 4);
-  dont_set_created = 1;
+  dont_set_created = true;
 
   READER_ASSERT_POSITION(LOG_EVENT_MINIMAL_HEADER_LEN +
                          ST_COMMON_HEADER_LEN_OFFSET);
@@ -291,10 +295,10 @@ Incident_event::Incident_event(const char *buf,
   READER_TRY_INITIALIZATION;
   READER_ASSERT_POSITION(fde->common_header_len);
   uint16_t incident_number;
-  uint8_t len = 0;         // Assignment to keep compiler happy
-  const char *str = NULL;  // Assignment to keep compiler happy
+  uint8_t len = 0;            // Assignment to keep compiler happy
+  const char *str = nullptr;  // Assignment to keep compiler happy
 
-  message = NULL;
+  message = nullptr;
   message_length = 0;
   incident = INCIDENT_NONE;
 
@@ -366,6 +370,68 @@ XA_prepare_event::XA_prepare_event(const char *buf,
   READER_CATCH_ERROR;
   BAPI_VOID_RETURN;
 }
+
+Transaction_payload_event::Transaction_payload_event(const char *payload,
+                                                     uint64_t payload_size,
+                                                     uint16_t compression_type,
+                                                     uint64_t uncompressed_size)
+    : Binary_log_event(TRANSACTION_PAYLOAD_EVENT),
+      m_payload(payload),
+      m_payload_size(payload_size),
+      m_compression_type((transaction::compression::type)compression_type),
+      m_uncompressed_size(uncompressed_size) {}
+
+Transaction_payload_event::Transaction_payload_event(const char *payload,
+                                                     uint64_t payload_size)
+    : Transaction_payload_event(payload, payload_size,
+                                transaction::compression::type::NONE,
+                                payload_size) {}
+
+Transaction_payload_event::~Transaction_payload_event() {}
+
+Transaction_payload_event::Transaction_payload_event(
+    const char *buf, const Format_description_event *fde)
+    : Binary_log_event(&buf, fde) {
+  if (header()->get_is_valid()) {
+    auto codec = codecs::Factory::build_codec(header()->type_code);
+    // decode the post LOG_EVENT header
+    auto buffer = (const unsigned char *)reader().ptr();
+    size_t buffer_size = reader().available_to_read();
+    auto result = codec->decode(buffer, buffer_size, *this);
+
+    header()->set_is_valid(result.second == false);
+    if (result.second == false) {
+      // move the reader position forward
+      reader().forward(result.first);
+
+      // set the payload to the rest of the input buffer
+      set_payload(reader().ptr());
+    }
+  }
+}
+
+std::string Transaction_payload_event::to_string() const {
+  std::ostringstream oss;
+  std::string comp_type =
+      binary_log::transaction::compression::type_to_string(m_compression_type);
+
+  oss << "\tpayload_size=" << m_payload_size;
+  oss << "\tcompression_type=" << comp_type;
+  if (m_compression_type != binary_log::transaction::compression::type::NONE)
+    oss << "\tuncompressed_size=" << m_uncompressed_size;
+
+  return oss.str();
+}
+
+#ifndef HAVE_MYSYS
+void Transaction_payload_event::print_event_info(std::ostream &os) {
+  os << to_string();
+}
+
+void Transaction_payload_event::print_long_info(std::ostream &os) {
+  print_event_info(os);
+}
+#endif
 
 Gtid_event::Gtid_event(const char *buf, const Format_description_event *fde)
     : Binary_log_event(&buf, fde),
@@ -543,8 +609,8 @@ Transaction_context_event::Transaction_context_event(
   READER_TRY_INITIALIZATION;
   READER_ASSERT_POSITION(fde->common_header_len);
 
-  server_uuid = NULL;
-  encoded_snapshot_version = NULL;
+  server_uuid = nullptr;
+  encoded_snapshot_version = nullptr;
 
   uint8_t server_uuid_len;
   uint32_t write_set_len;
@@ -575,7 +641,7 @@ Transaction_context_event::Transaction_context_event(
 void Transaction_context_event::clear_set(std::list<const char *> *set) {
   for (std::list<const char *>::iterator it = set->begin(); it != set->end();
        ++it)
-    bapi_free((void *)*it);
+    bapi_free(const_cast<char *>(*it));
   set->clear();
 }
 
@@ -583,20 +649,22 @@ void Transaction_context_event::clear_set(std::list<const char *> *set) {
   Destructor of the Transaction_context_event class.
 */
 Transaction_context_event::~Transaction_context_event() {
-  if (server_uuid) bapi_free((void *)server_uuid);
-  server_uuid = NULL;
-  if (encoded_snapshot_version) bapi_free((void *)encoded_snapshot_version);
-  encoded_snapshot_version = NULL;
+  if (server_uuid) bapi_free(const_cast<char *>(server_uuid));
+  server_uuid = nullptr;
+  if (encoded_snapshot_version)
+    bapi_free(const_cast<unsigned char *>(encoded_snapshot_version));
+  encoded_snapshot_version = nullptr;
   clear_set(&write_set);
   clear_set(&read_set);
 }
 
-View_change_event::View_change_event(char *raw_view_id)
+View_change_event::View_change_event(const char *raw_view_id)
     : Binary_log_event(VIEW_CHANGE_EVENT),
       view_id(),
       seq_number(0),
       certification_info() {
-  memcpy(view_id, raw_view_id, strlen(raw_view_id));
+  strncpy(view_id, raw_view_id, sizeof(view_id) - 1);
+  view_id[sizeof(view_id) - 1] = 0;
 }
 
 View_change_event::View_change_event(const char *buffer,
@@ -634,7 +702,7 @@ Heartbeat_event::Heartbeat_event(const char *buf,
   READER_ASSERT_POSITION(fde->common_header_len);
 
   READER_TRY_SET(log_ident, ptr);
-  if (log_ident == NULL || header()->log_pos < BIN_LOG_HEADER_SIZE)
+  if (log_ident == nullptr || header()->log_pos < BIN_LOG_HEADER_SIZE)
     READER_THROW("Invalid Heartbeat information");
 
   ident_len = READER_CALL(available_to_read);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -77,7 +77,8 @@
 #define OPTION_NO_CONST_TABLES (1ULL << 23)    // No const tables, intern
 
 /* The following is used to detect a conflict with DISTINCT */
-#define SELECT_ALL (1ULL << 24)  // SELECT, user, parser
+#define SELECT_ALL (1ULL << 24)           // SELECT, user, parser
+#define SELECT_NO_SEMI_JOIN (1ULL << 25)  // SELECT, intern
 /** The following can be set when importing tables in a 'wrong order'
    to suppress foreign key checks */
 #define OPTION_NO_FOREIGN_KEY_CHECKS (1ULL << 26)  // THD, user, binlog
@@ -104,7 +105,7 @@
   Is set in slave SQL thread when there was an
   error on master, which, when is not reproducible
   on slave (i.e. the query succeeds on slave),
-  is not terminal to the state of repliation,
+  is not terminal to the state of replication,
   and should be ignored. The slave SQL thread,
   however, needs to rollback the effects of the
   succeeded statement to keep replication consistent.
@@ -113,7 +114,7 @@
 
 /*
   Dont report errors for individual rows,
-  But just report error on commit (or read ofcourse)
+  But just report error on commit (or read, of course)
   Note! Reserved for use in MySQL Cluster
 */
 #define OPTION_ALLOW_BATCH (1ULL << 36)  // THD, intern (slave)
@@ -122,4 +123,11 @@
 
 // Is set while thread is updating the data dictionary tables.
 #define OPTION_DD_UPDATE_CONTEXT (1ULL << 38)  // intern
-#endif                                         /* QUERY_OPTIONS_INCLUDED */
+
+/**
+  If this option is set, subqueries should not be evaluated during
+  optimization, even if they are known to produce a constant result.
+*/
+#define OPTION_NO_SUBQUERY_DURING_OPTIMIZATION (1ULL << 39)  // intern
+
+#endif /* QUERY_OPTIONS_INCLUDED */

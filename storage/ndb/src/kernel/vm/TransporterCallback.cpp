@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -41,6 +41,19 @@
 #include <NdbOut.hpp>
 #include "TransporterCallbackKernel.hpp"
 #include <DebuggerNames.hpp>
+
+#include <EventLogger.hpp>
+extern EventLogger * g_eventLogger;
+
+#if (defined(VM_TRACE) || defined(ERROR_INSERT))
+//#define DEBUG_MULTI_TRP 1
+#endif
+
+#ifdef DEBUG_MULTI_TRP
+#define DEB_MULTI_TRP(arglist) do { g_eventLogger->info arglist ; } while (0)
+#else
+#define DEB_MULTI_TRP(arglist) do { } while (0)
+#endif
 
 #define JAM_FILE_ID 226
 
@@ -117,21 +130,28 @@ public:
   /**
    * Implements TransporterCallback interface:
    */
-  void enable_send_buffer(NodeId node);
-  void disable_send_buffer(NodeId node);
+  void enable_send_buffer(NodeId, TrpId);
+  void disable_send_buffer(NodeId, TrpId);
 
-  Uint32 get_bytes_to_send_iovec(NodeId node, struct iovec *dst, Uint32 max);
-  Uint32 bytes_sent(NodeId node, Uint32 bytes);
+  Uint32 get_bytes_to_send_iovec(NodeId node_id,
+                                 TrpId trp_id,
+                                 struct iovec *dst,
+                                 Uint32 max);
+  Uint32 bytes_sent(NodeId, TrpId, Uint32 bytes);
 
   /**
    * These are the TransporterSendBufferHandle methods used by the
    * single-threaded ndbd.
    */
-  Uint32 *getWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio,
-                      Uint32 max_use);
-  Uint32 updateWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio);
+  Uint32 *getWritePtr(NodeId,
+                      TrpId,
+                      Uint32 lenBytes,
+                      Uint32 prio,
+                      Uint32 max_use,
+                      SendStatus *error);
+  Uint32 updateWritePtr(NodeId, TrpId, Uint32 lenBytes, Uint32 prio);
   void getSendBufferLevel(NodeId node, SB_LevelType &level);
-  bool forceSend(NodeId node);
+  bool forceSend(NodeId, TrpId);
 
 private:
   /* Send buffer pages. */
@@ -167,7 +187,7 @@ private:
 
   SendBufferPage *alloc_page();
   void release_page(SendBufferPage *page);
-  void discard_send_buffer(NodeId node);
+  void discard_send_buffer(TrpId trp_id);
 
   /* Send buffers. */
   SendBuffer *m_send_buffers;
@@ -576,14 +596,16 @@ TransporterCallbackKernelNonMT::release_page(SendBufferPage *page)
 
 Uint32
 TransporterCallbackKernelNonMT::get_bytes_to_send_iovec(NodeId node,
+                                                        TrpId trp_id,
                                                         struct iovec *dst,
                                                         Uint32 max)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)node;
+  SendBuffer *b = m_send_buffers + trp_id;
 
   if (unlikely(!b->m_enabled))
   {
-    discard_send_buffer(node);
+    discard_send_buffer(trp_id);
     return 0;
   }
   if (unlikely(max == 0))
@@ -604,9 +626,12 @@ TransporterCallbackKernelNonMT::get_bytes_to_send_iovec(NodeId node,
 }
 
 Uint32
-TransporterCallbackKernelNonMT::bytes_sent(NodeId node, Uint32 bytes)
+TransporterCallbackKernelNonMT::bytes_sent(NodeId nodeId,
+                                           TrpId trp_id,
+                                           Uint32 bytes)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)nodeId;
+  SendBuffer *b = m_send_buffers + trp_id;
   Uint32 used_bytes = b->m_used_bytes;
 
   if (bytes == 0)
@@ -641,26 +666,29 @@ TransporterCallbackKernelNonMT::bytes_sent(NodeId node, Uint32 bytes)
 }
 
 void
-TransporterCallbackKernelNonMT::enable_send_buffer(NodeId node)
+TransporterCallbackKernelNonMT::enable_send_buffer(NodeId nodeId, TrpId trp_id)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)nodeId;
+  SendBuffer *b = m_send_buffers + trp_id;
   assert(b->m_enabled == false);
   assert(b->m_first_page == NULL);  //Disabled buffer is empty
   b->m_enabled = true;
 }
 
 void
-TransporterCallbackKernelNonMT::disable_send_buffer(NodeId node)
+TransporterCallbackKernelNonMT::disable_send_buffer(NodeId nodeId,
+                                                    TrpId trp_id)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)nodeId;
+  SendBuffer *b = m_send_buffers + trp_id;
   b->m_enabled = false;
-  discard_send_buffer(node);
+  discard_send_buffer(trp_id);
 }
 
 void
-TransporterCallbackKernelNonMT::discard_send_buffer(NodeId node)
+TransporterCallbackKernelNonMT::discard_send_buffer(TrpId trp_id)
 {
-  SendBuffer *b = m_send_buffers + node;
+  SendBuffer *b = m_send_buffers + trp_id;
   SendBufferPage *page = b->m_first_page;
   while (page != NULL)
   {
@@ -678,26 +706,43 @@ TransporterCallbackKernelNonMT::discard_send_buffer(NodeId node)
  * single-threaded ndbd.
  */
 Uint32 *
-TransporterCallbackKernelNonMT::getWritePtr(
-                                 NodeId node, Uint32 lenBytes, Uint32 prio,
-                                 Uint32 max_use)
+TransporterCallbackKernelNonMT::getWritePtr(NodeId nodeId,
+                                            TrpId trp_id,
+                                            Uint32 lenBytes,
+                                            Uint32 prio,
+                                            Uint32 max_use,
+                                            SendStatus *error)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)nodeId;
+  SendBuffer *b = m_send_buffers + trp_id;
 
   /* First check if we have room in already allocated page. */
   SendBufferPage *page = b->m_last_page;
-  if (page != NULL && page->m_bytes + page->m_start + lenBytes <= page->max_data_bytes())
+  if (page != NULL &&
+      page->m_bytes + page->m_start + lenBytes <= page->max_data_bytes())
   {
     return (Uint32 *)(page->m_data + page->m_start + page->m_bytes);
   }
 
-  if (b->m_used_bytes + lenBytes > max_use)
+  if (unlikely(b->m_used_bytes + lenBytes > max_use))
+  {
+    *error = SEND_BUFFER_FULL;
     return NULL;
+  }
+
+  if (unlikely(lenBytes > SendBufferPage::max_data_bytes()))
+  {
+    *error = SEND_MESSAGE_TOO_BIG;
+    return NULL;
+  }
 
   /* Allocate a new page. */
   page = alloc_page();
-  if (page == NULL)
+  if (unlikely(page == NULL))
+  {
+    *error = SEND_BUFFER_FULL;
     return NULL;
+  }
   page->m_next = NULL;
   page->m_bytes = 0;
   page->m_start = 0;
@@ -717,9 +762,13 @@ TransporterCallbackKernelNonMT::getWritePtr(
 }
 
 Uint32
-TransporterCallbackKernelNonMT::updateWritePtr(NodeId node, Uint32 lenBytes, Uint32 prio)
+TransporterCallbackKernelNonMT::updateWritePtr(NodeId nodeId,
+                                               TrpId trp_id,
+                                               Uint32 lenBytes,
+                                               Uint32 prio)
 {
-  SendBuffer *b = m_send_buffers + node;
+  (void)nodeId;
+  SendBuffer *b = m_send_buffers + trp_id;
   SendBufferPage *page = b->m_last_page;
   assert(page != NULL);
   assert(page->m_bytes + lenBytes <= page->max_data_bytes());
@@ -733,9 +782,16 @@ TransporterCallbackKernelNonMT::updateWritePtr(NodeId node, Uint32 lenBytes, Uin
  * values will always be consistent.
  */
 void
-TransporterCallbackKernelNonMT::getSendBufferLevel(NodeId node, SB_LevelType &level)
+TransporterCallbackKernelNonMT::getSendBufferLevel(NodeId nodeId,
+                                                   SB_LevelType &level)
 {
-  SendBuffer *b = m_send_buffers + node;
+  TrpId trp_ids;
+  Uint32 num_ids;
+  globalTransporterRegistry.get_trps_for_node(nodeId,
+                                              &trp_ids,
+                                              num_ids,
+                                              1);
+  SendBuffer *b = m_send_buffers + trp_ids;
   calculate_send_buffer_level(b->m_used_bytes,
                               m_tot_send_buffer_memory,
                               m_tot_used_buffer_memory,
@@ -745,9 +801,10 @@ TransporterCallbackKernelNonMT::getSendBufferLevel(NodeId node, SB_LevelType &le
 }
 
 bool
-TransporterCallbackKernelNonMT::forceSend(NodeId node)
+TransporterCallbackKernelNonMT::forceSend(NodeId nodeId, TrpId trp_id)
 {
-  return globalTransporterRegistry.performSend(node);
+  (void)nodeId;
+  return globalTransporterRegistry.performSend(trp_id);
 }
 
 #endif //'not NDBD_MULTITHREADED'
@@ -897,13 +954,17 @@ TransporterReceiveHandleKernel::checkJobBuffer()
 
 #ifdef NDBD_MULTITHREADED
 void
-TransporterReceiveHandleKernel::assign_nodes(NodeId *recv_thread_idx_array)
+TransporterReceiveHandleKernel::assign_trps(Uint32 *recv_thread_idx_array)
 {
   m_transporters.clear(); /* Clear all first */
-  for (Uint32 nodeId = 1; nodeId < MAX_NODES; nodeId++)
+  for (Uint32 trp_id = 1; trp_id < MAX_NTRANSPORTERS; trp_id++)
   {
-    if (recv_thread_idx_array[nodeId] == m_receiver_thread_idx)
-      m_transporters.set(nodeId); /* Belongs to our receive thread */
+    if (recv_thread_idx_array[trp_id] == m_receiver_thread_idx)
+    {
+      DEB_MULTI_TRP(("trp_id %u assigned to recv thread %u",
+                     trp_id, m_receiver_thread_idx));
+      m_transporters.set(trp_id); /* Belongs to our receive thread */
+    }
   }
   return;
 }

@@ -1,6 +1,6 @@
 #ifndef SYS_VARS_H_INCLUDED
 #define SYS_VARS_H_INCLUDED
-/* Copyright (c) 2002, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2002, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -101,8 +101,8 @@ class Sys_var_integer;
 #define VALID_RANGE(X, Y) X, Y
 #define DEFAULT(X) X
 #define BLOCK_SIZE(X) X
-#define GLOBAL_VAR(X)                                                   \
-  sys_var::GLOBAL, (((char *)&(X)) - (char *)&global_system_variables), \
+#define GLOBAL_VAR(X)                                                         \
+  sys_var::GLOBAL, (((const char *)&(X)) - (char *)&global_system_variables), \
       sizeof(X)
 #define SESSION_VAR(X)                             \
   sys_var::SESSION, offsetof(System_variables, X), \
@@ -140,17 +140,13 @@ class Sys_var_integer;
 #define session_var(THD, TYPE) (*(TYPE *)session_var_ptr(THD))
 #define global_var(TYPE) (*(TYPE *)global_var_ptr())
 
-#if SIZEOF_OFF_T > 4
 #define GET_HA_ROWS GET_ULL
-#else
-#define GET_HA_ROWS GET_ULONG
-#endif
 
 extern sys_var_chain all_sys_vars;
 
 enum charset_enum { IN_SYSTEM_CHARSET, IN_FS_CHARSET };
 
-static const char *bool_values[3] = {"OFF", "ON", 0};
+static const char *bool_values[3] = {"OFF", "ON", nullptr};
 
 const char *fixup_enforce_gtid_consistency_command_line(char *value_arg);
 
@@ -184,11 +180,11 @@ class Sys_var_integer : public sys_var {
   public : Sys_var_integer(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, T min_val, T max_val,
-      T def_val, uint block_size, PolyLock *lock = 0,
+      T def_val, uint block_size, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL) :
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL) :
       sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
               getopt.arg_type, SHOWT, def_val, lock, binlog_status_arg,
               on_check_func, on_update_func, substitute, parse_flag){
@@ -279,8 +275,8 @@ bool global_update(THD *, set_var *var) {
 }
 bool check_update_type(Item_result type) { return type != INT_RESULT; }
 void session_save_default(THD *thd, set_var *var) {
-  var->save_result.ulonglong_value =
-      static_cast<ulonglong>(*(T *)global_value_ptr(thd, 0));
+  var->save_result.ulonglong_value = static_cast<ulonglong>(
+      *pointer_cast<const T *>(global_value_ptr(thd, nullptr)));
 }
 void global_save_default(THD *, set_var *var) {
   var->save_result.ulonglong_value = option.def_value;
@@ -295,7 +291,7 @@ void saved_value_to_string(THD *, set_var *var, char *def_val) {
 private:
 T *max_var_ptr() {
   return scope() == SESSION ? (T *)(((uchar *)&max_system_variables) + offset)
-                            : 0;
+                            : nullptr;
 }
 }
 ;
@@ -332,7 +328,7 @@ class Sys_var_typelib : public sys_var {
       ;
     typelib.name = "";
     typelib.type_names = values;
-    typelib.type_lengths = 0;  // only used by Fields_enum and Field_set
+    typelib.type_lengths = nullptr;  // only used by Fields_enum and Field_set
     option.typelib = &typelib;
   }
   bool do_check(THD *, set_var *var)  // works for enums and bool
@@ -382,10 +378,11 @@ class Sys_var_enum : public Sys_var_typelib {
   Sys_var_enum(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, const char *values[],
-      uint def_val, PolyLock *lock = 0,
+      uint def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_typelib(name_arg, comment, flag_args, off, getopt, SHOW_CHAR,
                         values, def_val, lock, binlog_status_arg, on_check_func,
                         on_update_func, substitute) {
@@ -412,11 +409,12 @@ class Sys_var_enum : public Sys_var_typelib {
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
     longlong10_to_str((longlong)var->save_result.ulonglong_value, def_val, 10);
   }
-  uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
-    return (uchar *)typelib.type_names[session_var(target_thd, ulong)];
+  const uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
+    return pointer_cast<const uchar *>(
+        typelib.type_names[session_var(target_thd, ulong)]);
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
-    return (uchar *)typelib.type_names[global_var(ulong)];
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
+    return pointer_cast<const uchar *>(typelib.type_names[global_var(ulong)]);
   }
 };
 
@@ -431,11 +429,11 @@ class Sys_var_bool : public Sys_var_typelib {
   Sys_var_bool(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, bool def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : Sys_var_typelib(name_arg, comment, flag_args, off, getopt, SHOW_MY_BOOL,
                         bool_values, def_val, lock, binlog_status_arg,
                         on_check_func, on_update_func, substitute, parse_flag) {
@@ -454,8 +452,8 @@ class Sys_var_bool : public Sys_var_typelib {
     return false;
   }
   void session_save_default(THD *thd, set_var *var) {
-    var->save_result.ulonglong_value =
-        static_cast<ulonglong>(*(bool *)global_value_ptr(thd, 0));
+    var->save_result.ulonglong_value = static_cast<ulonglong>(
+        *pointer_cast<const bool *>(global_value_ptr(thd, nullptr)));
   }
   void global_save_default(THD *, set_var *var) {
     var->save_result.ulonglong_value = option.def_value;
@@ -545,11 +543,11 @@ class Sys_var_multi_enum : public sys_var {
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
       const ALIAS aliases_arg[], uint value_count_arg, uint def_val,
-      uint command_line_no_value_arg, PolyLock *lock = 0,
+      uint command_line_no_value_arg, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, def_val, lock, binlog_status_arg,
                 on_check_func, on_update_func, substitute, parse_flag),
@@ -575,7 +573,7 @@ class Sys_var_multi_enum : public sys_var {
     string is not a valid alias.
   */
   int find_value(const char *text) {
-    for (uint i = 0; aliases[i].alias != NULL; i++)
+    for (uint i = 0; aliases[i].alias != nullptr; i++)
       if (my_strcasecmp(system_charset_info, aliases[i].alias, text) == 0)
         return aliases[i].number;
     return -1;
@@ -596,12 +594,12 @@ class Sys_var_multi_enum : public sys_var {
     argument.
   */
   const char *fixup_command_line(const char *value_str) {
-    DBUG_ENTER("Sys_var_multi_enum::fixup_command_line");
-    char *end = NULL;
+    DBUG_TRACE;
+    char *end = nullptr;
     long value;
 
     // User passed --option (not --option=value).
-    if (value_str == NULL) {
+    if (value_str == nullptr) {
       value = command_line_no_value;
       goto end;
     }
@@ -618,46 +616,46 @@ class Sys_var_multi_enum : public sys_var {
       if (value >= 0 && (longlong)value < (longlong)value_count) goto end;
 
     // Not a valid value.
-    DBUG_RETURN(value_str);
+    return value_str;
 
   end:
     global_var(ulong) = value;
-    DBUG_RETURN(NULL);
+    return nullptr;
   }
 
   bool do_check(THD *, set_var *var) {
-    DBUG_ENTER("Sys_var_multi_enum::do_check");
+    DBUG_TRACE;
     char buff[STRING_BUFFER_USUAL_SIZE];
     String str(buff, sizeof(buff), system_charset_info), *res;
     if (var->value->result_type() == STRING_RESULT) {
       res = var->value->val_str(&str);
-      if (!res) DBUG_RETURN(true);
+      if (!res) return true;
 
       /* Check if the value is a valid string. */
       size_t valid_len;
       bool len_error;
       if (validate_string(system_charset_info, res->ptr(), res->length(),
                           &valid_len, &len_error))
-        DBUG_RETURN(true);
+        return true;
 
       int value = find_value(res->ptr());
-      if (value == -1) DBUG_RETURN(true);
+      if (value == -1) return true;
       var->save_result.ulonglong_value = (uint)value;
     } else {
       longlong value = var->value->val_int();
       if (value < 0 || value >= (longlong)value_count)
-        DBUG_RETURN(true);
+        return true;
       else
         var->save_result.ulonglong_value = value;
     }
 
-    DBUG_RETURN(false);
+    return false;
   }
   bool check_update_type(Item_result type) {
     return type != INT_RESULT && type != STRING_RESULT;
   }
   bool session_update(THD *, set_var *) {
-    DBUG_ENTER("Sys_var_multi_enum::session_update");
+    DBUG_TRACE;
     DBUG_ASSERT(0);
     /*
     Currently not used: uncomment if this class is used as a base for
@@ -666,10 +664,10 @@ class Sys_var_multi_enum : public sys_var {
     session_var(thd, ulong)=
       static_cast<ulong>(var->save_result.ulonglong_value);
     */
-    DBUG_RETURN(false);
+    return false;
   }
   bool global_update(THD *, set_var *) {
-    DBUG_ENTER("Sys_var_multi_enum::global_update");
+    DBUG_TRACE;
     DBUG_ASSERT(0);
     /*
     Currently not used: uncomment if this some inheriting class does
@@ -679,10 +677,10 @@ class Sys_var_multi_enum : public sys_var {
       static_cast<ulong>(var->save_result.ulonglong_value);
     global_var(ulong)= val;
     */
-    DBUG_RETURN(false);
+    return false;
   }
   void session_save_default(THD *, set_var *) {
-    DBUG_ENTER("Sys_var_multi_enum::session_save_default");
+    DBUG_TRACE;
     DBUG_ASSERT(0);
     /*
     Currently not used: uncomment if this class is used as a base for
@@ -692,33 +690,33 @@ class Sys_var_multi_enum : public sys_var {
     DBUG_ASSERT(value != -1);
     var->save_result.ulonglong_value= value;
     */
-    DBUG_VOID_RETURN;
+    return;
   }
   void global_save_default(THD *, set_var *var) {
-    DBUG_ENTER("Sys_var_multi_enum::global_save_default");
+    DBUG_TRACE;
     int value = find_value((char *)option.def_value);
     DBUG_ASSERT(value != -1);
     var->save_result.ulonglong_value = value;
-    DBUG_VOID_RETURN;
+    return;
   }
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
     longlong10_to_str((longlong)var->save_result.ulonglong_value, def_val, 10);
   }
 
-  uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_multi_enum::session_value_ptr");
+  const uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
+    DBUG_TRACE;
     DBUG_ASSERT(0);
     /*
     Currently not used: uncomment if this class is used as a base for
     a session variable.
 
-    DBUG_RETURN((uchar*)aliases[session_var(target_thd, ulong)].alias);
+    return (uchar*)aliases[session_var(target_thd, ulong)].alias;
     */
-    DBUG_RETURN(0);
+    return nullptr;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_multi_enum::global_value_ptr");
-    DBUG_RETURN((uchar *)aliases[global_var(ulong)].alias);
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
+    DBUG_TRACE;
+    return pointer_cast<const uchar *>(aliases[global_var(ulong)].alias);
   }
 
  private:
@@ -755,11 +753,11 @@ class Sys_var_charptr : public sys_var {
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
       enum charset_enum is_os_charset_arg, const char *def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR_PTR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -781,7 +779,7 @@ class Sys_var_charptr : public sys_var {
     String str2(buff2, sizeof(buff2), charset(thd)), *res;
 
     if (!(res = var->value->val_str(&str)))
-      var->save_result.string_value.str = 0;
+      var->save_result.string_value.str = nullptr;
     else {
       size_t unused;
       if (String::needs_conversion(res->length(), res->charset(), charset(thd),
@@ -849,12 +847,12 @@ class Sys_var_version : public Sys_var_charptr {
 
   ~Sys_var_version() {}
 
-  virtual uchar *global_value_ptr(THD *thd, LEX_STRING *base) {
-    uchar *value = Sys_var_charptr::global_value_ptr(thd, base);
+  virtual const uchar *global_value_ptr(THD *thd, LEX_STRING *base) {
+    const uchar *value = Sys_var_charptr::global_value_ptr(thd, base);
 
     DBUG_EXECUTE_IF("alter_server_version_str", {
       static const char *altered_value = "some-other-version";
-      uchar *altered_value_ptr = reinterpret_cast<uchar *>(&altered_value);
+      const uchar *altered_value_ptr = pointer_cast<uchar *>(&altered_value);
       value = altered_value_ptr;
     });
 
@@ -868,8 +866,8 @@ class Sys_var_proxy_user : public sys_var {
                      enum charset_enum is_os_charset_arg)
       : sys_var(&all_sys_vars, name_arg, comment,
                 sys_var::READONLY + sys_var::ONLY_SESSION, 0, -1, NO_ARG,
-                SHOW_CHAR, 0, NULL, VARIABLE_NOT_IN_BINLOG, NULL, NULL, NULL,
-                PARSE_NORMAL) {
+                SHOW_CHAR, 0, nullptr, VARIABLE_NOT_IN_BINLOG, nullptr, nullptr,
+                nullptr, PARSE_NORMAL) {
     is_os_charset = is_os_charset_arg == IN_FS_CHARSET;
     option.var_type = GET_STR;
   }
@@ -891,9 +889,9 @@ class Sys_var_proxy_user : public sys_var {
   bool check_update_type(Item_result) { return true; }
 
  protected:
-  virtual uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
+  virtual const uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
     const char *proxy_user = target_thd->security_context()->proxy_user().str;
-    return proxy_user[0] ? (uchar *)proxy_user : NULL;
+    return proxy_user[0] ? pointer_cast<const uchar *>(proxy_user) : nullptr;
   }
 };
 
@@ -904,9 +902,10 @@ class Sys_var_external_user : public Sys_var_proxy_user {
       : Sys_var_proxy_user(name_arg, comment_arg, is_os_charset_arg) {}
 
  protected:
-  virtual uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
+  virtual const uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
     LEX_CSTRING external_user = target_thd->security_context()->external_user();
-    return external_user.length ? (uchar *)external_user.str : NULL;
+    return external_user.length ? pointer_cast<const uchar *>(external_user.str)
+                                : nullptr;
   }
 };
 
@@ -928,10 +927,11 @@ class Sys_var_lexstring : public Sys_var_charptr {
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
       enum charset_enum is_os_charset_arg, const char *def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_charptr(name_arg, comment, flag_args, off, sizeof(char *),
                         getopt, is_os_charset_arg, def_val, lock,
                         binlog_status_arg, on_check_func, on_update_func,
@@ -963,11 +963,11 @@ class Sys_var_dbug : public sys_var {
  public:
   Sys_var_dbug(
       const char *name_arg, const char *comment, int flag_args, CMD_LINE getopt,
-      const char *def_val, PolyLock *lock = 0,
+      const char *def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, 0, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -1007,12 +1007,12 @@ class Sys_var_dbug : public sys_var {
     memcpy(def_val, var->save_result.string_value.str,
            var->save_result.string_value.length);
   }
-  uchar *session_value_ptr(THD *running_thd, THD *, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *, LEX_STRING *) {
     char buf[256];
     DBUG_EXPLAIN(buf, sizeof(buf));
     return (uchar *)running_thd->mem_strdup(buf);
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
     char buf[256];
     DBUG_EXPLAIN_INITIAL(buf, sizeof(buf));
     return (uchar *)thd->mem_strdup(buf);
@@ -1050,11 +1050,11 @@ class Sys_var_keycache : public Sys_var_ulonglong {
                    enum binlog_status_enum binlog_status_arg,
                    on_check_function on_check_func,
                    keycache_update_function on_update_func,
-                   const char *substitute = 0)
+                   const char *substitute = nullptr)
       : Sys_var_ulonglong(
             name_arg, comment, flag_args, -1, /* offset, see base class CTOR */
             size, getopt, min_val, max_val, def_val, block_size, lock,
-            binlog_status_arg, on_check_func, 0, substitute),
+            binlog_status_arg, on_check_func, nullptr, substitute),
         keycache_update(on_update_func) {
     offset = off; /* Remember offset in KEY_CACHE */
     option.var_type |= GET_ASK_ADDR;
@@ -1064,26 +1064,25 @@ class Sys_var_keycache : public Sys_var_ulonglong {
   }
   bool global_update(THD *thd, set_var *var) {
     ulonglong new_value = var->save_result.ulonglong_value;
-    LEX_STRING *base_name = &var->base;
-    KEY_CACHE *key_cache;
 
-    if (base_name != NULL && base_name->str)
+    if (var->base.str)
       push_warning_printf(thd, Sql_condition::SL_WARNING,
                           ER_WARN_DEPRECATED_SYNTAX,
                           "%s.%s syntax "
                           "is deprecated and will be removed in a "
                           "future release",
-                          base_name->str, name.str);
+                          var->base.str, name.str);
 
+    LEX_CSTRING base_name = var->base;
     /* If no basename, assume it's for the key cache named 'default' */
-    if (!base_name->length) base_name = &default_key_cache_base;
+    if (!base_name.length) base_name = default_key_cache_base;
 
-    key_cache = get_key_cache(base_name);
+    KEY_CACHE *key_cache = get_key_cache(&base_name);
 
     if (!key_cache) {  // Key cache didn't exists */
       if (!new_value)  // Tried to delete cache
         return false;  // Ok, nothing to do
-      if (!(key_cache = create_key_cache(base_name->str, base_name->length)))
+      if (!(key_cache = create_key_cache(base_name.str, base_name.length)))
         return true;
     }
 
@@ -1096,8 +1095,8 @@ class Sys_var_keycache : public Sys_var_ulonglong {
 
     return keycache_update(thd, key_cache, offset, new_value);
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *base) {
-    if (base != NULL && base->str)
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *base) {
+    if (base != nullptr && base->str)
       push_warning_printf(thd, Sql_condition::SL_WARNING,
                           ER_WARN_DEPRECATED_SYNTAX,
                           "@@global.%s.%s syntax "
@@ -1105,7 +1104,8 @@ class Sys_var_keycache : public Sys_var_ulonglong {
                           "future release",
                           base->str, name.str);
 
-    KEY_CACHE *key_cache = get_key_cache(base);
+    LEX_CSTRING cstr = to_lex_cstring(*base);
+    KEY_CACHE *key_cache = get_key_cache(&cstr);
     if (!key_cache) key_cache = &zero_key_cache;
     return keycache_var_ptr(key_cache, offset);
   }
@@ -1123,11 +1123,11 @@ class Sys_var_double : public sys_var {
   Sys_var_double(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, double min_val,
-      double max_val, double def_val, PolyLock *lock = 0,
+      double max_val, double def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_DOUBLE,
                 (longlong)getopt_double2ulonglong(def_val), lock,
@@ -1168,7 +1168,7 @@ class Sys_var_double : public sys_var {
     var->save_result.double_value = getopt_ulonglong2double(option.def_value);
   }
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
-    my_fcvt(var->save_result.double_value, 6, def_val, NULL);
+    my_fcvt(var->save_result.double_value, 6, def_val, nullptr);
   }
 };
 
@@ -1194,7 +1194,7 @@ class Sys_var_test_flag : public Sys_var_bool {
                      NO_CMD_LINE, DEFAULT(false)) {
     test_flag_mask = mask;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     test_flag_value = ((test_flags & test_flag_mask) > 0);
     return (uchar *)&test_flag_value;
   }
@@ -1215,18 +1215,19 @@ class Sys_var_max_user_conn : public Sys_var_uint {
   Sys_var_max_user_conn(
       const char *name_arg, const char *comment, int, ptrdiff_t off,
       size_t size, CMD_LINE getopt, uint min_val, uint max_val, uint def_val,
-      uint block_size, PolyLock *lock = 0,
+      uint block_size, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_uint(name_arg, comment, SESSION, off, size, getopt, min_val,
                      max_val, def_val, block_size, lock, binlog_status_arg,
                      on_check_func, on_update_func, substitute) {}
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd,
-                           LEX_STRING *base) {
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *base) {
     const USER_CONN *uc = target_thd->get_user_connect();
     if (uc && uc->user_resources.user_conn)
-      return (uchar *)&(uc->user_resources.user_conn);
+      return pointer_cast<const uchar *>(&(uc->user_resources.user_conn));
     return global_value_ptr(running_thd, base);
   }
 };
@@ -1253,10 +1254,11 @@ class Sys_var_flagset : public Sys_var_typelib {
   Sys_var_flagset(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, const char *values[],
-      ulonglong def_val, PolyLock *lock = 0,
+      ulonglong def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_typelib(name_arg, comment, flag_args, off, getopt, SHOW_CHAR,
                         values, def_val, lock, binlog_status_arg, on_check_func,
                         on_update_func, substitute) {
@@ -1322,15 +1324,18 @@ class Sys_var_flagset : public Sys_var_typelib {
     var->save_result.ulonglong_value = option.def_value;
   }
   void saved_value_to_string(THD *thd, set_var *var, char *def_val) {
-    strcpy(def_val, flagset_to_string(thd, 0, var->save_result.ulonglong_value,
-                                      typelib.type_names));
+    strcpy(def_val,
+           flagset_to_string(thd, nullptr, var->save_result.ulonglong_value,
+                             typelib.type_names));
   }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
-    return (uchar *)flagset_to_string(
-        running_thd, 0, session_var(target_thd, ulonglong), typelib.type_names);
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
+    return (uchar *)flagset_to_string(running_thd, nullptr,
+                                      session_var(target_thd, ulonglong),
+                                      typelib.type_names);
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    return (uchar *)flagset_to_string(thd, 0, global_var(ulonglong),
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    return (uchar *)flagset_to_string(thd, nullptr, global_var(ulonglong),
                                       typelib.type_names);
   }
 };
@@ -1349,10 +1354,11 @@ class Sys_var_set : public Sys_var_typelib {
   Sys_var_set(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, const char *values[],
-      ulonglong def_val, PolyLock *lock = 0,
+      ulonglong def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_typelib(name_arg, comment, flag_args, off, getopt, SHOW_CHAR,
                         values, def_val, lock, binlog_status_arg, on_check_func,
                         on_update_func, substitute) {
@@ -1371,13 +1377,13 @@ class Sys_var_set : public Sys_var_typelib {
       if (!(res = var->value->val_str(&str)))
         return true;
       else {
-        char *error;
+        const char *error;
         uint error_len;
         bool not_used;
 
         var->save_result.ulonglong_value =
             find_set(&typelib, res->ptr(), static_cast<uint>(res->length()),
-                     NULL, &error, &error_len, &not_used);
+                     nullptr, &error, &error_len, &not_used);
         /*
           note, we only issue an error if error_len > 0.
           That is even while empty (zero-length) values are considered
@@ -1415,15 +1421,18 @@ class Sys_var_set : public Sys_var_typelib {
     var->save_result.ulonglong_value = option.def_value;
   }
   void saved_value_to_string(THD *thd, set_var *var, char *def_val) {
-    strcpy(def_val, set_to_string(thd, 0, var->save_result.ulonglong_value,
-                                  typelib.type_names));
+    strcpy(def_val,
+           set_to_string(thd, nullptr, var->save_result.ulonglong_value,
+                         typelib.type_names));
   }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
-    return (uchar *)set_to_string(
-        running_thd, 0, session_var(target_thd, ulonglong), typelib.type_names);
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
+    return (uchar *)set_to_string(running_thd, nullptr,
+                                  session_var(target_thd, ulonglong),
+                                  typelib.type_names);
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    return (uchar *)set_to_string(thd, 0, global_var(ulonglong),
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    return (uchar *)set_to_string(thd, nullptr, global_var(ulonglong),
                                   typelib.type_names);
   }
 };
@@ -1448,11 +1457,11 @@ class Sys_var_plugin : public sys_var {
   Sys_var_plugin(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, int plugin_type_arg,
-      char **def_val, PolyLock *lock = 0,
+      const char **def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -1469,14 +1478,13 @@ class Sys_var_plugin : public sys_var {
     /* NULLs can't be used as a default storage engine */
     if (!(res = var->value->val_str(&str))) return true;
 
-    const LEX_STRING pname = {const_cast<char *>(res->ptr()), res->length()};
+    LEX_CSTRING pname_cstr = res->lex_cstring();
     plugin_ref plugin;
 
     // special code for storage engines (e.g. to handle historical aliases)
     if (plugin_type == MYSQL_STORAGE_ENGINE_PLUGIN)
-      plugin = ha_resolve_by_name(thd, &pname, false);
+      plugin = ha_resolve_by_name(thd, &pname_cstr, false);
     else {
-      LEX_CSTRING pname_cstr = {pname.str, pname.length};
       plugin = my_plugin_lock_by_name(thd, pname_cstr, plugin_type);
     }
 
@@ -1494,8 +1502,8 @@ class Sys_var_plugin : public sys_var {
   void do_update(plugin_ref *valptr, plugin_ref newval) {
     plugin_ref oldval = *valptr;
     if (oldval != newval) {
-      *valptr = my_plugin_lock(NULL, &newval);
-      plugin_unlock(NULL, oldval);
+      *valptr = my_plugin_lock(nullptr, &newval);
+      plugin_unlock(nullptr, oldval);
     }
   }
   bool session_update(THD *thd, set_var *var) {
@@ -1511,7 +1519,7 @@ class Sys_var_plugin : public sys_var {
     var->save_result.plugin = my_plugin_lock(thd, &plugin);
   }
   void global_save_default(THD *thd, set_var *var) {
-    LEX_STRING pname;
+    LEX_CSTRING pname;
     char **default_value = reinterpret_cast<char **>(option.def_value);
     pname.str = *default_value;
     pname.length = strlen(pname.str);
@@ -1520,8 +1528,7 @@ class Sys_var_plugin : public sys_var {
     if (plugin_type == MYSQL_STORAGE_ENGINE_PLUGIN)
       plugin = ha_resolve_by_name(thd, &pname, false);
     else {
-      LEX_CSTRING pname_cstr = {pname.str, pname.length};
-      plugin = my_plugin_lock_by_name(thd, pname_cstr, plugin_type);
+      plugin = my_plugin_lock_by_name(thd, pname, plugin_type);
     }
     DBUG_ASSERT(plugin);
 
@@ -1532,17 +1539,18 @@ class Sys_var_plugin : public sys_var {
             plugin_name(var->save_result.plugin)->length);
   }
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
     plugin_ref plugin = session_var(target_thd, plugin_ref);
     return (uchar *)(plugin ? running_thd->strmake(plugin_name(plugin)->str,
                                                    plugin_name(plugin)->length)
-                            : 0);
+                            : nullptr);
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
     plugin_ref plugin = global_var(plugin_ref);
     return (uchar *)(plugin ? thd->strmake(plugin_name(plugin)->str,
                                            plugin_name(plugin)->length)
-                            : 0);
+                            : nullptr);
   }
 };
 
@@ -1554,11 +1562,11 @@ class Sys_var_debug_sync : public sys_var {
  public:
   Sys_var_debug_sync(
       const char *name_arg, const char *comment, int flag_args, CMD_LINE getopt,
-      const char *def_val, PolyLock *lock = 0,
+      const char *def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, 0, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -1590,12 +1598,12 @@ class Sys_var_debug_sync : public sys_var {
   }
   void global_save_default(THD *, set_var *) { DBUG_ASSERT(false); }
   void saved_value_to_string(THD *, set_var *, char *) { DBUG_ASSERT(false); }
-  uchar *session_value_ptr(THD *running_thd, THD *, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *, LEX_STRING *) {
     return debug_sync_value_ptr(running_thd);
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return 0;
+    return nullptr;
   }
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
 };
@@ -1634,10 +1642,11 @@ class Sys_var_bit : public Sys_var_typelib {
   Sys_var_bit(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
-      ulonglong bitmask_arg, bool def_val, PolyLock *lock = 0,
+      ulonglong bitmask_arg, bool def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr)
       : Sys_var_typelib(name_arg, comment, flag_args, off, getopt, SHOW_MY_BOOL,
                         bool_values, def_val, lock, binlog_status_arg,
                         on_check_func, on_update_func, substitute) {
@@ -1665,13 +1674,14 @@ class Sys_var_bit : public Sys_var_typelib {
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
     longlong10_to_str((longlong)var->save_result.ulonglong_value, def_val, 10);
   }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
     running_thd->sys_var_tmp.bool_value = static_cast<bool>(
         reverse_semantics ^
         ((session_var(target_thd, ulonglong) & bitmask) != 0));
     return (uchar *)&running_thd->sys_var_tmp.bool_value;
   }
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
     thd->sys_var_tmp.bool_value = static_cast<bool>(
         reverse_semantics ^ ((global_var(ulonglong) & bitmask) != 0));
     return (uchar *)&thd->sys_var_tmp.bool_value;
@@ -1708,10 +1718,11 @@ class Sys_var_session_special : public Sys_var_ulonglong {
                           on_check_function on_check_func,
                           session_special_update_function update_func_arg,
                           session_special_read_function read_func_arg,
-                          const char *substitute = 0)
+                          const char *substitute = nullptr)
       : Sys_var_ulonglong(name_arg, comment, flag_args, 0, sizeof(ulonglong),
                           getopt, min_val, max_val, 0, block_size, lock,
-                          binlog_status_arg, on_check_func, 0, substitute),
+                          binlog_status_arg, on_check_func, nullptr,
+                          substitute),
         read_func(read_func_arg),
         update_func(update_func_arg) {
     DBUG_ASSERT(scope() == ONLY_SESSION);
@@ -1722,16 +1733,17 @@ class Sys_var_session_special : public Sys_var_ulonglong {
     DBUG_ASSERT(false);
     return true;
   }
-  void session_save_default(THD *, set_var *var) { var->value = 0; }
+  void session_save_default(THD *, set_var *var) { var->value = nullptr; }
   void global_save_default(THD *, set_var *) { DBUG_ASSERT(false); }
   void saved_value_to_string(THD *, set_var *, char *) { DBUG_ASSERT(false); }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
     running_thd->sys_var_tmp.ulonglong_value = read_func(target_thd);
     return (uchar *)&running_thd->sys_var_tmp.ulonglong_value;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return 0;
+    return nullptr;
   }
 };
 
@@ -1753,10 +1765,10 @@ class Sys_var_session_special_double : public Sys_var_double {
       on_check_function on_check_func,
       session_special_update_function update_func_arg,
       session_special_read_double_function read_func_arg,
-      const char *substitute = 0)
+      const char *substitute = nullptr)
       : Sys_var_double(name_arg, comment, flag_args, 0, sizeof(double), getopt,
                        min_val, max_val, 0.0, lock, binlog_status_arg,
-                       on_check_func, 0, substitute),
+                       on_check_func, nullptr, substitute),
         read_func(read_func_arg),
         update_func(update_func_arg) {
     DBUG_ASSERT(scope() == ONLY_SESSION);
@@ -1767,16 +1779,17 @@ class Sys_var_session_special_double : public Sys_var_double {
     DBUG_ASSERT(false);
     return true;
   }
-  void session_save_default(THD *, set_var *var) { var->value = 0; }
+  void session_save_default(THD *, set_var *var) { var->value = nullptr; }
   void global_save_default(THD *, set_var *) { DBUG_ASSERT(false); }
   void saved_value_to_string(THD *, set_var *, char *) { DBUG_ASSERT(false); }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
     running_thd->sys_var_tmp.double_value = read_func(target_thd);
     return (uchar *)&running_thd->sys_var_tmp.double_value;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return 0;
+    return nullptr;
   }
 };
 
@@ -1794,20 +1807,21 @@ class Sys_var_have : public sys_var {
  public:
   Sys_var_have(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
-      size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, PolyLock *lock = 0,
+      size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, 0, lock, binlog_status_arg,
                 on_check_func, on_update_func, substitute, parse_flag) {
     DBUG_ASSERT(scope() == GLOBAL);
     DBUG_ASSERT(getopt.id == -1);
-    DBUG_ASSERT(lock == 0);
+    DBUG_ASSERT(lock == nullptr);
     DBUG_ASSERT(binlog_status_arg == VARIABLE_NOT_IN_BINLOG);
     DBUG_ASSERT(is_readonly());
-    DBUG_ASSERT(on_update == 0);
+    DBUG_ASSERT(on_update == nullptr);
     DBUG_ASSERT(size == sizeof(enum SHOW_COMP_OPTION));
   }
   bool do_check(THD *, set_var *) {
@@ -1825,12 +1839,13 @@ class Sys_var_have : public sys_var {
   void session_save_default(THD *, set_var *) {}
   void global_save_default(THD *, set_var *) {}
   void saved_value_to_string(THD *, set_var *, char *) {}
-  uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return 0;
+    return nullptr;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
-    return (uchar *)show_comp_option_name[global_var(enum SHOW_COMP_OPTION)];
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
+    return pointer_cast<const uchar *>(
+        show_comp_option_name[global_var(enum SHOW_COMP_OPTION)]);
   }
   bool check_update_type(Item_result) { return false; }
 };
@@ -1861,8 +1876,8 @@ class Sys_var_have_func : public Sys_var_have {
                      READ_ONLY NON_PERSIST GLOBAL_VAR(dummy_), NO_CMD_LINE),
         func_(func) {}
 
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    return (uchar *)show_comp_option_name[func_(thd)];
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    return pointer_cast<const uchar *>(show_comp_option_name[func_(thd)]);
   }
 
  protected:
@@ -1889,11 +1904,11 @@ class Sys_var_struct : public sys_var {
   Sys_var_struct(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, void *def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -1927,17 +1942,19 @@ class Sys_var_struct : public sys_var {
     var->save_result.ptr = *default_value;
   }
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
-    const Struct_type *ptr = (Struct_type *)var->save_result.ptr;
-    if (ptr) strcpy(def_val, (char *)Name_getter(ptr).get_name());
+    const Struct_type *ptr =
+        static_cast<const Struct_type *>(var->save_result.ptr);
+    if (ptr)
+      strcpy(def_val, pointer_cast<const char *>(Name_getter(ptr).get_name()));
   }
   bool check_update_type(Item_result type) {
     return type != INT_RESULT && type != STRING_RESULT;
   }
-  uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
     const Struct_type *ptr = session_var(target_thd, const Struct_type *);
     return ptr ? Name_getter(ptr).get_name() : nullptr;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     const Struct_type *ptr = global_var(const Struct_type *);
     return ptr ? Name_getter(ptr).get_name() : nullptr;
   }
@@ -1957,17 +1974,18 @@ class Sys_var_tz : public sys_var {
  public:
   Sys_var_tz(const char *name_arg, const char *comment, int flag_args,
              ptrdiff_t off, size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt,
-             Time_zone **def_val, PolyLock *lock = 0,
+             Time_zone **def_val, PolyLock *lock = nullptr,
              enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-             on_check_function on_check_func = 0,
-             on_update_function on_update_func = 0, const char *substitute = 0,
-             int parse_flag = PARSE_NORMAL)
+             on_check_function on_check_func = nullptr,
+             on_update_function on_update_func = nullptr,
+             const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
                 parse_flag) {
     DBUG_ASSERT(getopt.id == -1);
     DBUG_ASSERT(size == sizeof(Time_zone *));
+    option.var_type = GET_STR;
   }
   bool do_check(THD *thd, set_var *var) {
     char buff[MAX_TIME_ZONE_NAME_LENGTH];
@@ -1998,9 +2016,9 @@ class Sys_var_tz : public sys_var {
     var->save_result.time_zone = *(Time_zone **)(intptr)option.def_value;
   }
   void saved_value_to_string(THD *, set_var *var, char *def_val) {
-    strcpy(def_val, (char *)var->save_result.time_zone->get_name()->ptr());
+    strcpy(def_val, var->save_result.time_zone->get_name()->ptr());
   }
-  uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
+  const uchar *session_value_ptr(THD *, THD *target_thd, LEX_STRING *) {
     /*
       This is an ugly fix for replication: we don't replicate properly queries
       invoking system variables' values to update tables; but
@@ -2009,11 +2027,13 @@ class Sys_var_tz : public sys_var {
       timezone). If it's the global value which was used we can't replicate
       (binlog code stores session value only).
     */
-    target_thd->time_zone_used = 1;
-    return (uchar *)(session_var(target_thd, Time_zone *)->get_name()->ptr());
+    target_thd->time_zone_used = true;
+    return pointer_cast<const uchar *>(
+        session_var(target_thd, Time_zone *)->get_name()->ptr());
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
-    return (uchar *)(global_var(Time_zone *)->get_name()->ptr());
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
+    return pointer_cast<const uchar *>(
+        global_var(Time_zone *)->get_name()->ptr());
   }
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
 };
@@ -2069,10 +2089,10 @@ class Sys_var_enum_binlog_checksum : public Sys_var_enum {
                                CMD_LINE getopt, const char *values[],
                                uint def_val, PolyLock *lock,
                                enum binlog_status_enum binlog_status_arg,
-                               on_check_function on_check_func = 0)
+                               on_check_function on_check_func = nullptr)
       : Sys_var_enum(name_arg, comment, flag_args | PERSIST_AS_READ_ONLY, off,
                      size, getopt, values, def_val, lock, binlog_status_arg,
-                     on_check_func, NULL) {}
+                     on_check_func, nullptr) {}
   virtual bool global_update(THD *thd, set_var *var);
 };
 
@@ -2084,11 +2104,11 @@ class Sys_var_gtid_next : public sys_var {
   Sys_var_gtid_next(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size MY_ATTRIBUTE((unused)), CMD_LINE getopt, const char *def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -2102,29 +2122,30 @@ class Sys_var_gtid_next : public sys_var {
     return true;
   }
   void session_save_default(THD *, set_var *var) {
-    DBUG_ENTER("Sys_var_gtid_next::session_save_default");
+    DBUG_TRACE;
     char *ptr = (char *)(intptr)option.def_value;
     var->save_result.string_value.str = ptr;
     var->save_result.string_value.length = ptr ? strlen(ptr) : 0;
-    DBUG_VOID_RETURN;
+    return;
   }
   void global_save_default(THD *, set_var *) { DBUG_ASSERT(false); }
   void saved_value_to_string(THD *, set_var *, char *) { DBUG_ASSERT(false); }
   bool do_check(THD *, set_var *) { return false; }
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_gtid_next::session_value_ptr");
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
+    DBUG_TRACE;
     char buf[Gtid_specification::MAX_TEXT_LENGTH + 1];
     global_sid_lock->rdlock();
     ((Gtid_specification *)session_var_ptr(target_thd))
         ->to_string(global_sid_map, buf);
     global_sid_lock->unlock();
     char *ret = running_thd->mem_strdup(buf);
-    DBUG_RETURN((uchar *)ret);
+    return (uchar *)ret;
   }
-  uchar *global_value_ptr(THD *, LEX_STRING *) {
+  const uchar *global_value_ptr(THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return NULL;
+    return nullptr;
   }
 };
 
@@ -2158,41 +2179,41 @@ class Sys_var_gtid_set : public sys_var {
     return true;
   }
   void session_save_default(THD *thd, set_var *var) {
-    DBUG_ENTER("Sys_var_gtid_set::session_save_default");
+    DBUG_TRACE;
     global_sid_lock->rdlock();
     char *ptr = (char *)(intptr)option.def_value;
     var->save_result.string_value.str = ptr;
     var->save_result.string_value.length = ptr ? strlen(ptr) : 0;
     global_sid_lock->unlock();
-    DBUG_VOID_RETURN;
+    return;
   }
   void global_save_default(THD *thd, set_var *var) { DBUG_ASSERT(false); }
   void saved_value_to_string(THD *, set_var *, char *) { DBUG_ASSERT(false); }
   bool do_check(THD *thd, set_var *var) {
-    DBUG_ENTER("Sys_var_gtid_set::do_check");
+    DBUG_TRACE;
     String str;
     String *res = var->value->val_str(&str);
     if (res == NULL) {
       var->save_result.string_value.str = NULL;
-      DBUG_RETURN(false);
+      return false;
     }
     DBUG_ASSERT(res->ptr() != NULL);
     var->save_result.string_value.str = thd->strmake(res->ptr(), res->length());
     if (var->save_result.string_value.str == NULL) {
       my_error(ER_OUT_OF_RESOURCES, MYF(0));  // thd->strmake failed
-      DBUG_RETURN(1);
+      return 1;
     }
     var->save_result.string_value.length = res->length();
     bool ret = !Gtid_set::is_valid(res->ptr());
-    DBUG_RETURN(ret);
+    return ret;
   }
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
   uchar *session_value_ptr(THD *running_thd, THD *target_thd,
                            LEX_STRING *base) {
-    DBUG_ENTER("Sys_var_gtid_set::session_value_ptr");
+    DBUG_TRACE;
     Gtid_set_or_null *gsn = (Gtid_set_or_null *)session_var_ptr(target_thd);
     Gtid_set *gs = gsn->get_gtid_set();
-    if (gs == NULL) DBUG_RETURN(NULL);
+    if (gs == NULL) return NULL;
     char *buf;
     global_sid_lock->rdlock();
     buf = (char *)running_thd->alloc(gs->get_string_length() + 1);
@@ -2201,7 +2222,7 @@ class Sys_var_gtid_set : public sys_var {
     else
       my_error(ER_OUT_OF_RESOURCES, MYF(0));  // thd->alloc failed
     global_sid_lock->unlock();
-    DBUG_RETURN((uchar *)buf);
+    return (uchar *)buf;
   }
   uchar *global_value_ptr(THD *thd, LEX_STRING *base) {
     DBUG_ASSERT(false);
@@ -2224,9 +2245,9 @@ class Sys_var_charptr_func : public sys_var {
       : sys_var(&all_sys_vars, name_arg, comment,
                 READ_ONLY NON_PERSIST flag_arg, 0 /*off*/, NO_CMD_LINE.id,
                 NO_CMD_LINE.arg_type, SHOW_CHAR, (intptr)0 /*def_val*/,
-                NULL /*polylock*/, VARIABLE_NOT_IN_BINLOG,
-                NULL /*on_check_func*/, NULL /*on_update_func*/,
-                NULL /*substitute*/, PARSE_NORMAL /*parse_flag*/) {
+                nullptr /*polylock*/, VARIABLE_NOT_IN_BINLOG,
+                nullptr /*on_check_func*/, nullptr /*on_update_func*/,
+                nullptr /*substitute*/, PARSE_NORMAL /*parse_flag*/) {
     DBUG_ASSERT(flag_arg == sys_var::GLOBAL || flag_arg == sys_var::SESSION ||
                 flag_arg == sys_var::ONLY_SESSION);
   }
@@ -2249,13 +2270,13 @@ class Sys_var_charptr_func : public sys_var {
     DBUG_ASSERT(false);
     return true;
   }
-  virtual uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
+  virtual const uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return NULL;
+    return nullptr;
   }
-  virtual uchar *global_value_ptr(THD *, LEX_STRING *) {
+  virtual const uchar *global_value_ptr(THD *, LEX_STRING *) {
     DBUG_ASSERT(false);
-    return NULL;
+    return nullptr;
   }
 };
 
@@ -2267,17 +2288,17 @@ class Sys_var_gtid_executed : Sys_var_charptr_func {
   Sys_var_gtid_executed(const char *name_arg, const char *comment_arg)
       : Sys_var_charptr_func(name_arg, comment_arg, GLOBAL) {}
 
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_gtid_executed::global_value_ptr");
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    DBUG_TRACE;
     global_sid_lock->wrlock();
     const Gtid_set *gs = gtid_state->get_executed_gtids();
     char *buf = (char *)thd->alloc(gs->get_string_length() + 1);
-    if (buf == NULL)
+    if (buf == nullptr)
       my_error(ER_OUT_OF_RESOURCES, MYF(0));
     else
       gs->to_string(buf);
     global_sid_lock->unlock();
-    DBUG_RETURN((uchar *)buf);
+    return (uchar *)buf;
   }
 };
 
@@ -2288,11 +2309,11 @@ class Sys_var_gtid_purged : public sys_var {
  public:
   Sys_var_gtid_purged(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
-      size_t, CMD_LINE getopt, const char *def_val, PolyLock *lock = 0,
+      size_t, CMD_LINE getopt, const char *def_val, PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0,
-      on_update_function on_update_func = 0, const char *substitute = 0,
-      int parse_flag = PARSE_NORMAL)
+      on_check_function on_check_func = nullptr,
+      on_update_function on_update_func = nullptr,
+      const char *substitute = nullptr, int parse_flag = PARSE_NORMAL)
       : sys_var(&all_sys_vars, name_arg, comment, flag_args, off, getopt.id,
                 getopt.arg_type, SHOW_CHAR, (intptr)def_val, lock,
                 binlog_status_arg, on_check_func, on_update_func, substitute,
@@ -2316,28 +2337,28 @@ class Sys_var_gtid_purged : public sys_var {
   }
 
   bool do_check(THD *thd, set_var *var) {
-    DBUG_ENTER("Sys_var_gtid_purged::do_check");
+    DBUG_TRACE;
     char buf[1024];
     String str(buf, sizeof(buf), system_charset_info);
     String *res = var->value->val_str(&str);
-    if (!res) DBUG_RETURN(true);
+    if (!res) return true;
     var->save_result.string_value.str =
         thd->strmake(res->c_ptr(), res->length());
     if (!var->save_result.string_value.str) {
       my_error(ER_OUT_OF_RESOURCES, MYF(0));  // thd->strmake failed
-      DBUG_RETURN(true);
+      return true;
     }
     var->save_result.string_value.length = res->length();
     bool ret =
         Gtid_set::is_valid(var->save_result.string_value.str) ? false : true;
     DBUG_PRINT("info", ("ret=%d", ret));
-    DBUG_RETURN(ret);
+    return ret;
   }
 
   bool check_update_type(Item_result type) { return type != STRING_RESULT; }
 
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_gtid_purged::global_value_ptr");
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    DBUG_TRACE;
     const Gtid_set *gs;
     global_sid_lock->wrlock();
     if (opt_bin_log)
@@ -2352,17 +2373,17 @@ class Sys_var_gtid_purged : public sys_var {
       */
       gs = gtid_state->get_executed_gtids();
     char *buf = (char *)thd->alloc(gs->get_string_length() + 1);
-    if (buf == NULL)
+    if (buf == nullptr)
       my_error(ER_OUT_OF_RESOURCES, MYF(0));
     else
       gs->to_string(buf);
     global_sid_lock->unlock();
-    DBUG_RETURN((uchar *)buf);
+    return (uchar *)buf;
   }
 
-  uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
-    DBUG_ASSERT(0);
-    return NULL;
+  const uchar *session_value_ptr(THD *, THD *, LEX_STRING *) {
+    DBUG_ASSERT(false);
+    return nullptr;
   }
 };
 
@@ -2372,16 +2393,17 @@ class Sys_var_gtid_owned : Sys_var_charptr_func {
       : Sys_var_charptr_func(name_arg, comment_arg, SESSION) {}
 
  public:
-  uchar *session_value_ptr(THD *running_thd, THD *target_thd, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_gtid_owned::session_value_ptr");
-    char *buf = NULL;
+  const uchar *session_value_ptr(THD *running_thd, THD *target_thd,
+                                 LEX_STRING *) {
+    DBUG_TRACE;
+    char *buf = nullptr;
     bool remote = (target_thd != running_thd);
 
     if (target_thd->owned_gtid.sidno == 0)
-      DBUG_RETURN((uchar *)running_thd->mem_strdup(""));
+      return (uchar *)running_thd->mem_strdup("");
     else if (target_thd->owned_gtid.sidno == THD::OWNED_SIDNO_ANONYMOUS) {
       DBUG_ASSERT(gtid_state->get_anonymous_ownership_count() > 0);
-      DBUG_RETURN((uchar *)running_thd->mem_strdup("ANONYMOUS"));
+      return (uchar *)running_thd->mem_strdup("ANONYMOUS");
     } else if (target_thd->owned_gtid.sidno == THD::OWNED_SIDNO_GTID_SET) {
 #ifdef HAVE_GTID_NEXT_LIST
       buf = (char *)running_thd->alloc(
@@ -2405,11 +2427,11 @@ class Sys_var_gtid_owned : Sys_var_charptr_func {
       } else
         my_error(ER_OUT_OF_RESOURCES, MYF(0));
     }
-    DBUG_RETURN((uchar *)buf);
+    return (uchar *)buf;
   }
 
-  uchar *global_value_ptr(THD *thd, LEX_STRING *) {
-    DBUG_ENTER("Sys_var_gtid_owned::global_value_ptr");
+  const uchar *global_value_ptr(THD *thd, LEX_STRING *) {
+    DBUG_TRACE;
     const Owned_gtids *owned_gtids = gtid_state->get_owned_gtids();
     global_sid_lock->wrlock();
     char *buf = (char *)thd->alloc(owned_gtids->get_max_string_length());
@@ -2418,7 +2440,7 @@ class Sys_var_gtid_owned : Sys_var_charptr_func {
     else
       my_error(ER_OUT_OF_RESOURCES, MYF(0));  // thd->alloc failed
     global_sid_lock->unlock();
-    DBUG_RETURN((uchar *)buf);
+    return (uchar *)buf;
   }
 };
 
@@ -2427,9 +2449,9 @@ class Sys_var_gtid_mode : public Sys_var_enum {
   Sys_var_gtid_mode(
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size, CMD_LINE getopt, const char *values[], uint def_val,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0)
+      on_check_function on_check_func = nullptr)
       : Sys_var_enum(name_arg, comment, flag_args, off, size, getopt, values,
                      def_val, lock, binlog_status_arg, on_check_func) {}
 
@@ -2442,9 +2464,9 @@ class Sys_var_enforce_gtid_consistency : public Sys_var_multi_enum {
       const char *name_arg, const char *comment, int flag_args, ptrdiff_t off,
       size_t size, CMD_LINE getopt, const ALIAS aliases[],
       const uint value_count, uint def_val, uint command_line_no_value,
-      PolyLock *lock = 0,
+      PolyLock *lock = nullptr,
       enum binlog_status_enum binlog_status_arg = VARIABLE_NOT_IN_BINLOG,
-      on_check_function on_check_func = 0)
+      on_check_function on_check_func = nullptr)
       : Sys_var_multi_enum(name_arg, comment, flag_args, off, size, getopt,
                            aliases, value_count, def_val, command_line_no_value,
                            lock, binlog_status_arg, on_check_func) {}

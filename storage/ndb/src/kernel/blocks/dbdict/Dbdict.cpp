@@ -54,7 +54,6 @@
 #include <signaldata/FsRef.hpp>
 #include <signaldata/GetTabInfo.hpp>
 #include <signaldata/GetTableId.hpp>
-#include <signaldata/HotSpareRep.hpp>
 #include <signaldata/NFCompleteRep.hpp>
 #include <signaldata/NodeFailRep.hpp>
 #include <signaldata/ReadNodesConf.hpp>
@@ -270,7 +269,7 @@ Dbdict::execDUMP_STATE_ORD(Signal* signal)
     m_dict_lock.dump_queue(m_dict_lock_pool, this);
     
     /* Space for hex form of enough words for node bitmask + \0 */
-    char buf[(((MAX_NDB_NODES + 31)/32) * 8) + 1 ];
+    char buf[NdbNodeBitmask::TextLength + 1];
     infoEvent("DICT : c_sub_startstop _outstanding %u _lock %s",
               c_outstanding_sub_startstop,
               c_sub_startstop_lock.getText(buf));
@@ -1048,8 +1047,33 @@ Dbdict::packTableIntoPages(SimpleProperties::Writer & w,
   }
 
   ConstRope frm(c_rope_pool, tablePtr.p->frmData);
-  w.add(DictTabInfo::FrmLen, frm.size());        // for pre-8.0 recipients
-  w.addKey(DictTabInfo::FrmData, SimpleProperties::BinaryValue, frm.size());
+  if (frm.size() <= NDB_SHORT_OPAQUE_METADATA_MAX_BYTES)
+  {
+    /**
+     * Compatibility:
+     * Prior to 8.0, up to 6000 bytes of opaque metadata were
+     * stored using the FrmData key with FrmLen length key
+     *
+     * In 8.0, longer values are stored under the
+     * MysqlDictMetadata key.
+     *
+     * We store metadata in FrmData if it is < 6000 bytes, or
+     * in MysqlDictMetadata if it is longer.  This 'split
+     * by length' is done so that during upgrade, older versions
+     * can still find their 'FRM' info in the 'FrmData/FrmLen'
+     * format.
+     * Once we no longer support upgrade from versions < 8.0,
+     * we can always use the MysqlDictMetadata key.
+     * FrmLen/FrmData can take up to 6000 bytes
+     */
+    w.add(DictTabInfo::FrmLen, frm.size());
+    w.addKey(DictTabInfo::FrmData, SimpleProperties::BinaryValue, frm.size());
+  }
+  else
+  {
+    w.addKey(DictTabInfo::MysqlDictMetadata, SimpleProperties::BinaryValue,
+             frm.size());
+  }
   ndbrequire(packRopeData(w, frm));
 
   {
@@ -3331,6 +3355,16 @@ void Dbdict::execREAD_NODESCONF(Signal* signal)
   c_numberNode   = readNodes->noOfNodes;
   c_masterNodeId = readNodes->masterNodeId;
 
+  {
+    ndbrequire(signal->getNoOfSections() == 1);
+    SegmentedSectionPtr ptr;
+    SectionHandle handle(this, signal);
+    handle.getSection(ptr, 0);
+    ndbrequire(ptr.sz == 5 * NdbNodeBitmask::Size);
+    copy((Uint32*)&readNodes->definedNodes.rep.data, ptr);
+    releaseSections(handle);
+  }
+
   c_noNodesFailed = 0;
   c_aliveNodes.clear();
   for (unsigned i = 1; i < MAX_NDB_NODES; i++) {
@@ -3338,10 +3372,12 @@ void Dbdict::execREAD_NODESCONF(Signal* signal)
     NodeRecordPtr nodePtr;
     c_nodes.getPtr(nodePtr, i);
 
-    if (NdbNodeBitmask::get(readNodes->allNodes, i)) {
+    if (readNodes->definedNodes.get(i))
+    {
       jam();
       nodePtr.p->nodeState = NodeRecord::NDB_NODE_ALIVE;
-      if (NdbNodeBitmask::get(readNodes->inactiveNodes, i)) {
+      if (readNodes->inactiveNodes.get(i))
+      {
 	jam();
 	/**-------------------------------------------------------------------
 	 *
@@ -5448,6 +5484,23 @@ void Dbdict::execNODE_FAILREP(Signal* signal)
   NodeFailRep * nodeFail = &nodeFailRep;
   NodeRecordPtr ownNodePtr;
 
+  if(signal->getNoOfSections() >= 1)
+  {
+    ndbrequire(getNodeInfo(refToNode(signal->getSendersBlockRef())).m_version);
+    SegmentedSectionPtr ptr;
+    SectionHandle handle(this, signal);
+    handle.getSection(ptr, 0);
+    memset(nodeFail->theNodes, 0, sizeof(nodeFail->theNodes));
+    copy(nodeFail->theNodes, ptr);
+    releaseSections(handle);
+  }
+  else
+  {
+    memset(nodeFail->theNodes + NdbNodeBitmask48::Size,
+           0,
+           _NDB_NBM_DIFF_BYTES);
+  }
+
   c_nodes.getPtr(ownNodePtr, getOwnNodeId());
   c_failureNr  = nodeFail->failNo;
   const Uint32 numberOfFailedNodes  = nodeFail->noOfNodes;
@@ -5455,13 +5508,12 @@ void Dbdict::execNODE_FAILREP(Signal* signal)
   c_masterNodeId = nodeFail->masterNodeId;
 
   c_noNodesFailed += numberOfFailedNodes;
-  Uint32 theFailedNodes[NdbNodeBitmask::Size];
-  memcpy(theFailedNodes, nodeFail->theNodes, sizeof(theFailedNodes));
-  c_reservedCounterMgr.execNODE_FAILREP(signal);
-  c_counterMgr.execNODE_FAILREP(signal);
 
   NdbNodeBitmask failedNodes;
-  failedNodes.assign(NdbNodeBitmask::Size, theFailedNodes);
+  failedNodes.assign(NdbNodeBitmask::Size, nodeFail->theNodes);
+  c_reservedCounterMgr.execNODE_FAILREP(signal, failedNodes);
+  c_counterMgr.execNODE_FAILREP(signal, failedNodes);
+
   c_aliveNodes.bitANDC(failedNodes);
   if (masterFailed && c_masterNodeId == getOwnNodeId())
   {
@@ -5687,7 +5739,8 @@ public:
   bool isValid() { return m_valid; }
 
   void unpackData(SimpleProperties::Reader & it) {
-    if(it.getKey() == DictTabInfo::FrmData)
+    if(it.getKey() == DictTabInfo::FrmData ||
+       it.getKey() == DictTabInfo::MysqlDictMetadata)
       m_valid &= unpackDataToRope(it, m_frm);
   }
 
@@ -5743,7 +5796,7 @@ void Dbdict::handleTabInfoInit(Signal * signal, SchemaTransPtr & trans_ptr,
       jam();
       parseP->errorCode = CreateTableRef::OutOfStringBuffer;
       parseP->errorLine = __LINE__;
-      parseP->errorKey = DictTabInfo::FrmData;
+      parseP->errorKey = it.getKey();
       return;
     }
   }
@@ -6073,8 +6126,13 @@ void Dbdict::handleTabInfoInit(Signal * signal, SchemaTransPtr & trans_ptr,
                CreateTableRef::TooManyFragments);
 
     char buf[MAX_TAB_NAME_SIZE+1];
+    Uint32 buckets = c_default_hashmap_size;
+    if (partitions > NDB_DEFAULT_HASHMAP_MAX_FRAGMENTS)
+    {
+      buckets = NDB_MAX_HASHMAP_BUCKETS;
+    }
     BaseString::snprintf(buf, sizeof(buf), "DEFAULT-HASHMAP-%u-%u",
-                         c_default_hashmap_size,
+                         buckets,
                          partitions);
     DictObject* dictObj = get_object(buf);
     tabRequire(dictObj && dictObj->m_type == DictTabInfo::HashMap,
@@ -6651,35 +6709,16 @@ void Dbdict::handleTabInfo(SimpleProperties::Reader & it,
   tablePtr.p->tupKeyLength = keyLength;
   tablePtr.p->noOfNullBits = nullCount + nullBits;
 
-  tabRequire(recordLength<= MAX_TUPLE_SIZE_IN_WORDS,
+  tabRequire(recordLength <= MAX_TUPLE_SIZE_IN_WORDS,
+	     CreateTableRef::RecordTooBig);
+  tabRequire(attrCount <= MAX_ATTRIBUTES_IN_TABLE,
 	     CreateTableRef::RecordTooBig);
   tabRequire(keyLength <= MAX_KEY_SIZE_IN_WORDS,
 	     CreateTableRef::InvalidPrimaryKeySize);
   tabRequire(keyLength > 0,
 	     CreateTableRef::InvalidPrimaryKeySize);
-  tabRequire(CHECK_SUMA_MESSAGE_SIZE(keyCount, keyLength, attrCount, recordLength),
-             CreateTableRef::RecordTooBig);
-
-  /* Check that all currently running nodes data support
-   * table features
-   */
-  for (Uint32 nodeId=1; nodeId < MAX_NODES; nodeId++)
-  {
-    const NodeInfo& ni = getNodeInfo(nodeId);
-
-    if (ni.m_connected &&
-        (ni.m_type == NODE_TYPE_DB))
-    {
-      /* Check that all nodes support extra bits */
-      if (tablePtr.p->m_extra_row_gci_bits ||
-          tablePtr.p->m_extra_row_author_bits)
-      {
-        tabRequire(ndb_tup_extrabits(ni.m_version),
-                   CreateTableRef::FeatureRequiresUpgrade);
-      }
-    }
-  }
-
+  tabRequire(keyCount <= MAX_ATTRIBUTES_IN_INDEX,
+             CreateTableRef::InvalidPrimaryKeySize);
 
   if(tablePtr.p->m_tablespace_id != RNIL || counts[3] || counts[4])
   {
@@ -9843,6 +9882,52 @@ Dbdict::alterTable_parse(Signal* signal, bool master,
     }
   }
 
+  // changed attribute stuff
+  {
+    if (newTablePtr.p->noOfAttributes == tablePtr.p->noOfAttributes)
+    {
+      jam();
+      // Find the table name for debug purpose:
+      char table_name[MAX_TAB_NAME_SIZE];
+      ConstRope table_name_r(c_rope_pool, tablePtr.p->tableName);
+      table_name_r.copy(table_name);
+      // Find any changed attributes
+      bool modified_attribute = false;
+      LocalAttributeRecord_list
+        list(c_attributeRecordPool, tablePtr.p->m_attributes);
+      AttributeRecordPtr oldAttrPtr;
+      list.first(oldAttrPtr);
+      LocalAttributeRecord_list
+        newlist(c_attributeRecordPool, newTablePtr.p->m_attributes);
+      AttributeRecordPtr newAttrPtr;
+      newlist.first(newAttrPtr);
+      Uint32 i = 0;
+      char old_column_name[MAX_TAB_NAME_SIZE];
+      char new_column_name[MAX_TAB_NAME_SIZE];
+      for (i = 0; i < tablePtr.p->noOfAttributes; i++)
+      {
+        ConstRope old_name_r(c_rope_pool, oldAttrPtr.p->attributeName);
+        old_name_r.copy(old_column_name);
+        ConstRope new_name_r(c_rope_pool, newAttrPtr.p->attributeName);
+        new_name_r.copy(new_column_name);
+        if (old_name_r.compare(new_column_name))
+        {
+          jam();
+          ndbout_c("DBDICT: Found renamed attribute %s(%s) for table %s", new_column_name, old_column_name, table_name);
+          modified_attribute = true;
+        }
+        list.next(oldAttrPtr);
+        newlist.next(newAttrPtr);
+      }
+      if (AlterTableReq::getModifyAttrFlag(impl_req->changeMask) && !modified_attribute)
+      {
+        jam();
+        setError(error, AlterTableRef::Inconsistency, __LINE__);
+        return;
+      }
+    }
+  }
+
   // add attribute stuff
   {
     const Uint32 noOfNewAttr =
@@ -11531,6 +11616,44 @@ Dbdict::alterTable_commit(Signal* signal, SchemaOpPtr op_ptr)
       tablePtr.p->noOfAttributes += noOfNewAttr;
     }
 
+    if (AlterTableReq::getModifyAttrFlag(impl_req->changeMask))
+    {
+      jam();
+      // Find the table name for debug purpose:
+      char table_name[MAX_TAB_NAME_SIZE];
+      ConstRope table_name_r(c_rope_pool, tablePtr.p->tableName);
+      table_name_r.copy(table_name);
+      D("alterTable_commit: getModifyAttrFlag set");
+      // Find and save any changed attributes
+      LocalAttributeRecord_list
+        list(c_attributeRecordPool, tablePtr.p->m_attributes);
+      AttributeRecordPtr oldAttrPtr;
+      list.first(oldAttrPtr);
+      LocalAttributeRecord_list
+        newlist(c_attributeRecordPool, newTablePtr.p->m_attributes);
+      AttributeRecordPtr newAttrPtr;
+      newlist.first(newAttrPtr);
+      Uint32 i = 0;
+      char old_column_name[MAX_TAB_NAME_SIZE];
+      char new_column_name[MAX_TAB_NAME_SIZE];
+      for (i = 0; i < tablePtr.p->noOfAttributes; i++)
+      {
+        ConstRope old_name_r(c_rope_pool, oldAttrPtr.p->attributeName);
+        old_name_r.copy(old_column_name);
+        ConstRope new_name_r(c_rope_pool, newAttrPtr.p->attributeName);
+        new_name_r.copy(new_column_name);
+        if (old_name_r.compare(new_column_name))
+        {
+          jam();
+          ndbout_c("DBDICT: Renaming attribute %s to %s for table %s", old_column_name, new_column_name, table_name);
+          LocalRope attrName(c_rope_pool, oldAttrPtr.p->attributeName);
+          attrName.assign(new_column_name);
+        }
+        list.next(oldAttrPtr);
+        newlist.next(newAttrPtr);
+      }
+    }
+
     if (AlterTableReq::getAddFragFlag(changeMask))
     {
       jam();
@@ -12498,207 +12621,7 @@ Dbdict::execLIST_TABLES_REQ(Signal* signal)
     return;
   }
 
-  Uint32 senderRef  = req->senderRef;
-  Uint32 receiverVersion = getNodeInfo(refToNode(senderRef)).m_version;
-
-  if (ndbd_LIST_TABLES_CONF_long_signal(receiverVersion))
-    sendLIST_TABLES_CONF(signal, req);
-  else
-    sendOLD_LIST_TABLES_CONF(signal, req);
-}
-
-void Dbdict::sendOLD_LIST_TABLES_CONF(Signal* signal, ListTablesReq* req)
-{
-  Uint32 senderRef  = req->senderRef;
-  Uint32 senderData = req->senderData;
-  // save req flags
-  const Uint32 reqTableId = req->oldGetTableId();
-  const Uint32 reqTableType = req->oldGetTableType();
-  const bool reqListNames = req->getListNames();
-  const bool reqListIndexes = req->getListIndexes();
-  XSchemaFile * xsf = &c_schemaFile[SchemaRecord::NEW_SCHEMA_FILE];
-  // init the confs
-  OldListTablesConf * conf = (OldListTablesConf *)signal->getDataPtrSend();
-  conf->senderData = senderData;
-  conf->counter = 0;
-  Uint32 pos = 0;
-
-  DictObjectName_hash::Iterator iter;
-  bool ok = c_obj_name_hash.first(iter);
-  for (; ok; ok = c_obj_name_hash.next(iter)){
-    Uint32 type = iter.curr.p->m_type;
-    if ((reqTableType != (Uint32)0) && (reqTableType != type))
-      continue;
-
-    if (reqListIndexes && !DictTabInfo::isIndex(type))
-      continue;
-
-    TableRecordPtr tablePtr;
-    if (DictTabInfo::isTable(type) || DictTabInfo::isIndex(type)){
-      c_tableRecordPool_.getPtr(tablePtr, iter.curr.p->m_object_ptr_i);
-
-      if(reqListIndexes && (reqTableId != tablePtr.p->primaryTableId))
-	continue;
-
-      conf->tableData[pos] = 0;
-      conf->setTableId(pos, iter.curr.p->m_id); // id
-      conf->setTableType(pos, type); // type
-      // state
-
-      if(DictTabInfo::isTable(type))
-      {
-        SchemaFile::TableEntry * te = getTableEntry(xsf, iter.curr.p->m_id);
-        switch(te->m_tableState){
-        case SchemaFile::SF_CREATE:
-          jam();
-          conf->setTableState(pos, DictTabInfo::StateBuilding);
-          break;
-        case SchemaFile::SF_ALTER:
-          jam();
-          conf->setTableState(pos, DictTabInfo::StateOnline);
-          break;
-        case SchemaFile::SF_DROP:
-          jam();
-	  conf->setTableState(pos, DictTabInfo::StateDropping);
-          break;
-        case SchemaFile::SF_IN_USE:
-        {
-          jam();
-          // Remove unused state StateBackup from backup handling
-          // - Rename StateBackup to ObsoleteStateBackup
-          // - Modify DICT so that it never sets table state to StateBackup
-          // - Map ObsoleteStateBackup to StateOnline in ndbapi
-          conf->setTableState(pos, DictTabInfo::StateOnline);
-	  break;
-        }
-	default:
-	  conf->setTableState(pos, DictTabInfo::StateBroken);
-	  break;
-	}
-      }
-      if (tablePtr.p->isIndex()) {
-	switch (tablePtr.p->indexState) {
-	case TableRecord::IS_OFFLINE:
-	  conf->setTableState(pos, DictTabInfo::StateOffline);
-	  break;
-	case TableRecord::IS_BUILDING:
-	  conf->setTableState(pos, DictTabInfo::StateBuilding);
-	  break;
-	case TableRecord::IS_DROPPING:
-	  conf->setTableState(pos, DictTabInfo::StateDropping);
-	  break;
-	case TableRecord::IS_ONLINE:
-	  conf->setTableState(pos, DictTabInfo::StateOnline);
-	  break;
-	default:
-	  conf->setTableState(pos, DictTabInfo::StateBroken);
-	  break;
-	}
-      }
-      // Logging status
-      if (! (tablePtr.p->m_bits & TableRecord::TR_Logged)) {
-	conf->setTableStore(pos, DictTabInfo::StoreNotLogged);
-      } else {
-	conf->setTableStore(pos, DictTabInfo::StorePermanent);
-      }
-      // Temporary status
-      if (tablePtr.p->m_bits & TableRecord::TR_Temporary) {
-	conf->setTableTemp(pos, NDB_TEMP_TAB_TEMPORARY);
-      } else {
-	conf->setTableTemp(pos, NDB_TEMP_TAB_PERMANENT);
-      }
-      pos++;
-    }
-    if(DictTabInfo::isTrigger(type)){
-      TriggerRecordPtr triggerPtr;
-      bool ok = find_object(triggerPtr, iter.curr.p->m_id);
-      conf->tableData[pos] = 0;
-      conf->setTableId(pos, iter.curr.p->m_id);
-      conf->setTableType(pos, type);
-      if (!ok)
-      {
-        conf->setTableState(pos, DictTabInfo::StateBroken);
-      }
-      else
-      {
-        switch (triggerPtr.p->triggerState) {
-        case TriggerRecord::TS_DEFINING:
-          conf->setTableState(pos, DictTabInfo::StateBuilding);
-          break;
-        case TriggerRecord::TS_OFFLINE:
-          conf->setTableState(pos, DictTabInfo::StateOffline);
-          break;
-        case TriggerRecord::TS_ONLINE:
-          conf->setTableState(pos, DictTabInfo::StateOnline);
-          break;
-        default:
-          conf->setTableState(pos, DictTabInfo::StateBroken);
-          break;
-        }
-      }
-      conf->setTableStore(pos, DictTabInfo::StoreNotLogged);
-      pos++;
-    }
-    if (DictTabInfo::isFilegroup(type)){
-      jam();
-      conf->tableData[pos] = 0;
-      conf->setTableId(pos, iter.curr.p->m_id);
-      conf->setTableType(pos, type); // type
-      conf->setTableState(pos, DictTabInfo::StateOnline);  // XXX todo
-      pos++;
-    }
-    if (DictTabInfo::isFile(type)){
-      jam();
-      conf->tableData[pos] = 0;
-      conf->setTableId(pos, iter.curr.p->m_id);
-      conf->setTableType(pos, type); // type
-      conf->setTableState(pos, DictTabInfo::StateOnline); // XXX todo
-      pos++;
-    }
-
-    if (pos >= OldListTablesConf::DataLength) {
-      sendSignal(senderRef, GSN_LIST_TABLES_CONF, signal,
-		 OldListTablesConf::SignalLength, JBB);
-      conf->counter++;
-      pos = 0;
-    }
-
-    if (! reqListNames)
-      continue;
-
-    LocalRope name(c_rope_pool, iter.curr.p->m_name);
-    const Uint32 size = name.size();
-    conf->tableData[pos] = size;
-    pos++;
-    if (pos >= OldListTablesConf::DataLength) {
-      sendSignal(senderRef, GSN_LIST_TABLES_CONF, signal,
-		 OldListTablesConf::SignalLength, JBB);
-      conf->counter++;
-      pos = 0;
-    }
-    Uint32 i = 0;
-    char tmp[PATH_MAX];
-    name.copy(tmp);
-    while (i < size) {
-      char* p = (char*)&conf->tableData[pos];
-      for (Uint32 j = 0; j < 4; j++) {
-	if (i < size)
-	  *p++ = tmp[i++];
-	else
-	  *p++ = 0;
-      }
-      pos++;
-      if (pos >= OldListTablesConf::DataLength) {
-	sendSignal(senderRef, GSN_LIST_TABLES_CONF, signal,
-		   OldListTablesConf::SignalLength, JBB);
-	conf->counter++;
-	pos = 0;
-      }
-    }
-  }
-  // last signal must have less than max length
-  sendSignal(senderRef, GSN_LIST_TABLES_CONF, signal,
-	     OldListTablesConf::HeaderLength + pos, JBB);
+  sendLIST_TABLES_CONF(signal, req);
 }
 
 bool Dbdict::buildListTablesData(const DictObject& dictObject,
@@ -14876,12 +14799,31 @@ Dbdict::set_index_stat_frag(Signal* signal, TableRecordPtr indexPtr)
   const Uint32 nodeIndex = value % noOfReplicas;
 
   indexPtr.p->indexStatFragId = fragId;
-  bzero(indexPtr.p->indexStatNodes, sizeof(indexPtr.p->indexStatNodes));
+
+  /**
+   * Use the bitmask for sorting, the order of node IDs in frag_data is
+   * not the same in all the data nodes.
+   */
+  NdbNodeBitmask sortedNodes;
   for (Uint32 i = 0; i < noOfReplicas; i++)
   {
-    Uint32 idx = fragIndex + 1 + (nodeIndex + i) % noOfReplicas;
-    indexPtr.p->indexStatNodes[i] = frag_data[idx];
+    Uint32 idx = fragIndex + 1 + i;
+    sortedNodes.set(frag_data[idx]);
   }
+
+  // clear list
+  memset(indexPtr.p->indexStatNodes, 0, sizeof(indexPtr.p->indexStatNodes));
+
+  // rotate the sorted nodes into the list
+  for (Uint32 nodeId = sortedNodes.find_first(), i = 0;
+       nodeId != BitmaskImpl::NotFound;
+       nodeId = sortedNodes.find_next(nodeId + 1), i++)
+  {
+    ndbrequire(i < noOfReplicas);
+    Uint32 idx = (nodeIndex + i) % noOfReplicas;
+    indexPtr.p->indexStatNodes[idx] = nodeId;
+  }
+
   D("set_index_stat_frag" << V(indexId) << V(fragId)
     << V(indexPtr.p->indexStatNodes[0]));
 }
@@ -15596,6 +15538,22 @@ Dbdict::alterIndex_complete(Signal* signal, SchemaOpPtr op_ptr)
       jam();
       alterIndex_toDropLocal(signal, op_ptr);
       return;
+    }
+  }
+  else if (impl_req->requestType == AlterIndxImplReq::AlterIndexAddPartition)
+  {
+    jam();
+        TableRecordPtr indexPtr;
+    bool ok = find_object(indexPtr, impl_req->indexId);
+    ndbrequire(ok);
+    if (indexPtr.p->tableType == DictTabInfo::OrderedIndex)
+    {
+      jam();
+      /**
+       * Recalculate which fragment provides index statistics,
+       * due to changed # fragments
+       */
+      set_index_stat_frag(signal, indexPtr);
     }
   }
 
@@ -19335,22 +19293,6 @@ busy:
   }
 }
 
-bool
-Dbdict::upgrade_suma_NotStarted(Uint32 err, Uint32 ref) const
-{
-  /**
-   * Check that receiver can handle 1428,
-   *   else return true if error code should be replaced by NF_FakeErrorREF
-   */
-  if (err == 1428)
-  {
-    jam();
-    if (!ndb_suma_not_started_ref(getNodeInfo(refToNode(ref)).m_version))
-      return true;
-  }
-  return false;
-}
-
 void Dbdict::execSUB_START_REF(Signal* signal)
 {
   jamEntry();
@@ -19373,12 +19315,6 @@ void Dbdict::execSUB_START_REF(Signal* signal)
 #ifdef EVENT_PH3_DEBUG
     ndbout_c("DBDICT(Participant) got GSN_SUB_START_REF = (%d)", subbPtr.i);
 #endif
-
-    if (upgrade_suma_NotStarted(err, subbPtr.p->m_senderRef))
-    {
-      jam();
-      err = SubStartRef::NF_FakeErrorREF;
-    }
 
     SubStartRef* ref = (SubStartRef*) signal->getDataPtrSend();
     ref->senderRef = reference();
@@ -19680,12 +19616,6 @@ void Dbdict::execSUB_STOP_REF(Signal* signal)
      * Participant
      */
     jam();
-
-    if (upgrade_suma_NotStarted(err, subbPtr.p->m_senderRef))
-    {
-      jam();
-      err = SubStopRef::NF_FakeErrorREF;
-    }
 
     SubStopRef* ref = (SubStopRef*) signal->getDataPtrSend();
     ref->senderRef = reference();
@@ -20074,7 +20004,7 @@ Dbdict::execSUB_REMOVE_REF(Signal* signal)
         err == SubRemoveRef::AlreadyDropped)
     {
       jam();
-      // conf this since this may occur if a nodefailure has occured
+      // conf this since this may occur if a nodefailure has occurred
       // earlier so that the systable was not cleared
       SubRemoveConf* conf = (SubRemoveConf*) signal->getDataPtrSend();
       conf->senderRef  = reference();
@@ -20085,12 +20015,6 @@ Dbdict::execSUB_REMOVE_REF(Signal* signal)
     else
     {
       jam();
-
-      if (upgrade_suma_NotStarted(err, subbPtr.p->m_senderRef))
-      {
-        jam();
-        err = SubRemoveRef::NF_FakeErrorREF;
-      }
 
       SubRemoveRef* ref = (SubRemoveRef*) signal->getDataPtrSend();
       ref->senderRef = reference();
@@ -22272,7 +22196,10 @@ Dbdict::execDICT_LOCK_REQ(Signal* signal)
 
     c_sub_startstop_lock.set(refToNode(req.userRef));
 
-    g_eventLogger->info("granting SumaStartMe dict lock to %u", refToNode(req.userRef));
+    g_eventLogger->info("granting %s dict lock to %u",
+                        req.lockType == DictLockReq::SumaStartMe ?
+                          "SumaStartMe" : "SumaHandover",
+                        refToNode(req.userRef));
     DictLockConf* conf = (DictLockConf*)signal->getDataPtrSend();
     conf->userPtr = req.userPtr;
     conf->lockType = req.lockType;
@@ -22391,9 +22318,12 @@ Dbdict::execDICT_UNLOCK_ORD(Signal* signal)
   {
     Uint32 nodeId = refToNode(ord->senderRef);
     jam();
-    g_eventLogger->info("clearing SumaStartMe dict lock for %u", nodeId);
+    g_eventLogger->info("clearing %s dict lock for %u",
+                        ord->lockType == DictLockReq::SumaStartMe ?
+                          "SumaStartMe" : "SumaHandover",
+                        nodeId);
+    ndbrequire(c_sub_startstop_lock.get(nodeId));
     c_sub_startstop_lock.clear(nodeId);
-
     if (ord->lockType == DictLockReq::SumaHandOver)
     {
       /**
@@ -26008,6 +25938,10 @@ Dbdict::createNodegroup_subOps(Signal* signal, SchemaOpPtr op_ptr)
                                              NDB_DEFAULT_PARTITION_BALANCE,
                                              1);
     char buf[MAX_TAB_NAME_SIZE+1];
+    if (fragments > NDB_DEFAULT_HASHMAP_MAX_FRAGMENTS)
+    {
+      buckets = NDB_MAX_HASHMAP_BUCKETS;
+    }
     BaseString::snprintf(buf, sizeof(buf), "DEFAULT-HASHMAP-%u-%u",
                          buckets,
                          fragments);
@@ -33944,6 +33878,11 @@ Dbdict::createHashMap_parse(Signal* signal, bool master,
       return;
     }
 
+    if (impl_req->requestType & CreateHashMapReq::CreateDefault &&
+        fragments > NDB_DEFAULT_HASHMAP_MAX_FRAGMENTS)
+    {
+      buckets = NDB_MAX_HASHMAP_BUCKETS;
+    }
     BaseString::snprintf(hm.HashMapName, sizeof(hm.HashMapName),
                          "DEFAULT-HASHMAP-%u-%u",
                          buckets,

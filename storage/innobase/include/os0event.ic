@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2017, 2019, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2017, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -34,7 +34,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 of spin-delay and event.
 
 @remarks
-
 First it uses a spin loop with PAUSE instructions. In each spin iteration
 it checks the condition and stops as soon as it returned true.
 
@@ -50,8 +49,6 @@ Every k-waits (ended on wake-up or timeout), the timeout is multiplied by two
 @param[in,out]	event			event on which function may wait
 @param[in]	spins_limit		maximum spin iterations
 @param[in]	timeout			initial timeout value
-@param[in]	timeout_mul2_every	timeout is multiplied by two every
-                                        that many waits on event
 @param[in]	condition		returns true when condition is
                                         satisfied
 
@@ -68,6 +65,7 @@ inline static Wait_stats os_event_wait_for(os_event_t &event,
 #endif
   uint32_t waits = 0;
 
+  constexpr uint64_t MIN_TIMEOUT_US = 1;
   constexpr uint64_t MAX_TIMEOUT_US = 100 * 1000;
 
   while (true) {
@@ -95,6 +93,24 @@ inline static Wait_stats os_event_wait_for(os_event_t &event,
     } else {
       /* Event-based loop. */
       ++waits;
+      if (timeout < MIN_TIMEOUT_US) {
+        /* If timeout = 0, then timeout * 2 = 0 and
+        we would not keep increasing timeout below.
+        Therefore we need some limitation for min.
+
+        Moreover, we measured how long does it take
+        to wake up on timeout, depending on timeout:
+             1us ->   57us,
+            10us ->   66us,
+            20us ->   76us,
+            50us ->  106us,
+           100us ->  156us,
+          1000us -> 1100us.
+
+        (Oracle Linux 4.14.28) */
+
+        timeout = MIN_TIMEOUT_US;
+      }
 
       if (waits == next_level) {
         timeout = std::min(timeout * 2, MAX_TIMEOUT_US);

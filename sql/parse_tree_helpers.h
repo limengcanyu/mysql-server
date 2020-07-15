@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -46,6 +46,9 @@ class my_decimal;
 struct MEM_ROOT;
 struct handlerton;
 
+struct Parse_context;
+struct Column_parse_context;
+
 /**
   Base class for parse-time Item objects
 
@@ -62,28 +65,28 @@ class Parse_tree_item : public Item {
  public:
   explicit Parse_tree_item(const POS &pos) : Item(pos) {}
 
-  virtual enum Type type() const { return INVALID_ITEM; }
-  virtual double val_real() {
+  enum Type type() const override { return INVALID_ITEM; }
+  double val_real() override {
     DBUG_ASSERT(0);
     return 0;
   }
-  virtual longlong val_int() {
+  longlong val_int() override {
     DBUG_ASSERT(0);
     return 0;
   }
-  virtual String *val_str(String *) {
+  String *val_str(String *) override {
     DBUG_ASSERT(0);
-    return NULL;
+    return nullptr;
   }
-  virtual my_decimal *val_decimal(my_decimal *) {
+  my_decimal *val_decimal(my_decimal *) override {
     DBUG_ASSERT(0);
-    return NULL;
+    return nullptr;
   }
-  virtual bool get_date(MYSQL_TIME *, uint) {
+  bool get_date(MYSQL_TIME *, uint) override {
     DBUG_ASSERT(0);
     return false;
   }
-  virtual bool get_time(MYSQL_TIME *) {
+  bool get_time(MYSQL_TIME *) override {
     DBUG_ASSERT(0);
     return false;
   }
@@ -99,7 +102,7 @@ class PT_item_list : public Parse_tree_node {
  public:
   List<Item> value;
 
-  virtual bool contextualize(Parse_context *pc) {
+  bool contextualize(Parse_context *pc) override {
     if (super::contextualize(pc)) return true;
     List_iterator<Item> it(value);
     Item *item;
@@ -118,7 +121,7 @@ class PT_item_list : public Parse_tree_node {
      Item may be NULL in case of OOM: just ignore it and check thd->is_error()
      in the caller code.
     */
-    return item == NULL || value.push_back(item);
+    return item == nullptr || value.push_back(item);
   }
 
   bool push_front(Item *item) {
@@ -126,7 +129,7 @@ class PT_item_list : public Parse_tree_node {
      Item may be NULL in case of OOM: just ignore it and check thd->is_error()
      in the caller code.
     */
-    return item == NULL || value.push_front(item);
+    return item == nullptr || value.push_front(item);
   }
 
   Item *pop_front() {
@@ -171,7 +174,7 @@ To *item_cond_cast(Item *const from) {
   return ((from->type() == Item::COND_ITEM &&
            static_cast<Item_func *>(from)->functype() == Tag)
               ? static_cast<To *>(from)
-              : NULL);
+              : nullptr);
 }
 
 /**
@@ -194,7 +197,7 @@ To *item_cond_cast(Item *const from) {
 template <class Class, Item_func::Functype Tag>
 Item *flatten_associative_operator(MEM_ROOT *mem_root, const POS &pos,
                                    Item *left, Item *right) {
-  if (left == NULL || right == NULL) return NULL;
+  if (left == nullptr || right == nullptr) return nullptr;
   Class *left_func = item_cond_cast<Class, Tag>(left);
   Class *right_func = item_cond_cast<Class, Tag>(right);
   if (left_func) {
@@ -217,7 +220,7 @@ Item *flatten_associative_operator(MEM_ROOT *mem_root, const POS &pos,
   }
 }
 
-Item_splocal *create_item_for_sp_var(THD *thd, LEX_STRING name,
+Item_splocal *create_item_for_sp_var(THD *thd, LEX_CSTRING name,
                                      class sp_variable *spv,
                                      const char *query_start_ptr,
                                      const char *start, const char *end);
@@ -225,12 +228,12 @@ Item_splocal *create_item_for_sp_var(THD *thd, LEX_STRING name,
 bool find_sys_var_null_base(THD *thd, struct sys_var_with_base *tmp);
 bool set_system_variable(THD *thd, struct sys_var_with_base *tmp,
                          enum enum_var_type var_type, Item *val);
-LEX_STRING make_string(THD *thd, const char *start_ptr, const char *end_ptr);
-bool set_trigger_new_row(Parse_context *pc, LEX_STRING trigger_field_name,
-                         Item *expr_item, LEX_STRING expr_query);
+LEX_CSTRING make_string(THD *thd, const char *start_ptr, const char *end_ptr);
+bool set_trigger_new_row(Parse_context *pc, LEX_CSTRING trigger_field_name,
+                         Item *expr_item, LEX_CSTRING expr_query);
 void sp_create_assignment_lex(THD *thd, const char *option_ptr);
 bool sp_create_assignment_instr(THD *thd, const char *expr_end_ptr);
-bool resolve_engine(THD *thd, const LEX_STRING &name, bool is_temp_table,
+bool resolve_engine(THD *thd, const LEX_CSTRING &name, bool is_temp_table,
                     bool strict, handlerton **ret);
 bool apply_privileges(
     THD *thd, const Mem_root_array<class PT_role_or_privilege *> &privs);
@@ -249,5 +252,8 @@ bool validate_resource_group_priority(THD *thd, int *priority,
                                       const LEX_CSTRING &name,
                                       const resourcegroups::Type &type);
 bool check_resource_group_support();
-bool check_resource_group_name_len(const LEX_CSTRING &name);
+bool check_resource_group_name_len(const LEX_CSTRING &name,
+                                   Sql_condition::enum_severity_level severity);
+
+void move_cf_appliers(Parse_context *tddlpc, Column_parse_context *cpc);
 #endif /* PARSE_TREE_HELPERS_INCLUDED */

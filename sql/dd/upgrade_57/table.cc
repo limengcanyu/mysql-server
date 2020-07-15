@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -195,7 +195,7 @@ class Trigger_loader {
 
 static const int TRG_NUM_REQUIRED_PARAMETERS = 8;
 
-const LEX_STRING trg_file_type = {C_STRING_WITH_LEN("TRIGGERS")};
+const LEX_CSTRING trg_file_type = {STRING_WITH_LEN("TRIGGERS")};
 
 /**
   Structure representing contents of .TRG file.
@@ -229,31 +229,31 @@ struct Trg_file_data {
 */
 
 static File_option trg_file_parameters[] = {
-    {{C_STRING_WITH_LEN("triggers")},
+    {{STRING_WITH_LEN("triggers")},
      my_offsetof_upgrade(struct Trg_file_data, definitions),
      FILE_OPTIONS_STRLIST},
-    {{C_STRING_WITH_LEN("sql_modes")},
+    {{STRING_WITH_LEN("sql_modes")},
      my_offsetof_upgrade(struct Trg_file_data, sql_modes),
      FILE_OPTIONS_ULLLIST},
-    {{C_STRING_WITH_LEN("definers")},
+    {{STRING_WITH_LEN("definers")},
      my_offsetof_upgrade(struct Trg_file_data, definers_list),
      FILE_OPTIONS_STRLIST},
-    {{C_STRING_WITH_LEN("client_cs_names")},
+    {{STRING_WITH_LEN("client_cs_names")},
      my_offsetof_upgrade(struct Trg_file_data, client_cs_names),
      FILE_OPTIONS_STRLIST},
-    {{C_STRING_WITH_LEN("connection_cl_names")},
+    {{STRING_WITH_LEN("connection_cl_names")},
      my_offsetof_upgrade(struct Trg_file_data, connection_cl_names),
      FILE_OPTIONS_STRLIST},
-    {{C_STRING_WITH_LEN("db_cl_names")},
+    {{STRING_WITH_LEN("db_cl_names")},
      my_offsetof_upgrade(struct Trg_file_data, db_cl_names),
      FILE_OPTIONS_STRLIST},
-    {{C_STRING_WITH_LEN("created")},
+    {{STRING_WITH_LEN("created")},
      my_offsetof_upgrade(struct Trg_file_data, created_timestamps),
      FILE_OPTIONS_ULLLIST},
-    {{0, 0}, 0, FILE_OPTIONS_STRING}};
+    {{nullptr, 0}, 0, FILE_OPTIONS_STRING}};
 
 static File_option sql_modes_parameters = {
-    {C_STRING_WITH_LEN("sql_modes")},
+    {STRING_WITH_LEN("sql_modes")},
     my_offsetof_upgrade(struct Trg_file_data, sql_modes),
     FILE_OPTIONS_ULLLIST};
 
@@ -296,6 +296,10 @@ bool Trigger_loader::trg_file_exists(const char *db_name,
   return true;
 }
 
+static bool is_equal(const LEX_CSTRING &a, const LEX_CSTRING &b) {
+  return a.length == b.length && !strncmp(a.str, b.str, a.length);
+}
+
 /**
   Load table triggers from .TRG file.
 
@@ -314,7 +318,7 @@ bool Trigger_loader::trg_file_exists(const char *db_name,
 bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
                                    const char *db_name, const char *table_name,
                                    List<::Trigger> *triggers) {
-  DBUG_ENTER("Trigger_loader::load_triggers");
+  DBUG_TRACE;
 
   // Construct TRG-file name.
 
@@ -329,11 +333,11 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
 
   File_parser *parser = sql_parse_prepare(&trg_file_path, mem_root, true);
 
-  if (!parser) DBUG_RETURN(true);
+  if (!parser) return true;
 
-  if (!is_equal(&trg_file_type, parser->type())) {
+  if (!is_equal(trg_file_type, parser->type())) {
     my_error(ER_WRONG_OBJECT, MYF(0), table_name, TRG_EXT + 1, "TRIGGER");
-    DBUG_RETURN(true);
+    return true;
   }
 
   Handle_old_incorrect_sql_modes_hook sql_modes_hook(trg_file_path.str);
@@ -342,7 +346,7 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
 
   if (parser->parse((uchar *)&trg, mem_root, trg_file_parameters,
                     TRG_NUM_REQUIRED_PARAMETERS, &sql_modes_hook))
-    DBUG_RETURN(true);
+    return true;
 
   if (trg.definitions.is_empty()) {
     DBUG_ASSERT(trg.sql_modes.is_empty());
@@ -350,7 +354,7 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
     DBUG_ASSERT(trg.client_cs_names.is_empty());
     DBUG_ASSERT(trg.connection_cl_names.is_empty());
     DBUG_ASSERT(trg.db_cl_names.is_empty());
-    DBUG_RETURN(false);
+    return false;
   }
 
   // Make sure character set properties are filled.
@@ -361,7 +365,7 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
         !trg.connection_cl_names.is_empty() || !trg.db_cl_names.is_empty()) {
       my_error(ER_TRG_CORRUPTED_FILE, MYF(0), db_name, table_name);
 
-      DBUG_RETURN(true);
+      return true;
     }
 
     LogErr(WARNING_LEVEL, ER_TRG_CREATION_CTX_NOT_SET, db_name, table_name);
@@ -441,17 +445,15 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
     LEX_CSTRING body_utf8 = {tmp_body_utf8, strlen(tmp_body_utf8)};
 
     // Allocate space to hold username and hostname.
-    char *pos = NULL;
-    if (!(pos =
-              static_cast<char *>(alloc_root(mem_root, USERNAME_LENGTH + 1)))) {
+    char *pos = nullptr;
+    if (!(pos = static_cast<char *>(mem_root->Alloc(USERNAME_LENGTH + 1)))) {
       LogErr(ERROR_LEVEL, ER_DD_TRG_DEFINER_OOM, "User");
       return true;
     }
 
     LEX_STRING definer_user{pos, 0};
 
-    if (!(pos =
-              static_cast<char *>(alloc_root(mem_root, USERNAME_LENGTH + 1)))) {
+    if (!(pos = static_cast<char *>(mem_root->Alloc(USERNAME_LENGTH + 1)))) {
       LogErr(ERROR_LEVEL, ER_DD_TRG_DEFINER_OOM, "Host");
       return true;
     }
@@ -506,39 +508,39 @@ bool Trigger_loader::load_triggers(THD *thd, MEM_ROOT *mem_root,
     */
     if (triggers->push_back(t, mem_root)) {
       destroy(t);
-      DBUG_RETURN(true);
+      return true;
     }
   }
 
-  DBUG_RETURN(false);
+  return false;
 }
 
-  /**
-    Trigger BUG#14090 compatibility hook.
+/**
+  Trigger BUG#14090 compatibility hook.
 
-    @param[in,out] unknown_key       reference on the line with unknown
-      parameter and the parsing point
-    @param[in]     base              base address for parameter writing
-      (structure like TABLE)
-    @param[in]     mem_root          MEM_ROOT for parameters allocation
-    @param[in]     end               the end of the configuration
+  @param[in,out] unknown_key       reference on the line with unknown
+    parameter and the parsing point
+  @param[in]     base              base address for parameter writing
+    (structure like TABLE)
+  @param[in]     mem_root          MEM_ROOT for parameters allocation
+  @param[in]     end               the end of the configuration
 
-    @note
-      NOTE: this hook process back compatibility for incorrectly written
-      sql_modes parameter (see BUG#14090).
+  @note
+    NOTE: this hook process back compatibility for incorrectly written
+    sql_modes parameter (see BUG#14090).
 
-    @retval
-      false OK
-    @retval
-      true  Error
-  */
+  @retval
+    false OK
+  @retval
+    true  Error
+*/
 
 #define INVALID_SQL_MODES_LENGTH 13
 
 bool Handle_old_incorrect_sql_modes_hook::process_unknown_string(
     const char *&unknown_key, uchar *base, MEM_ROOT *mem_root,
     const char *end) {
-  DBUG_ENTER("Handle_old_incorrect_sql_modes_hook::process_unknown_string");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("unknown key: %60s", unknown_key));
 
   if (unknown_key + INVALID_SQL_MODES_LENGTH + 1 < end &&
@@ -550,7 +552,7 @@ bool Handle_old_incorrect_sql_modes_hook::process_unknown_string(
     LogErr(WARNING_LEVEL, ER_FILE_HAS_OLD_FORMAT, m_path, "TRIGGER");
     if (get_file_options_ulllist(ptr, end, unknown_key, base,
                                  &sql_modes_parameters, mem_root)) {
-      DBUG_RETURN(true);
+      return true;
     }
     /*
       Set parsing pointer to the last symbol of string (\n)
@@ -559,7 +561,7 @@ bool Handle_old_incorrect_sql_modes_hook::process_unknown_string(
     */
     unknown_key = ptr - 1;
   }
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -639,7 +641,7 @@ class Table_upgrade_guard {
 
   ~Table_upgrade_guard() {
     m_thd->variables.sql_mode = m_sql_mode;
-    m_thd->work_part_info = 0;
+    m_thd->work_part_info = nullptr;
 
     // Free item list for partitions
     if (m_table->s->m_part_info) free_items(m_table->s->m_part_info->item_list);
@@ -712,40 +714,40 @@ static const int REQUIRED_VIEW_PARAMETERS = 12;
   as it's used by parse().
 */
 static File_option view_parameters[] = {
-    {{C_STRING_WITH_LEN("query")},
+    {{STRING_WITH_LEN("query")},
      my_offsetof_upgrade(TABLE_LIST, select_stmt),
      FILE_OPTIONS_ESTRING},
-    {{C_STRING_WITH_LEN("updatable")},
+    {{STRING_WITH_LEN("updatable")},
      my_offsetof_upgrade(TABLE_LIST, updatable_view),
      FILE_OPTIONS_ULONGLONG},
-    {{C_STRING_WITH_LEN("algorithm")},
+    {{STRING_WITH_LEN("algorithm")},
      my_offsetof_upgrade(TABLE_LIST, algorithm),
      FILE_OPTIONS_ULONGLONG},
-    {{C_STRING_WITH_LEN("definer_user")},
+    {{STRING_WITH_LEN("definer_user")},
      my_offsetof_upgrade(TABLE_LIST, definer.user),
      FILE_OPTIONS_STRING},
-    {{C_STRING_WITH_LEN("definer_host")},
+    {{STRING_WITH_LEN("definer_host")},
      my_offsetof_upgrade(TABLE_LIST, definer.host),
      FILE_OPTIONS_STRING},
-    {{C_STRING_WITH_LEN("suid")},
+    {{STRING_WITH_LEN("suid")},
      my_offsetof_upgrade(TABLE_LIST, view_suid),
      FILE_OPTIONS_ULONGLONG},
-    {{C_STRING_WITH_LEN("with_check_option")},
+    {{STRING_WITH_LEN("with_check_option")},
      my_offsetof_upgrade(TABLE_LIST, with_check),
      FILE_OPTIONS_ULONGLONG},
-    {{C_STRING_WITH_LEN("timestamp")},
+    {{STRING_WITH_LEN("timestamp")},
      my_offsetof_upgrade(TABLE_LIST, timestamp),
      FILE_OPTIONS_TIMESTAMP},
-    {{C_STRING_WITH_LEN("source")},
+    {{STRING_WITH_LEN("source")},
      my_offsetof_upgrade(TABLE_LIST, source),
      FILE_OPTIONS_ESTRING},
-    {{(char *)STRING_WITH_LEN("client_cs_name")},
+    {{STRING_WITH_LEN("client_cs_name")},
      my_offsetof_upgrade(TABLE_LIST, view_client_cs_name),
      FILE_OPTIONS_STRING},
-    {{(char *)STRING_WITH_LEN("connection_cl_name")},
+    {{STRING_WITH_LEN("connection_cl_name")},
      my_offsetof_upgrade(TABLE_LIST, view_connection_cl_name),
      FILE_OPTIONS_STRING},
-    {{(char *)STRING_WITH_LEN("view_body_utf8")},
+    {{STRING_WITH_LEN("view_body_utf8")},
      my_offsetof_upgrade(TABLE_LIST, view_body_utf8),
      FILE_OPTIONS_ESTRING},
     {{NullS, 0}, 0, FILE_OPTIONS_STRING}};
@@ -765,11 +767,11 @@ static bool create_unlinked_view(THD *thd, TABLE_LIST *view_ref) {
   TABLE_LIST *saved_query_tables = thd->lex->query_tables;
   SQL_I_List<Sroutine_hash_entry> saved_sroutines_list;
   // For creation of view without column information.
-  SELECT_LEX select(nullptr, nullptr);
+  SELECT_LEX select(thd->mem_root, nullptr, nullptr);
 
   // Backup
   thd->lex->select_lex = &select;
-  thd->lex->query_tables = NULL;
+  thd->lex->query_tables = nullptr;
   thd->lex->sroutines_list.save_and_clear(&saved_sroutines_list);
 
   dd::cache::Dictionary_client::Auto_releaser releaser(thd->dd_client());
@@ -782,7 +784,7 @@ static bool create_unlinked_view(THD *thd, TABLE_LIST *view_ref) {
 
   bool result = dd::create_view(thd, *schema, view_ref);
 
-  Disable_gtid_state_update_guard disabler(thd);
+  Implicit_substatement_state_guard substatement_guard(thd);
   if (result) {
     trans_rollback_stmt(thd);
     // Full rollback in case we have THD::transaction_rollback_request.
@@ -870,7 +872,7 @@ static bool fix_view_cols_and_deps(THD *thd, TABLE_LIST *view_ref,
   // Switch off modes which can prevent normal parsing of VIEW.
   Sql_mode_parse_guard parse_guard(thd);
 
-  String full_view_definition((char *)0, 0, m_connection_cl);
+  String full_view_definition((char *)nullptr, 0, m_connection_cl);
   create_alter_view_stmt(thd, view_ref, &full_view_definition, db_name,
                          view_name, m_connection_cl);
 
@@ -943,18 +945,15 @@ static bool migrate_view_to_dd(THD *thd, const FRM_context &frm_context,
                                const String_type &db_name,
                                const String_type &view_name, MEM_ROOT *mem_root,
                                bool is_fix_view_cols_and_deps) {
-  TABLE_LIST table_list;
-
-  table_list.init_one_table(db_name.c_str(), db_name.length(),
-                            view_name.c_str(), view_name.length(),
-                            view_name.c_str(), TL_READ);
+  TABLE_LIST table_list(db_name.c_str(), db_name.length(), view_name.c_str(),
+                        view_name.length(), view_name.c_str(), TL_READ);
 
   // Initialize timestamp
   table_list.timestamp.str = table_list.timestamp_buffer;
 
   // Prepare default values for old format
   table_list.view_suid = true;
-  table_list.definer.user.str = table_list.definer.host.str = 0;
+  table_list.definer.user.str = table_list.definer.host.str = nullptr;
   table_list.definer.user.length = table_list.definer.host.length = 0;
 
   if (frm_context.view_def->parse(
@@ -1138,17 +1137,17 @@ static bool add_triggers_to_table(THD *thd, TABLE *table,
     */
 
     // Get 1st Trigger
-    ::Trigger *t = it++;
+    ::Trigger *t1st = it++;
 
     // If no Trigger found, return
-    if (!t) return false;
+    if (!t1st) return false;
 
     ulonglong order = 1;
-    enum_trigger_event_type t_type = t->get_event();
-    enum_trigger_action_time_type t_time = t->get_action_time();
+    enum_trigger_event_type t_type = t1st->get_event();
+    enum_trigger_action_time_type t_time = t1st->get_action_time();
 
     // Set order for 1st Trigger as 1.
-    t->set_action_order(order);
+    t1st->set_action_order(order);
     order = order + 1;
 
     // Set action order for rest of the Triggers.
@@ -1204,10 +1203,10 @@ static bool add_triggers_to_table(THD *thd, TABLE *table,
 
       if (!t) break;
 
-      Disable_gtid_state_update_guard disabler(thd);
+      Implicit_substatement_state_guard substatement_guard(thd);
 
       // Ordering of Triggers is taken care above, pass dummy arguments here.
-      LEX_CSTRING anchor_trigger_name{0, 0};
+      LEX_CSTRING anchor_trigger_name{nullptr, 0};
       if (dd::create_trigger(thd, t, enum_trigger_order_type::TRG_ORDER_NONE,
                              anchor_trigger_name)) {
         trans_rollback_stmt(thd);
@@ -1264,6 +1263,11 @@ static bool fix_generated_columns_for_upgrade(
                 thd, table, &(*field_ptr)->gcol_info, VGS_GENERATED_COLUMN,
                 (*field_ptr)->field_name, *field_ptr, false, &error_reported)) {
           error = true;
+          LogErr(ERROR_LEVEL,
+                 ER_CANT_PROCESS_EXPRESSION_FOR_GENERATED_COLUMN_TO_DD,
+                 to_string((*field_ptr)->gcol_info->expr_str).c_str(),
+                 table->s->db.str, table->s->table_name.str,
+                 (*field_ptr)->field_name);
           break;
         }
         sql_field->gcol_info->expr_item = (*field_ptr)->gcol_info->expr_item;
@@ -1390,6 +1394,27 @@ static bool fix_fk_parent_key_names(THD *thd, const String_type &schema_name,
       // This FK references the same table as on which it is defined.
       parent_table_def = table_def;
     } else {
+      /*
+        With l_c_t_n = 1, the referenced table and schema name must be
+        all lower case; this is an invariant of l_c_t_n = 1.
+      */
+      if (lower_case_table_names == 1) {
+        if (!is_string_in_lowercase(fk->referenced_table_schema_name().c_str(),
+                                    system_charset_info)) {
+          LogErr(ERROR_LEVEL, ER_SCHEMA_NAME_IN_UPPER_CASE_NOT_ALLOWED_FOR_FK,
+                 fk->referenced_table_schema_name().c_str(), fk->name().c_str(),
+                 schema_name.c_str(), table_name.c_str());
+          return true;
+        }
+        if (!is_string_in_lowercase(fk->referenced_table_name().c_str(),
+                                    system_charset_info)) {
+          LogErr(ERROR_LEVEL, ER_TABLE_NAME_IN_UPPER_CASE_NOT_ALLOWED_FOR_FK,
+                 fk->referenced_table_schema_name().c_str(),
+                 fk->referenced_table_name().c_str(), fk->name().c_str(),
+                 schema_name.c_str(), table_name.c_str());
+          return true;
+        }
+      }
       if (thd->dd_client()->acquire(fk->referenced_table_schema_name().c_str(),
                                     fk->referenced_table_name().c_str(),
                                     &parent_table_def))
@@ -1463,8 +1488,8 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
                        &was_truncated);
 
   if (was_truncated) {
-    LogErr(ERROR_LEVEL, ER_TABLE_NAME_CAUSES_TOO_LONG_PATH, sizeof(path) - 1,
-           path);
+    LogErr(ERROR_LEVEL, ER_IDENT_CAUSES_TOO_LONG_PATH_IN_UPGRADE,
+           sizeof(path) - 1, path);
     return true;
   }
 
@@ -1528,7 +1553,7 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
   table.s->db_low_byte_first = table.file->low_byte_first();
   table.use_all_columns();
   table.record[0] = table.record[1] = share.default_values;
-  table.null_row = 0;
+  table.null_row = false;
   table.field = share.field;
   table.key_info = share.key_info;
 
@@ -1585,6 +1610,13 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
       key_info->is_algorithm_explicit = true;
   }
 
+  if (share.key_parts &&
+      create_key_part_field_with_prefix_length(&table, &share.mem_root)) {
+    LogErr(ERROR_LEVEL, ER_MIGRATE_TABLE_TO_DD_OOM, schema_name.c_str(),
+           table_name.c_str());
+    return true;
+  }
+
   // Fill create_info to be passed to the DD framework.
   HA_CREATE_INFO create_info;
   Alter_info alter_info(thd->mem_root);
@@ -1602,7 +1634,7 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
   uint key_count;
 
   // Foreign keys are handled at later stage by retrieving info from SE.
-  FOREIGN_KEY *dummy_fk_key_info = NULL;
+  FOREIGN_KEY *dummy_fk_key_info = nullptr;
   uint dummy_fk_key_count = 0;
 
   /* Suppress key length errors if this is a white listed table. */
@@ -1708,7 +1740,7 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
   }
   bootstrap_error_handler.set_log_error(true);
 
-  FOREIGN_KEY *fk_key_info_buffer = NULL;
+  FOREIGN_KEY *fk_key_info_buffer = nullptr;
   uint fk_number = 0;
   Sql_check_constraint_spec_list cc_spec_list_unused(thd->mem_root);
 
@@ -1738,12 +1770,16 @@ static bool migrate_table_to_dd(THD *thd, const String_type &schema_name,
     return true;
   }
 
-  Disable_gtid_state_update_guard disabler(thd);
+  Implicit_substatement_state_guard substatement_guard(thd);
 
   std::unique_ptr<dd::Table> table_def = dd::create_dd_user_table(
       thd, *sch_obj, to_table_name, &create_info, alter_info.create_list,
       key_info_buffer, key_count, Alter_info::ENABLE, fk_key_info_buffer,
       fk_number, &cc_spec_list_unused, table.file);
+
+  // Check for usage of prefix key index in PARTITION BY KEY() function.
+  dd::warn_on_deprecated_prefix_key_partition(
+      thd, schema_name.c_str(), table_name.c_str(), table_def.get(), true);
 
   if (!table_def || thd->dd_client()->store(table_def.get())) {
     LogErr(ERROR_LEVEL, ER_DD_ERROR_CREATING_ENTRY, schema_name.c_str(),
@@ -1786,13 +1822,43 @@ bool migrate_plugin_table_to_dd(THD *thd) {
 }
 
 /**
+  Migration of NDB tables is deferred until later, except for legacy privilege
+  tables stored in NDB, which must be migrated now so that they can be moved to
+  InnoDB later in the upgrade.
+
+  To check whether the table is a NDB table, look for the presence of a
+  table_name.ndb file in the data directory. These files still exist at this
+  point, though they will be permanently removed later in the upgrade.
+*/
+static bool is_skipped_ndb_table(const char *db_name, const char *table_name) {
+  char path[FN_REFLEN];
+  build_table_filename(path, FN_REFLEN - 1, db_name, table_name,
+                       NDB_EXT.c_str(), 0);
+
+  if (access(path, F_OK)) {
+    if (errno == ENOENT) return false;
+  }
+
+  if (strcmp("mysql", db_name) == 0) {
+    if ((strcmp("user", table_name) == 0) || (strcmp("db", table_name) == 0) ||
+        (strcmp("tables_priv", table_name) == 0) ||
+        (strcmp("columns_priv", table_name) == 0) ||
+        (strcmp("procs_priv", table_name) == 0) ||
+        (strcmp("proxies_priv", table_name) == 0)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
   Scan the database to identify all .frm files.
   Triggers existence will be checked only for tables found here.
 */
 
 bool migrate_all_frm_to_dd(THD *thd, const char *dbname,
                            bool is_fix_view_cols_and_deps) {
-  uint i;
   MY_DIR *a;
   String_type path;
   bool error = false;
@@ -1806,15 +1872,16 @@ bool migrate_all_frm_to_dd(THD *thd, const char *dbname,
     LogErr(ERROR_LEVEL, ER_CANT_OPEN_DIR, path.c_str());
     return true;
   }
-  for (i = 0; i < (uint)a->number_off_files &&
-              !dd::upgrade::Syntax_error_handler::has_too_many_errors();
-       i++) {
+
+  for (unsigned int idx = a->number_off_files;
+       idx > 0 && !dd::upgrade::Syntax_error_handler::has_too_many_errors();
+       idx--) {
     String_type file;
 
-    file.assign(a->dir_entry[i].name);
+    file.assign(a->dir_entry[idx - 1].name);
     if (file.at(0) == '.') continue;
 
-    if (!MY_S_ISDIR(a->dir_entry[i].mystat->st_mode)) {
+    if (!MY_S_ISDIR(a->dir_entry[idx - 1].mystat->st_mode)) {
       String_type file_ext;
       char schema_name[NAME_LEN + 1];
       char table_name[NAME_LEN + 1];
@@ -1836,6 +1903,46 @@ bool migrate_all_frm_to_dd(THD *thd, const char *dbname,
       filename_to_tablename(file.c_str(), table_name, sizeof(table_name));
 
       /*
+        Check that schema- and table names do not break the selected l_c_t_n
+        related invariants. The schema and table names are constructed from
+        file system names.
+
+        - l_c_t_n = 0: Supported only for case sensitive file systems.
+                       Everything should be fine.
+        - l_c_t_n = 1: Check that the name does not contain upper case
+                       characters.
+        - l_c_t_n = 2: Supported only for case insensitive file systems.
+                       This guarantees that there are no names differing
+                       only in character case, and hence, everything should
+                       be fine.
+
+        There is also a potential issue regarding implicit tablespaces in
+        InnoDB, as these have lower case names even with l_c_t_n = 2 and an
+        upper case table name. This will be an issue if upgrading to
+        l_c_t_n = 0, where InnoDB expects tablespace names with the same
+        letter case as the table name. However, this is detected by InnoDB
+        during the migration of meta data from 5.7 to 8.0 when we call
+        ha_upgrade_table(). In this case, InnoDB will emit an error, and
+        hence, we do not need to check this issue at the SQL layer.
+
+        See also the corresponding check in migrate_schema_to_dd(). We do
+        not repeat the DBUG_ASSERTS here, but check only if l_c_t_n = 1.
+        Additionally, we do the check below only once, hence the test for
+        is_fix_view_cols_and_deps = false.
+      */
+      if (!is_fix_view_cols_and_deps && lower_case_table_names == 1) {
+        // Already checked schema name while migrating schema meta data.
+        DBUG_ASSERT(is_string_in_lowercase(schema_name, system_charset_info));
+        // Upper case table names break invariant when l_c_t_n = 1.
+        if (!is_string_in_lowercase(table_name, system_charset_info)) {
+          LogErr(ERROR_LEVEL, ER_TABLE_NAME_IN_UPPER_CASE_NOT_ALLOWED,
+                 schema_name, table_name);
+          error = true;
+          continue;
+        }
+      }
+
+      /*
         Skip mysql.plugin tables during upgrade of user and system tables as
         it has been upgraded already after creating DD tables.
       */
@@ -1846,6 +1953,9 @@ bool migrate_all_frm_to_dd(THD *thd, const char *dbname,
           strcmp(schema_name, PERFORMANCE_SCHEMA_DB_NAME.str) == 0;
 
       if (is_skip_table) continue;
+
+      // Skip NDB tables which are upgraded later by the ndbcluster plugin
+      if (is_skipped_ndb_table(schema_name, table_name)) continue;
 
       log_sink_buffer_check_timeout();
 

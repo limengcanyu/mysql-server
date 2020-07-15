@@ -55,8 +55,9 @@
 #include "sql/dd/impl/sdi.h"                      // sdi::store()
 #include "sql/dd/impl/system_registry.h"          // dd::System_tables
 #include "sql/dd/impl/utils.h"                    // execute_query
-#include "sql/dd/info_schema/metadata.h"  // dd::info_schema::install_IS...
-#include "sql/dd/sdi_file.h"              // dd::sdi_file::EXT
+#include "sql/dd/info_schema/metadata.h"     // dd::info_schema::install_IS...
+#include "sql/dd/performance_schema/init.h"  // create_pfs_schema
+#include "sql/dd/sdi_file.h"                 // dd::sdi_file::EXT
 #include "sql/dd/types/object_table.h"
 #include "sql/dd/types/table.h"  // dd::Table
 #include "sql/dd/types/tablespace.h"
@@ -70,6 +71,7 @@
 #include "sql/lock.h"       // Tablespace_hash_set
 #include "sql/log.h"        // sql_print_warning
 #include "sql/mysqld.h"     // key_file_sdi
+#include "sql/sd_notify.h"  // sysd::notify
 #include "sql/sql_class.h"  // THD
 #include "sql/sql_list.h"
 #include "sql/sql_plugin.h"
@@ -260,7 +262,7 @@ bool finalize_upgrade(THD *thd) {
       // Get the name without the file extension.
       if (check_file_extension(file_ext)) {
         if (fn_format(from_path, file.c_str(), mysql_real_data_home, "",
-                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL)
+                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr)
           return true;
 
         (void)mysql_file_delete(key_file_misc, from_path, MYF(0));
@@ -274,7 +276,7 @@ bool finalize_upgrade(THD *thd) {
     char dir_path[FN_REFLEN];
 
     if (fn_format(dir_path, dir_name.c_str(), path.c_str(), "",
-                  MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL)
+                  MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr)
       continue;
 
     if (!(b = my_dir(dir_path, MYF(MY_WANT_STAT)))) continue;
@@ -290,15 +292,9 @@ bool finalize_upgrade(THD *thd) {
       file_ext.assign(file.c_str() + file.size() - 4);
 
       // Get the name without the file extension.
-      // Even though the stats backup tables were dropped earlier, the
-      // tablespace files on the disk still exists. This is because the InnoDB
-      // post DDL hook is skipped on a bootstrap thread. We must manually delete
-      // these files.
-      if (check_file_extension(file_ext) ||
-          file.compare("innodb_table_stats_backup57.ibd") == 0 ||
-          file.compare("innodb_index_stats_backup57.ibd") == 0) {
+      if (check_file_extension(file_ext)) {
         if (fn_format(from_path, file.c_str(), dir_path, "",
-                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL)
+                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr)
           continue;
 
         (void)mysql_file_delete(key_file_misc, from_path, MYF(0));
@@ -419,7 +415,7 @@ static void drop_sdi_files() {
     if (MY_S_ISDIR(a->dir_entry[i].mystat->st_mode)) {
       char dir_path[FN_REFLEN];
       if (fn_format(dir_path, file.c_str(), path.c_str(), "",
-                    MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL) {
+                    MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr) {
         LogErr(ERROR_LEVEL, ER_CANT_SET_PATH_FOR, file.c_str());
         continue;
       }
@@ -441,7 +437,7 @@ static void drop_sdi_files() {
         if (file_ext.compare(0, 4, dd::sdi_file::EXT) == 0) {
           char to_path[FN_REFLEN];
           if (fn_format(to_path, file2.c_str(), dir_path, "",
-                        MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL) {
+                        MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr) {
             LogErr(ERROR_LEVEL, ER_CANT_SET_PATH_FOR, file2.c_str());
             continue;
           }
@@ -459,7 +455,7 @@ static void drop_sdi_files() {
       if (file_ext.compare(0, 4, dd::sdi_file::EXT) == 0) {
         char to_path[FN_REFLEN];
         if (fn_format(to_path, file.c_str(), path.c_str(), "",
-                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == NULL) {
+                      MYF(MY_UNPACK_FILENAME | MY_SAFE_PATH)) == nullptr) {
           LogErr(ERROR_LEVEL, ER_CANT_SET_PATH_FOR, file.c_str());
           continue;
         }
@@ -560,7 +556,7 @@ bool add_sdi_info(THD *thd) {
     }
 
     if (dd::sdi::store(thd, table)) {
-      LogErr(ERROR_LEVEL, ER_BAD_TABLE_ERROR, table->name().c_str());
+      LogErr(ERROR_LEVEL, ER_UNKNOWN_TABLE_IN_UPGRADE, table->name().c_str());
       trans_rollback_stmt(thd);
     }
     trans_commit_stmt(thd);
@@ -575,6 +571,7 @@ bool add_sdi_info(THD *thd) {
 
   LogErr(SYSTEM_LEVEL, ER_DD_UPGRADE_DD_POPULATED);
   log_sink_buffer_check_timeout();
+  sysd::notify("STATUS=Data Dictionary upgrade from MySQL 5.7 complete\n");
 
   return false;
 }  // add_sdi_info
@@ -744,7 +741,7 @@ static bool ha_migrate_tablespaces(THD *thd, plugin_ref plugin, void *) {
 */
 static bool ha_migrate_tablespaces(THD *thd) {
   return (plugin_foreach(thd, ha_migrate_tablespaces,
-                         MYSQL_STORAGE_ENGINE_PLUGIN, 0));
+                         MYSQL_STORAGE_ENGINE_PLUGIN, nullptr));
 }
 
 /**
@@ -757,14 +754,16 @@ static bool migrate_stats(THD *thd) {
   error_handler.set_log_error(false);
   if (dd::execute_query(thd,
                         "INSERT IGNORE INTO mysql.innodb_table_stats "
-                        "SELECT * FROM mysql.innodb_table_stats_backup57"))
+                        "SELECT * FROM mysql.innodb_table_stats_backup57 "
+                        "WHERE table_name not like '%#P#%'"))
     LogErr(WARNING_LEVEL, ER_DD_UPGRADE_FAILED_TO_CREATE_TABLE_STATS);
   else
     LogErr(INFORMATION_LEVEL, ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED);
 
   if (dd::execute_query(thd,
                         "INSERT IGNORE INTO mysql.innodb_index_stats "
-                        "SELECT * FROM mysql.innodb_index_stats_backup57"))
+                        "SELECT * FROM mysql.innodb_index_stats_backup57 "
+                        "WHERE table_name not like '%#P#%'"))
     LogErr(WARNING_LEVEL, ER_DD_UPGRADE_FAILED_TO_CREATE_INDEX_STATS);
   else
     LogErr(INFORMATION_LEVEL, ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED);
@@ -824,7 +823,7 @@ static bool upgrade_logs(THD *thd, plugin_ref plugin, void *) {
   @retval true   ON FAILURE
 */
 static bool ha_upgrade_engine_logs(THD *thd) {
-  if (plugin_foreach(thd, upgrade_logs, MYSQL_STORAGE_ENGINE_PLUGIN, 0))
+  if (plugin_foreach(thd, upgrade_logs, MYSQL_STORAGE_ENGINE_PLUGIN, nullptr))
     return true;
 
   return false;
@@ -893,6 +892,7 @@ bool do_pre_checks_and_initialize_dd(THD *thd) {
     */
     LogErr(SYSTEM_LEVEL, ER_DD_UPGRADE_START);
     log_sink_buffer_check_timeout();
+    sysd::notify("STATUS=Data Dictionary upgrade from MySQL 5.7 in progress\n");
   }
 
   /*
@@ -945,6 +945,9 @@ bool do_pre_checks_and_initialize_dd(THD *thd) {
   /*
     If mysql.ibd exists and upgrade stage tracking does not exist, restart
     the server.
+
+    For ordinary restart of an 8.0 server, and for upgrades post 8.0,
+    this code path will be taken.
   */
   if (exists_mysql_tablespace && !upgrade_status_exists) {
     return (restart_dictionary(thd));
@@ -1104,6 +1107,35 @@ bool do_pre_checks_and_initialize_dd(THD *thd) {
     terminate(thd);
     return true;
   }
+
+  /*
+    Plugins may need to create performance schema tables. During upgrade from
+    5.7, we do not yet have an entry in mysql.schemata for performance schema,
+    so creation of such tables will fail. To avoid this, we migrate the entry
+    here if the schema was present in 5.7. If the performance schema was not
+    present in 5.7, then we create the schema explicitly, if the server is
+    configured to use the performance schema.
+  */
+  size_t path_len = build_table_filename(
+      path, sizeof(path) - 1, PERFORMANCE_SCHEMA_DB_NAME.str, "", "", 0);
+  path[path_len - 1] = 0;  // Remove last '/' from path
+  MY_STAT stat_info;
+
+  // RAII to handle error messages.
+  dd::upgrade::Bootstrap_error_handler bootstrap_error_handler;
+
+  if (mysql_file_stat(key_file_misc, path, &stat_info, MYF(0)) != nullptr) {
+    if (migrate_schema_to_dd(thd, PERFORMANCE_SCHEMA_DB_NAME.str)) {
+      terminate(thd);
+      return true;
+    }
+  }
+#ifdef WITH_PERFSCHEMA_STORAGE_ENGINE
+  else if (dd::performance_schema::create_pfs_schema(thd)) {
+    terminate(thd);
+    return true;
+  }
+#endif
 
   // Reset flag
   set_allow_sdi_creation(true);

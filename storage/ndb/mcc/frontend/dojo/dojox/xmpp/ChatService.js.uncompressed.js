@@ -1,6 +1,5 @@
-//>>built
 // wrapped by build app
-define("dojox/xmpp/ChatService", ["dijit","dojo","dojox"], function(dijit,dojo,dojox){
+define("dojox/xmpp/ChatService", ["dojo","dijit","dojox"], function(dojo,dijit,dojox){
 dojo.provide("dojox.xmpp.ChatService");
 
 dojox.xmpp.chat = {
@@ -11,7 +10,7 @@ dojox.xmpp.chat = {
 	INACTIVE_STATE: 'inactive',
 	PAUSED_STATE: 'paused',
 	GONE_STATE: 'gone'
-}
+};
 
 dojo.declare("dojox.xmpp.ChatService", null, {
 	state: "",
@@ -21,7 +20,7 @@ dojo.declare("dojox.xmpp.ChatService", null, {
 		this.chatid = Math.round(Math.random() * 1000000000000000);
 	},
 	
-	recieveMessage: function(msg,initial){
+	receiveMessage: function(msg,initial){
 		if (msg&&!initial){
 			this.onNewMessage(msg);
 		}

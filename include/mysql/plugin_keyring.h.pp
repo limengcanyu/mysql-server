@@ -109,7 +109,7 @@ void thd_inc_row_count(void * thd);
 int thd_allow_batch(void * thd);
 void thd_mark_transaction_to_rollback(void * thd, int all);
 int mysql_tmpfile(const char *prefix);
-int thd_killed(const void * v_thd);
+int thd_killed(const void *v_thd);
 void thd_set_kill_status(const void * thd);
 void thd_binlog_pos(const void * thd, const char **file_var,
                     unsigned long long *pos_var);
@@ -119,6 +119,7 @@ void *thd_get_ha_data(const void * thd, const struct handlerton *hton);
 void thd_set_ha_data(void * thd, const struct handlerton *hton,
                      const void *ha_data);
 void remove_ssl_err_thread_state();
+unsigned int thd_get_num_vcpus();
 struct st_mysql_keyring {
   int interface_version;
   bool (*mysql_key_store)(const char *key_id, const char *key_type,

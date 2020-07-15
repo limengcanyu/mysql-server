@@ -1,4 +1,3 @@
-//>>built
 define("dojox/form/manager/_FormMixin", [
 	"dojo/_base/lang",
 	"dojo/_base/kernel",
@@ -40,7 +39,7 @@ define("dojox/form/manager/_FormMixin", [
 		// form-specific functionality
 
 		_onReset: function(evt){
-			// NOTE: this function is taken from dijit.formForm, it works only
+			// NOTE: this function is taken from dijit.form.Form, it works only
 			// for form-based managers.
 
 			// create fake event so we can know if preventDefault() is called
@@ -60,7 +59,7 @@ define("dojox/form/manager/_FormMixin", [
 		},
 
 		onReset: function(){
-			//	summary:
+			// summary:
 			//		Callback when user resets the form. This method is intended
 			//		to be over-ridden. When the `reset` method is called
 			//		programmatically, the return value from `onReset` is used
@@ -92,7 +91,7 @@ define("dojox/form/manager/_FormMixin", [
 		},
 
 		onSubmit: function(){
-			//	summary:
+			// summary:
 			//		Callback when user submits the form. This method is
 			//		intended to be over-ridden, but by default it checks and
 			//		returns the validity of form elements. When the `submit`
@@ -130,6 +129,11 @@ define("dojox/form/manager/_FormMixin", [
 			return true;
 		},
 		validate: function(){
+			// summary:
+			//		validate() returns if the form is valid - same as isValid - 
+			//		but provides a few additional (ui-specific) features: it 
+			//		will highlight any sub-widgets that are not valid it will 
+			//		call focus() on the first invalid sub-widget
 			var isValid = true,
 				formWidgets = this.formWidgets,
 				didFocus = false, name;

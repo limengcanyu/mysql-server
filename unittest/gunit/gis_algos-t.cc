@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -65,7 +65,7 @@ Geometry *SetRingOrderTest::geometry_from_text(const String &wkt, String *wkb,
 
   wkb->set_charset(&my_charset_bin);
   wkb->length(0);
-  return Geometry::create_from_wkt(geobuf, &trs, wkb, 1);
+  return Geometry::create_from_wkt(geobuf, &trs, wkb, true);
 }
 
 void SetRingOrderTest::set_order_and_compare(const std::string &s1,
@@ -198,15 +198,13 @@ TEST_F(GeometryManipulationTest, PolygonCopyTest) {
   plgn3.to_wkb_unparsed();
   plgn3.as_wkb(&wkb5, true);
   EXPECT_EQ(wkb3.length(), wkb5.length());
-  EXPECT_EQ(memcmp(((char *)wkb3.ptr()) + WKB_HEADER_SIZE,
-                   ((char *)wkb5.ptr()) + WKB_HEADER_SIZE,
+  EXPECT_EQ(memcmp(wkb3.ptr() + WKB_HEADER_SIZE, wkb5.ptr() + WKB_HEADER_SIZE,
                    wkb5.length() - WKB_HEADER_SIZE),
             0);
 
   plgn2.as_geometry(&wkb4, false);
   EXPECT_EQ(wkb3.length() + 4, wkb4.length());
-  EXPECT_EQ(memcmp(GEOM_HEADER_SIZE + ((char *)wkb4.ptr()),
-                   ((char *)wkb3.ptr()) + WKB_HEADER_SIZE,
+  EXPECT_EQ(memcmp(GEOM_HEADER_SIZE + wkb4.ptr(), wkb3.ptr() + WKB_HEADER_SIZE,
                    wkb3.length() - WKB_HEADER_SIZE),
             0);
 
@@ -376,11 +374,11 @@ TEST_F(GeometryManipulationTest, ResizeAssignmentTest) {
   Gis_geometry_collection geocol(0, Geometry::wkb_multipolygon, &str1, &str2);
 
   ls4 = ls5;
-  EXPECT_EQ(ls4.get_ptr() == NULL && ls4.get_nbytes() == 0, true);
-  EXPECT_EQ(ls5.get_ptr() == NULL && ls5.get_nbytes() == 0, true);
+  EXPECT_EQ(ls4.get_ptr() == nullptr && ls4.get_nbytes() == 0, true);
+  EXPECT_EQ(ls5.get_ptr() == nullptr && ls5.get_nbytes() == 0, true);
   plgn3 = plgn4;
   plgn3.to_wkb_unparsed();
-  EXPECT_EQ(plgn3.get_ptr() == NULL && plgn3.get_nbytes() == 0, true);
+  EXPECT_EQ(plgn3.get_ptr() == nullptr && plgn3.get_nbytes() == 0, true);
 
   ls4 = ls6;
   EXPECT_EQ(ls4.get_ptr() != ls6.get_ptr() &&

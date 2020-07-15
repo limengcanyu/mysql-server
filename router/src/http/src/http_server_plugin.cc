@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -26,14 +26,16 @@
  * HTTP server plugin.
  */
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>  // shared_ptr
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 
-#include <sys/types.h>
+#include <sys/types.h>  // timeval
 
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
@@ -48,25 +50,24 @@
 #include "mysql/harness/config_parser.h"
 #include "mysql/harness/loader.h"
 #include "mysql/harness/logging/logging.h"
+#include "mysql/harness/net_ts/impl/socket_error.h"
 #include "mysql/harness/plugin.h"
 #include "mysql/harness/utility/string.h"
 
 #include "http_auth.h"
 #include "http_server_plugin.h"
 #include "mysqlrouter/http_auth_realm_component.h"
+#include "mysqlrouter/http_common.h"
 #include "mysqlrouter/http_server_component.h"
 #include "mysqlrouter/plugin_config.h"
 #include "posix_re.h"
+#include "socket_operations.h"
+#include "static_files.h"
 #include "tls_server_context.h"
 
 IMPORT_LOG_FUNCTIONS()
 
 static constexpr const char kSectionName[]{"http_server"};
-
-using mysql_harness::ARCHITECTURE_DESCRIPTOR;
-using mysql_harness::PLUGIN_ABI_VERSION;
-using mysql_harness::Plugin;
-using mysql_harness::PluginFuncEnv;
 
 std::promise<void> stopper;
 std::future<void> stopped = stopper.get_future();
@@ -132,6 +133,33 @@ void HttpRequestRouter::route(HttpRequest req) {
 
   auto uri = req.get_uri();
 
+  // CONNECT can't be routed to the request handlers as it doesn't have a "path"
+  // part.
+  //
+  // If the client Accepts "application/problem+json", send it a RFC7807 error
+  // otherwise a classic text/html one.
+  if (req.get_method() == HttpMethod::Connect) {
+    const char *hdr_accept = req.get_input_headers().get("Accept");
+    if (hdr_accept &&
+        std::string(hdr_accept).find("application/problem+json") !=
+            std::string::npos) {
+      req.get_output_headers().add("Content-Type", "application/problem+json");
+      auto buffers = req.get_output_buffer();
+      std::string json_problem(R"({
+  "title": "Method Not Allowed",
+  "status": 405
+})");
+      buffers.add(json_problem.data(), json_problem.size());
+      int status_code = HttpStatusCode::MethodNotAllowed;
+      req.send_reply(status_code,
+                     HttpStatusCode::get_default_status_text(status_code),
+                     buffers);
+    } else {
+      req.send_error(HttpStatusCode::MethodNotAllowed);
+    }
+    return;
+  }
+
   for (auto &request_handler : request_handlers_) {
     if (request_handler.url_regex.search(uri.get_path())) {
       request_handler.handler->handle_request(req);
@@ -157,15 +185,16 @@ void HttpRequestThread::accept_socket() {
 }
 
 void HttpRequestThread::set_request_router(HttpRequestRouter &router) {
-  evhttp_set_gencb(ev_http.get(),
-                   [](evhttp_request *req, void *user_data) {
-                     auto *rtr = static_cast<HttpRequestRouter *>(user_data);
-                     rtr->route(HttpRequest{
-                         std::unique_ptr<evhttp_request,
-                                         std::function<void(evhttp_request *)>>(
-                             req, [](evhttp_request *) {})});
-                   },
-                   &router);
+  evhttp_set_gencb(
+      ev_http.get(),
+      [](evhttp_request *req, void *user_data) {
+        auto *rtr = static_cast<HttpRequestRouter *>(user_data);
+        rtr->route(
+            HttpRequest{std::unique_ptr<evhttp_request,
+                                        std::function<void(evhttp_request *)>>(
+                req, [](evhttp_request *) {})});
+      },
+      &router);
 }
 
 void HttpRequestThread::wait_and_dispatch() {
@@ -179,12 +208,108 @@ void HttpRequestThread::wait_and_dispatch() {
 class HttpRequestMainThread : public HttpRequestThread {
  public:
   void bind(const std::string &address, uint16_t port) {
-    auto *handle =
-        evhttp_bind_socket_with_handle(ev_http.get(), address.c_str(), port);
-    if (nullptr == handle) {
-      throw std::runtime_error("binding socket failed ...");
+    int err;
+    struct addrinfo hints, *ainfo;
+
+    auto *sock_ops = mysql_harness::SocketOperations::instance();
+
+    std::memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    err = getaddrinfo(address.c_str(), std::to_string(port).c_str(), &hints,
+                      &ainfo);
+    if (err != 0) {
+      throw std::runtime_error(std::string("getaddrinfo() failed: ") +
+                               gai_strerror(err));
     }
-    accept_fd_ = evhttp_bound_socket_get_fd(handle);
+
+    std::shared_ptr<void> exit_guard(nullptr,
+                                     [&](void *) { freeaddrinfo(ainfo); });
+
+    const auto accept_res = sock_ops->socket(
+        ainfo->ai_family, ainfo->ai_socktype, ainfo->ai_protocol);
+    if (!accept_res) {
+      throw std::system_error(accept_res.error(), "socket() failed");
+    }
+
+    accept_fd_ = accept_res.value();
+
+    if (evutil_make_socket_nonblocking(accept_fd_) < 0) {
+      const auto ec = net::impl::socket::last_error_code();
+
+      sock_ops->close(accept_fd_);
+
+      throw std::system_error(ec, "evutil_make_socket_nonblocking() failed");
+    }
+
+    if (evutil_make_socket_closeonexec(accept_fd_) < 0) {
+      const auto ec = net::impl::socket::last_error_code();
+
+      sock_ops->close(accept_fd_);
+
+      throw std::system_error(ec, "evutil_make_socket_closeonexec() failed");
+    }
+
+    {
+      int option_value = 1;
+      const auto sockopt_res =
+          sock_ops->setsockopt(accept_fd_, SOL_SOCKET, SO_REUSEADDR,
+                               reinterpret_cast<const char *>(&option_value),
+                               static_cast<socklen_t>(sizeof(int)));
+      if (!sockopt_res) {
+        sock_ops->close(accept_fd_);
+
+        throw std::system_error(sockopt_res.error(),
+                                "setsockopt(SO_REUSEADDR) failed");
+      }
+    }
+
+    {
+      int option_value = 1;
+      const auto sockopt_res =
+          sock_ops->setsockopt(accept_fd_, SOL_SOCKET, SO_KEEPALIVE,
+                               reinterpret_cast<const char *>(&option_value),
+                               static_cast<socklen_t>(sizeof(int)));
+      if (!sockopt_res) {
+        sock_ops->close(accept_fd_);
+
+        throw std::system_error(sockopt_res.error(),
+                                "setsockopt(SO_KEEPALIVE) failed");
+      }
+    }
+
+    {
+      const auto bind_res =
+          sock_ops->bind(accept_fd_, ainfo->ai_addr, ainfo->ai_addrlen);
+      if (!bind_res) {
+        sock_ops->close(accept_fd_);
+
+        throw std::system_error(
+            bind_res.error(),
+            "bind('0.0.0.0:" + std::to_string(port) + ") failed");
+      }
+    }
+
+    {
+      const auto listen_res = sock_ops->listen(accept_fd_, 128);
+      if (!listen_res) {
+        sock_ops->close(accept_fd_);
+
+        throw std::system_error(listen_res.error(), "listen() failed");
+      }
+    }
+
+    auto handle = evhttp_accept_socket_with_handle(ev_http.get(), accept_fd_);
+
+    if (nullptr == handle) {
+      const auto ec = net::impl::socket::last_error_code();
+
+      sock_ops->close(accept_fd_);
+
+      throw std::system_error(ec, "evhttp_accept_socket_with_handle() failed");
+    }
   }
 };
 
@@ -192,13 +317,14 @@ class HttpRequestMainThread : public HttpRequestThread {
 class HttpsRequestMainThread : public HttpRequestMainThread {
  public:
   HttpsRequestMainThread(SSL_CTX *ssl_ctx) {
-    evhttp_set_bevcb(ev_http.get(),
-                     [](struct event_base *base, void *arg) {
-                       return bufferevent_openssl_socket_new(
-                           base, -1, SSL_new(static_cast<SSL_CTX *>(arg)),
-                           BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
-                     },
-                     ssl_ctx);
+    evhttp_set_bevcb(
+        ev_http.get(),
+        [](struct event_base *base, void *arg) {
+          return bufferevent_openssl_socket_new(
+              base, -1, SSL_new(static_cast<SSL_CTX *>(arg)),
+              BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+        },
+        ssl_ctx);
   }
 };
 #endif
@@ -216,13 +342,14 @@ class HttpsRequestWorkerThread : public HttpRequestWorkerThread {
   explicit HttpsRequestWorkerThread(harness_socket_t accept_fd,
                                     SSL_CTX *ssl_ctx)
       : HttpRequestWorkerThread(accept_fd) {
-    evhttp_set_bevcb(ev_http.get(),
-                     [](struct event_base *base, void *arg) {
-                       return bufferevent_openssl_socket_new(
-                           base, -1, SSL_new(static_cast<SSL_CTX *>(arg)),
-                           BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
-                     },
-                     ssl_ctx);
+    evhttp_set_bevcb(
+        ev_http.get(),
+        [](struct event_base *base, void *arg) {
+          return bufferevent_openssl_socket_new(
+              base, -1, SSL_new(static_cast<SSL_CTX *>(arg)),
+              BUFFEREVENT_SSL_ACCEPTING, BEV_OPT_CLOSE_ON_FREE);
+        },
+        ssl_ctx);
   }
 };
 #endif
@@ -318,7 +445,7 @@ void HttpServer::remove_route(const std::string &url_regex) {
   }
 }
 
-class PluginConfig : public mysqlrouter::BasePluginConfig {
+class HttpServerPluginConfig : public mysqlrouter::BasePluginConfig {
  public:
   std::string static_basedir;
   std::string srv_address;
@@ -331,7 +458,7 @@ class PluginConfig : public mysqlrouter::BasePluginConfig {
   bool with_ssl;
   uint16_t srv_port;
 
-  explicit PluginConfig(const mysql_harness::ConfigSection *section)
+  explicit HttpServerPluginConfig(const mysql_harness::ConfigSection *section)
       : mysqlrouter::BasePluginConfig(section),
         static_basedir(get_option_string(section, "static_folder")),
         srv_address(get_option_string(section, "bind_address")),
@@ -371,7 +498,8 @@ static std::map<std::string, std::shared_ptr<HttpServer>> http_servers;
 
 class HttpServerFactory {
  public:
-  static std::shared_ptr<HttpServer> create(const PluginConfig &config) {
+  static std::shared_ptr<HttpServer> create(
+      const HttpServerPluginConfig &config) {
     if (config.with_ssl) {
       // init the TLS Server context according to our config-values
       TlsServerContext tls_ctx;
@@ -405,7 +533,7 @@ class HttpServerFactory {
   }
 };
 
-static void init(PluginFuncEnv *env) {
+static void init(mysql_harness::PluginFuncEnv *env) {
   const mysql_harness::AppInfo *info = get_app_info(env);
   bool has_started = false;
 
@@ -438,7 +566,7 @@ static void init(PluginFuncEnv *env) {
 
       has_started = true;
 
-      PluginConfig config{section};
+      HttpServerPluginConfig config{section};
 
       if (config.with_ssl &&
           (config.ssl_cert.empty() || config.ssl_key.empty())) {
@@ -481,7 +609,7 @@ static void init(PluginFuncEnv *env) {
   }
 }
 
-static void start(PluginFuncEnv *env) {
+static void start(mysql_harness::PluginFuncEnv *env) {
   // - version string
   // - hostname
   // - active-connections vs. max-connections
@@ -527,16 +655,20 @@ static void start(PluginFuncEnv *env) {
   }
 }
 
+const static std::array<const char *, 1> required = {{
+    "logger",
+}};
+
 extern "C" {
-Plugin HTTP_SERVER_EXPORT harness_plugin_http_server = {
-    PLUGIN_ABI_VERSION,
-    ARCHITECTURE_DESCRIPTOR,
-    "HTTP_SERVER",
+mysql_harness::Plugin HTTP_SERVER_EXPORT harness_plugin_http_server = {
+    mysql_harness::PLUGIN_ABI_VERSION,       // abi-version
+    mysql_harness::ARCHITECTURE_DESCRIPTOR,  // arch
+    "HTTP_SERVER",                           // name
     VERSION_NUMBER(0, 0, 1),
-    0,
-    nullptr,  // requires
-    0,
-    nullptr,  // conflicts
+    // requires
+    required.size(), required.data(),
+    // conflicts
+    0, nullptr,
     init,     // init
     nullptr,  // deinit
     start,    // start

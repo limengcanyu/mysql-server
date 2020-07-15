@@ -90,8 +90,6 @@ static void my_win_init();
 
 bool my_init_done = false;
 ulong my_thread_stack_size = 65536;
-MYSQL_FILE *mysql_stdin = NULL;
-static MYSQL_FILE instrumented_stdin;
 
 static ulong atoi_octal(const char *str) {
   long int tmp;
@@ -144,44 +142,48 @@ bool my_init() {
   my_umask_dir = 0750; /* Default umask for new directories */
 
   /* Default creation of new files */
-  if ((str = getenv("UMASK")) != 0) my_umask = (int)(atoi_octal(str) | 0600);
+  if ((str = getenv("UMASK")) != nullptr)
+    my_umask = (int)(atoi_octal(str) | 0600);
   /* Default creation of new dir's */
-  if ((str = getenv("UMASK_DIR")) != 0)
+  if ((str = getenv("UMASK_DIR")) != nullptr)
     my_umask_dir = (int)(atoi_octal(str) | 0700);
-
-  instrumented_stdin.m_file = stdin;
-  instrumented_stdin.m_psi = NULL; /* not yet instrumented */
-  mysql_stdin = &instrumented_stdin;
 
   if (my_thread_global_init()) return true;
 
   if (my_thread_init()) return true;
 
   /* $HOME is needed early to parse configuration files located in ~/ */
-  if ((home_dir = getenv("HOME")) != 0)
+  if ((home_dir = getenv("HOME")) != nullptr)
     home_dir = intern_filename(home_dir_buff, home_dir);
 
   {
-    DBUG_ENTER("my_init");
+    DBUG_TRACE;
     DBUG_PROCESS(my_progname ? my_progname : "unknown");
 #ifdef _WIN32
     my_win_init();
 #endif
+    MyFileInit();
+
     DBUG_PRINT("exit", ("home: '%s'", home_dir));
-    DBUG_RETURN(false);
+    return false;
   }
 } /* my_init */
 
 /* End my_sys */
 void my_end(int infoflag) {
   /*
-    We do not use DBUG_ENTER here, as after cleanup DBUG is no longer
+    We do not use DBUG_TRACE here, as after cleanup DBUG is no longer
     operational, so we cannot use DBUG_RETURN.
   */
 
   FILE *info_file = (DBUG_FILE ? DBUG_FILE : stderr);
 
   if (!my_init_done) return;
+
+  MyFileEnd();
+#ifdef _WIN32
+  MyWinfileEnd();
+#endif /* WIN32 */
 
   if ((infoflag & MY_CHECK_ERROR) || (info_file != stderr))
 
@@ -192,7 +194,6 @@ void my_end(int infoflag) {
                my_stream_opened);
       my_message_stderr(EE_OPEN_WARNING, ebuff, MYF(0));
       DBUG_PRINT("error", ("%s", ebuff));
-      my_print_open_files();
     }
   }
   my_error_unregister_all();
@@ -350,12 +351,12 @@ static void win_init_registry() {
   }
 }
 
-  /*------------------------------------------------------------------
-    Name: CheckForTcpip| Desc: checks if tcpip has been installed on system
-    According to Microsoft Developers documentation the first registry
-    entry should be enough to check if TCP/IP is installed, but as expected
-    this doesn't work on all Win32 machines :(
-  ------------------------------------------------------------------*/
+/*------------------------------------------------------------------
+  Name: CheckForTcpip| Desc: checks if tcpip has been installed on system
+  According to Microsoft Developers documentation the first registry
+  entry should be enough to check if TCP/IP is installed, but as expected
+  this doesn't work on all Win32 machines :(
+------------------------------------------------------------------*/
 
 #define TCPIPKEY "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters"
 #define WINSOCK2KEY "SYSTEM\\CurrentControlSet\\Services\\Winsock2\\Parameters"
@@ -404,7 +405,7 @@ static bool win32_init_tcp_ip() {
 Windows specific initialization of my_sys functions, resources and variables
 */
 static void my_win_init() {
-  DBUG_ENTER("my_win_init");
+  DBUG_TRACE;
 
   /* this is required to make crt functions return -1 appropriately */
   _set_invalid_parameter_handler(my_parameter_handler);
@@ -421,7 +422,8 @@ static void my_win_init() {
 
   win_init_registry();
   win32_init_tcp_ip();
-  DBUG_VOID_RETURN;
+
+  MyWinfileInit();
 }
 #endif /* _WIN32 */
 
@@ -431,17 +433,15 @@ PSI_stage_info stage_waiting_for_table_level_lock = {
 PSI_stage_info stage_waiting_for_disk_space = {0, "Waiting for disk space", 0,
                                                PSI_DOCUMENT_ME};
 
-PSI_mutex_key key_BITMAP_mutex, key_IO_CACHE_append_buffer_lock,
-    key_IO_CACHE_SHARE_mutex, key_KEY_CACHE_cache_lock, key_THR_LOCK_charset,
-    key_THR_LOCK_heap, key_THR_LOCK_lock, key_THR_LOCK_malloc,
-    key_THR_LOCK_mutex, key_THR_LOCK_myisam, key_THR_LOCK_net,
-    key_THR_LOCK_open, key_THR_LOCK_threads, key_TMPDIR_mutex,
-    key_THR_LOCK_myisam_mmap;
+PSI_mutex_key key_IO_CACHE_append_buffer_lock, key_IO_CACHE_SHARE_mutex,
+    key_KEY_CACHE_cache_lock, key_THR_LOCK_charset, key_THR_LOCK_heap,
+    key_THR_LOCK_lock, key_THR_LOCK_malloc, key_THR_LOCK_mutex,
+    key_THR_LOCK_myisam, key_THR_LOCK_net, key_THR_LOCK_open,
+    key_THR_LOCK_threads, key_TMPDIR_mutex, key_THR_LOCK_myisam_mmap;
 
 #ifdef HAVE_PSI_MUTEX_INTERFACE
 
 static PSI_mutex_info all_mysys_mutexes[] = {
-    {&key_BITMAP_mutex, "BITMAP::mutex", 0, 0, PSI_DOCUMENT_ME},
     {&key_IO_CACHE_append_buffer_lock, "IO_CACHE::append_buffer_lock", 0, 0,
      PSI_DOCUMENT_ME},
     {&key_IO_CACHE_SHARE_mutex, "IO_CACHE::SHARE_mutex", 0, 0, PSI_DOCUMENT_ME},
@@ -511,6 +511,8 @@ static PSI_memory_info all_mysys_memory[] = {
      PSI_DOCUMENT_ME},
     {&key_memory_win_PACL, "win_PACL", 0, 0, PSI_DOCUMENT_ME},
     {&key_memory_win_IP_ADAPTER_ADDRESSES, "win_IP_ADAPTER_ADDRESSES", 0, 0,
+     PSI_DOCUMENT_ME},
+    {&key_memory_win_handle_info, "win_handle_to_fd_mapping", 0, 0,
      PSI_DOCUMENT_ME},
 #endif
 

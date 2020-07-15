@@ -48,9 +48,6 @@ ps_trace_thread
 ps_truncate_all_tables
 statement_performance_analyzer
 table_exists
-# Now drop functions and make sure re-install is done
-DROP FUNCTION sys.format_bytes;
-DROP FUNCTION sys.format_time;
 # restart:--upgrade=FORCE
 SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = 'sys' AND ROUTINE_TYPE = 'FUNCTION';
 ROUTINE_NAME
@@ -220,12 +217,18 @@ MODIFY User char(16) NOT NULL default '';
 ALTER TABLE mysql.procs_priv
 MODIFY User char(16) binary DEFAULT '' NOT NULL,
 MODIFY Grantor char(77) DEFAULT '' NOT NULL;
+Warnings:
+Warning	1287	'BINARY as attribute of a type' is deprecated and will be removed in a future release. Please use a CHARACTER SET clause with _bin collation instead
 #
 # Bug #21762656 AFTER RUNNING MYSQL_UPGRADE PROXIES_PRIV USER COLUMNS
 # ARE NOT UPDATED TO 32
 #
 ALTER TABLE mysql.proxies_priv MODIFY User char(16) binary DEFAULT '' NOT NULL;
+Warnings:
+Warning	1287	'BINARY as attribute of a type' is deprecated and will be removed in a future release. Please use a CHARACTER SET clause with _bin collation instead
 ALTER TABLE mysql.proxies_priv MODIFY Proxied_user char(16) binary DEFAULT '' NOT NULL;
+Warnings:
+Warning	1287	'BINARY as attribute of a type' is deprecated and will be removed in a future release. Please use a CHARACTER SET clause with _bin collation instead
 ALTER TABLE mysql.proxies_priv MODIFY Grantor char(77) DEFAULT '' NOT NULL;
 # Tables with user name column downgraded to 5.6, now run mysql_upgrade
 # restart:--upgrade=FORCE --sql-mode=ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION

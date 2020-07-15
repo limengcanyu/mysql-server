@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -57,11 +57,11 @@ class Spatial_reference_system;
 }  // namespace dd
 
 bool Srs_fetcher::lock(gis::srid_t srid, enum_mdl_type lock_type) {
-  DBUG_ENTER("lock_srs");
+  DBUG_TRACE;
   DBUG_ASSERT(srid != 0);
 
   char id_str[11];  // uint32 => max 10 digits + \0
-  int10_to_str(srid, id_str, 10);
+  longlong10_to_str(srid, id_str, 10);
 
   MDL_request mdl_request;
   mdl_request.init_with_source(MDL_key::SRID, "", id_str, lock_type,
@@ -70,11 +70,11 @@ bool Srs_fetcher::lock(gis::srid_t srid, enum_mdl_type lock_type) {
                                       m_thd->variables.lock_wait_timeout)) {
     /* purecov: begin inspected */
     // If locking fails, an error has already been flagged.
-    DBUG_RETURN(true);
+    return true;
     /* purecov: end */
   }
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 bool Srs_fetcher::acquire(gis::srid_t srid,
@@ -106,20 +106,12 @@ bool Srs_fetcher::srs_exists(THD *thd, gis::srid_t srid, bool *exists) {
   return false;
 }
 
-/**
-  Merge all components as appropriate so that the object contains only
-  components that don't overlap.
-
-  @tparam Coordsys Coordinate system type, specified using those defined in
-          boost::geometry::cs.
-  @param[out] pnull_value takes back null_value set during the operation.
- */
 template <typename Coordsys>
 void BG_geometry_collection::merge_components(bool *pnull_value) {
   if (is_comp_no_overlapped()) return;
 
   POS pos;
-  Item_func_st_union ifsu(pos, NULL, NULL);
+  Item_func_st_union ifsu(pos, nullptr, nullptr);
   bool do_again = true;
   uint32 last_composition[6] = {0}, num_unchanged_composition = 0;
   size_t last_num_geos = 0;
@@ -307,7 +299,7 @@ class Rtree_entry_compare {
 template <typename Coordsys>
 bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
                                            bool *pnull_value) {
-  Geometry *gres = NULL;
+  Geometry *gres = nullptr;
   bool has_new = false;
   bool &null_value = *pnull_value;
   Pointer_vector<Geometry> added;
@@ -349,7 +341,7 @@ bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
     for (Rtree_result::iterator j = rtree_result.begin();
          j != rtree_result.end(); ++j) {
       Geometry *geom2 = m_geos[j->second];
-      if (*i == geom2 || geom2 == NULL) continue;
+      if (*i == geom2 || geom2 == nullptr) continue;
 
       // Equals is much easier and faster to check, so check it first.
       if (Item_func_spatial_rel::bg_geo_relation_check(
@@ -379,7 +371,7 @@ bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
       if (Item_func_spatial_rel::bg_geo_relation_check(
               geom2, *i, Item_func::SP_WITHIN_FUNC, &null_value) &&
           !null_value) {
-        m_geos[j->second] = NULL;
+        m_geos[j->second] = nullptr;
         continue;
       }
 
@@ -397,8 +389,8 @@ bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
       */
       char d11 = (*i)->feature_dimension();
       char d12 = geom2->feature_dimension();
-      Geometry *geom_d1 = NULL;
-      Geometry *geom_d2 = NULL;
+      Geometry *geom_d1 = nullptr;
+      Geometry *geom_d2 = nullptr;
       bool is_linear_areal = false;
 
       if (((d11 == 1 && d12 == 2) || (d12 == 1 && d11 == 2))) {
@@ -436,20 +428,20 @@ bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
         null_value = ifsu->null_value;
 
         if (null_value) {
-          if (gres != NULL && gres != *i && gres != geom2) delete gres;
+          if (gres != nullptr && gres != *i && gres != geom2) delete gres;
           stop_it = true;
           break;
         }
 
         if (gres != *i) *i = NULL;
-        if (gres != geom2) m_geos[j->second] = NULL;
-        if (gres != NULL && gres != *i && gres != geom2) {
+        if (gres != geom2) m_geos[j->second] = nullptr;
+        if (gres != nullptr && gres != *i && gres != geom2) {
           added.push_back(gres);
           String tmp_wkbbuf;
           added_wkbbufs.push_back(tmp_wkbbuf);
           added_wkbbufs.back().takeover(wkbres);
           has_new = true;
-          gres = NULL;
+          gres = nullptr;
         }
         /*
           Done with *i, it's either adopted, or removed or merged to a new
@@ -470,7 +462,7 @@ bool BG_geometry_collection::merge_one_run(Item_func_st_union *ifsu,
   }  // for (*i)
 
   // Remove deleted Geometry object pointers, then append new components if any.
-  Is_target_geometry pred(NULL);
+  Is_target_geometry pred(nullptr);
   Geometry_list::iterator jj =
       std::remove_if(m_geos.begin(), m_geos.end(), pred);
   m_geos.resize(jj - m_geos.begin());
@@ -509,26 +501,27 @@ bool post_fix_result(BG_result_buf_mgr *resbuf_mgr, BG_geotype &geout,
   if (geout.get_type() == Geometry::wkb_multilinestring ||
       geout.get_type() == Geometry::wkb_multipolygon)
     geout.set_components_no_overlapped(true);
-  if (geout.get_ptr() == NULL) return true;
+  if (geout.get_ptr() == nullptr) return true;
   if (res) {
-    const char *resptr = geout.get_cptr() - GEOM_HEADER_SIZE;
+    char *resptr = geout.get_cptr() - GEOM_HEADER_SIZE;
     size_t len = geout.get_nbytes();
 
     /*
       The resptr buffer is now owned by resbuf_mgr and used by res, resptr
       will be released properly by resbuf_mgr.
      */
-    resbuf_mgr->add_buffer(const_cast<char *>(resptr));
+    resbuf_mgr->add_buffer(resptr);
     /*
-      Pass resptr as const pointer so that the memory space won't be reused
-      by res object. Reuse is forbidden because the memory comes from BG
-      operations and will be freed upon next same val_str call.
+      The memory for the result is owned by a BG_result_buf_mgr,
+      so use String::set(char*, size_t, const CHARSET_INFO)
+      which points the internall buffer to the input argument,
+      and sets m_is_alloced = false, signifying the String object
+      does not own the buffer.
     */
     res->set(resptr, len + GEOM_HEADER_SIZE, &my_charset_bin);
 
     // Prefix the GEOMETRY header.
-    write_geometry_header(const_cast<char *>(resptr), geout.get_srid(),
-                          geout.get_geotype());
+    write_geometry_header(resptr, geout.get_srid(), geout.get_geotype());
 
     /*
       Give up ownership because the buffer may have to live longer than
@@ -586,7 +579,7 @@ bool is_empty_geocollection(const Geometry *g) {
 }
 
 bool is_empty_geocollection(const String &wkbres) {
-  if (wkbres.ptr() == NULL) return true;
+  if (wkbres.ptr() == nullptr) return true;
 
   uint32 geotype = uint4korr(wkbres.ptr() + SRID_SIZE + 1);
 

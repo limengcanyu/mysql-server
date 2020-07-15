@@ -1,69 +1,92 @@
 /*
-	Copyright (c) 2004-2011, The Dojo Foundation All Rights Reserved.
+	Copyright (c) 2004-2016, The JS Foundation All Rights Reserved.
 	Available via Academic Free License >= 2.1 OR the modified BSD license.
 	see: http://dojotoolkit.org/license for details
 */
 
 //>>built
-define("dojo/dom-prop",["exports","./_base/kernel","./_base/sniff","./_base/lang","./dom","./dom-style","./dom-construct","./_base/connect"],function(_1,_2,_3,_4,_5,_6,_7,_8){
-var _9={},_a=0,_b=_2._scopeName+"attrid";
-var _c={col:1,colgroup:1,table:1,tbody:1,tfoot:1,thead:1,tr:1,title:1};
-_1.names={"class":"className","for":"htmlFor",tabindex:"tabIndex",readonly:"readOnly",colspan:"colSpan",frameborder:"frameBorder",rowspan:"rowSpan",valuetype:"valueType"};
-_1.get=function getProp(_d,_e){
-_d=_5.byId(_d);
-var lc=_e.toLowerCase(),_f=_1.names[lc]||_e;
-return _d[_f];
-};
-_1.set=function setProp(_10,_11,_12){
-_10=_5.byId(_10);
-var l=arguments.length;
-if(l==2&&typeof _11!="string"){
-for(var x in _11){
-_1.set(_10,x,_11[x]);
-}
-return _10;
-}
-var lc=_11.toLowerCase(),_13=_1.names[lc]||_11;
-if(_13=="style"&&typeof _12!="string"){
-_6.style(_10,_12);
-return _10;
-}
-if(_13=="innerHTML"){
-if(_3("ie")&&_10.tagName.toLowerCase() in _c){
-_7.empty(_10);
-_10.appendChild(_7.toDom(_12,_10.ownerDocument));
+define("dojo/dom-prop",["exports","./_base/kernel","./sniff","./_base/lang","./dom","./dom-style","./dom-construct","./_base/connect"],function(_1,_2,_3,_4,_5,_6,_7,_8){
+var _9={},_a=1,_b=_2._scopeName+"attrid";
+_3.add("dom-textContent",function(_c,_d,_e){
+return "textContent" in _e;
+});
+_1.names={"class":"className","for":"htmlFor",tabindex:"tabIndex",readonly:"readOnly",colspan:"colSpan",frameborder:"frameBorder",rowspan:"rowSpan",textcontent:"textContent",valuetype:"valueType"};
+function _f(_10){
+var _11="",ch=_10.childNodes;
+for(var i=0,n;n=ch[i];i++){
+if(n.nodeType!=8){
+if(n.nodeType==1){
+_11+=_f(n);
 }else{
-_10[_13]=_12;
+_11+=n.nodeValue;
 }
-return _10;
 }
-if(_4.isFunction(_12)){
-var _14=_10[_b];
-if(!_14){
-_14=_a++;
-_10[_b]=_14;
 }
-if(!_9[_14]){
-_9[_14]={};
+return _11;
+};
+_1.get=function getProp(_12,_13){
+_12=_5.byId(_12);
+var lc=_13.toLowerCase(),_14=_1.names[lc]||_13;
+if(_14=="textContent"&&!_3("dom-textContent")){
+return _f(_12);
 }
-var h=_9[_14][_13];
+return _12[_14];
+};
+_1.set=function setProp(_15,_16,_17){
+_15=_5.byId(_15);
+var l=arguments.length;
+if(l==2&&typeof _16!="string"){
+for(var x in _16){
+_1.set(_15,x,_16[x]);
+}
+return _15;
+}
+var lc=_16.toLowerCase(),_18=_1.names[lc]||_16;
+if(_18=="style"&&typeof _17!="string"){
+_6.set(_15,_17);
+return _15;
+}
+if(_18=="innerHTML"){
+if(_3("ie")&&_15.tagName.toLowerCase() in {col:1,colgroup:1,table:1,tbody:1,tfoot:1,thead:1,tr:1,title:1}){
+_7.empty(_15);
+_15.appendChild(_7.toDom(_17,_15.ownerDocument));
+}else{
+_15[_18]=_17;
+}
+return _15;
+}
+if(_18=="textContent"&&!_3("dom-textContent")){
+_7.empty(_15);
+_15.appendChild(_15.ownerDocument.createTextNode(_17));
+return _15;
+}
+if(_4.isFunction(_17)){
+var _19=_15[_b];
+if(!_19){
+_19=_a++;
+_15[_b]=_19;
+}
+if(!_9[_19]){
+_9[_19]={};
+}
+var h=_9[_19][_18];
 if(h){
 _8.disconnect(h);
 }else{
 try{
-delete _10[_13];
+delete _15[_18];
 }
 catch(e){
 }
 }
-if(_12){
-_9[_14][_13]=_8.connect(_10,_13,_12);
+if(_17){
+_9[_19][_18]=_8.connect(_15,_18,_17);
 }else{
-_10[_13]=null;
+_15[_18]=null;
 }
-return _10;
+return _15;
 }
-_10[_13]=_12;
-return _10;
+_15[_18]=_17;
+return _15;
 };
 });

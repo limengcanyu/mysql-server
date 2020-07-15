@@ -1,4 +1,3 @@
-//>>built
 define("dojox/dtl/tag/loop", [
 	"dojo/_base/lang",
 	"dojo/_base/array",
@@ -6,13 +5,13 @@ define("dojox/dtl/tag/loop", [
 	"../_base",
 	"dojox/string/tokenize"
 ], function(lang,array,json,dd,Tokenize){
-	/*=====
-		Tokenize = dojox.string.tokenize;
-		dd = dojox.dtl;
-	=====*/
-	lang.getObject("dojox.dtl.tag.loop", true);
 
-	var ddtl = dd.tag.loop;
+	var ddtl = lang.getObject("tag.loop", true, dd);
+	/*=====
+	 ddtl = {
+	 	// TODO: summary
+	 };
+	 =====*/
 
 	ddtl.CycleNode = lang.extend(function(cyclevars, name, text, shared){
 		this.cyclevars = cyclevars;
@@ -136,7 +135,8 @@ define("dojox/dtl/tag/loop", [
 
 	lang.mixin(ddtl, {
 		cycle: function(parser, token){
-			// summary: Cycle among the given strings each time this tag is encountered
+			// summary:
+			//		Cycle among the given strings each time this tag is encountered
 			var args = token.split_contents();
 
 			if(args.length < 2){
@@ -198,5 +198,6 @@ define("dojox/dtl/tag/loop", [
 			return new ddtl.RegroupNode(expression, key, alias);
 		}
 	});
-	return dojox.dtl.tag.loop;
+
+	return ddtl;
 });

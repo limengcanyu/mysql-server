@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2020 Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -69,8 +69,6 @@
 #define ndb_master_failure 1
 #define NO_NODE_GROUP int(-1)
 #define FREE_NODE_GROUP 65535
-#define MAX_NDB_NODES 49
-#define MAX_NDB_NODE_GROUPS 48
 
 #define TEST_FRM_DATA_SIZE 14000
 
@@ -360,7 +358,8 @@ int runSetDropTableConcurrentLCP2(NDBT_Context *ctx, NDBT_Step *step)
  *
  * Test:
  *    Creation of the (empty) table 'TRANSACTION'
- *    should succeed even if 'DbIsFull'. However, 
+ *    should succeed even if 'DbIsFull'. Or it could fail
+ *    due to memory for hash index.  If succeed however,
  *    insertion of the first row should fail.
  *
  * Postcond:
@@ -395,9 +394,24 @@ int runCreateTableWhenDbIsFull(NDBT_Context* ctx, NDBT_Step* step){
       break;
     }
 
-    // Create (empty) table in db, should succeed even if 'DbIsFull'
-    if (NDBT_Tables::createTable(pNdb, pTab->getName()) != 0){
-      ndbout << tabName << " was not created when DB is full"<< endl;
+    /*
+     * Create (empty) table in db, should succeed even if 'DbIsFull' or fail
+     * with 625:
+     * Out of memory in Ndb Kernel, hash index part (increase DataMemory).
+     */
+    if (NDBT_Tables::createTable(pNdb, pTab->getName()) != 0)
+    {
+      if (pNdb->getDictionary()->getNdbError().code == 625)
+      {
+        /*
+         * Fail due to really out of data memory, not even a hash index page
+         * available.
+         */
+        result = NDBT_OK;
+        break;
+      }
+
+      ndbout << tabName << " was not created when DB is full" << endl;
       result = NDBT_FAILED;
       break;
     }
@@ -1166,7 +1180,8 @@ runCreateMaxTables(NDBT_Context* ctx, NDBT_Step* step)
     if (newTab.createTableInDb(pNdb) != 0) {
       ndbout << tabName << " could not be created: "
              << pDic->getNdbError() << endl;
-      if (pDic->getNdbError().code == 707 ||
+      if (pDic->getNdbError().code == 625 ||
+          pDic->getNdbError().code == 707 ||
           pDic->getNdbError().code == 708 ||
           pDic->getNdbError().code == 826 ||
           pDic->getNdbError().code == 827 ||
@@ -2059,6 +2074,310 @@ runTableRenameSR(NDBT_Context* ctx, NDBT_Step* step){
 }
 
 /*
+  Run rename column
+*/
+int
+runColumnRename(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+
+  Ndb* pNdb = GETNDB(step);
+  NdbDictionary::Dictionary* dict = pNdb->getDictionary();
+  int records = ctx->getNumRecords();
+  const int loops = ctx->getNumLoops();
+
+  ndbout << "|- " << ctx->getTab()->getName() << endl;
+
+  NdbDictionary::Table myTab= *(ctx->getTab());
+
+  for (int l = 0; l < loops && result == NDBT_OK ; l++){
+    // Try to create table in db
+
+    if (NDBT_Tables::createTable(pNdb, myTab.getName()) != 0){
+      return NDBT_FAILED;
+    }
+
+    // Verify that table is in db
+    const NdbDictionary::Table* pTab2 =
+      NDBT_Table::discoverTableFromDb(pNdb, myTab.getName());
+    if (pTab2 == NULL){
+      ndbout << myTab.getName() << " was not found in DB"<< endl;
+      return NDBT_FAILED;
+    }
+    ctx->setTab(pTab2);
+
+    /*
+      Check that table already has a varpart, otherwise add attr is
+      not possible.
+    */
+    if (pTab2->getForceVarPart() == false)
+    {
+      const NdbDictionary::Column *col;
+      for (Uint32 i= 0; (col= pTab2->getColumn(i)) != 0; i++)
+      {
+        if (col->getStorageType() == NDB_STORAGETYPE_MEMORY &&
+            (col->getDynamic() || col->getArrayType() != NDB_ARRAYTYPE_FIXED))
+          break;
+      }
+      if (col == 0)
+      {
+        /* Alter table add attribute not applicable, just mark success. */
+        dict->dropTable(pTab2->getName());
+        break;
+      }
+    }
+
+    ndbout << "Load table" << endl;
+    // Load table
+    HugoTransactions beforeTrans(*ctx->getTab());
+    if (beforeTrans.loadTable(pNdb, records) != 0){
+      return NDBT_FAILED;
+    }
+    ndbout << "Load table completed" << endl;
+
+        // Add attributes to table.
+    BaseString pTabName(pTab2->getName());
+
+    const NdbDictionary::Table * oldTable = dict->getTable(pTabName.c_str());
+    if (oldTable) {
+      NdbDictionary::Table newTable= *oldTable;
+
+      NDBT_Attribute newcol1("NEWKOL1", NdbDictionary::Column::Unsigned, 1,
+                            false, true, 0,
+                            NdbDictionary::Column::StorageTypeMemory, true);
+      newTable.addColumn(newcol1);
+      CHECK2(dict->alterTable(*oldTable, newTable) == 0,
+	     "runColumnRename failed");
+      /* Need to purge old version and reload new version after alter table. */
+      dict->invalidateTable(pTabName.c_str());
+    }
+    else {
+      result = NDBT_FAILED;
+    }
+    ndbout << "Added column completed" << endl;
+    {
+      const NdbDictionary::Table* oldTable = dict->getTable(pTabName.c_str());
+      if (oldTable) {
+        NdbDictionary::Table newTable= *oldTable;
+        int colNum= newTable.getNoOfColumns()-1;
+        NdbDictionary::Column* addedCol= newTable.getColumn(colNum);
+        addedCol->setName("renamed_NEWKOL1");
+        CHECK2(dict->alterTable(*oldTable, newTable) == 0,
+               "runColumnRename failed");
+        /* Need to purge old version and reload new version after alter table. */
+        dict->invalidateTable(pTabName.c_str());
+      }
+      else {
+        result = NDBT_FAILED;
+        break;
+      }
+    }
+
+    ndbout << "Column rename completed" << endl;
+    {
+      const NdbDictionary::Table* pTab = dict->getTable(pTabName.c_str());
+      CHECK2(pTab != NULL, "Table not found");
+      HugoTransactions afterTrans(*pTab);
+
+      ndbout << "Checking renamed column" << endl;
+      const NdbDictionary::Column* addedCol= pTab->getColumn("renamed_NEWKOL1");
+      CHECK2((addedCol) && addedCol->getColumnNo() == pTab->getNoOfColumns()-1,
+             "runColumnRename failed");
+
+      ndbout << "delete...";
+      if (afterTrans.clearTable(pNdb) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "insert...";
+      if (afterTrans.loadTable(pNdb, records) != 0){
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "update...";
+      if (afterTrans.scanUpdateRecords(pNdb, records) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "delete...";
+      if (afterTrans.clearTable(pNdb) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+    }
+
+    // Drop table
+    dict->dropTable(pTabName.c_str());
+  }
+ end:
+
+  return result;
+}
+
+/*
+  Run rename column with restart
+*/
+int
+runColumnRenameSR(NDBT_Context* ctx, NDBT_Step* step){
+  int result = NDBT_OK;
+
+  Ndb* pNdb = GETNDB(step);
+  NdbDictionary::Dictionary* dict = pNdb->getDictionary();
+  int records = ctx->getNumRecords();
+  const int loops = ctx->getNumLoops();
+  NdbRestarter res;
+
+  ndbout << "|- " << ctx->getTab()->getName() << endl;
+
+  NdbDictionary::Table myTab= *(ctx->getTab());
+
+  for (int l = 0; l < loops && result == NDBT_OK ; l++){
+    // Try to create table in db
+
+    if (NDBT_Tables::createTable(pNdb, myTab.getName()) != 0){
+      return NDBT_FAILED;
+    }
+
+    // Verify that table is in db
+    const NdbDictionary::Table* pTab2 =
+      NDBT_Table::discoverTableFromDb(pNdb, myTab.getName());
+    if (pTab2 == NULL){
+      ndbout << myTab.getName() << " was not found in DB"<< endl;
+      return NDBT_FAILED;
+    }
+    ctx->setTab(pTab2);
+
+    /*
+      Check that table already has a varpart, otherwise add attr is
+      not possible.
+    */
+    if (pTab2->getForceVarPart() == false)
+    {
+      const NdbDictionary::Column *col;
+      for (Uint32 i= 0; (col= pTab2->getColumn(i)) != 0; i++)
+      {
+        if (col->getStorageType() == NDB_STORAGETYPE_MEMORY &&
+            (col->getDynamic() || col->getArrayType() != NDB_ARRAYTYPE_FIXED))
+          break;
+      }
+      if (col == 0)
+      {
+        /* Alter table add attribute not applicable, just mark success. */
+        dict->dropTable(pTab2->getName());
+        break;
+      }
+    }
+
+    ndbout << "Load table" << endl;
+    // Load table
+    HugoTransactions beforeTrans(*ctx->getTab());
+    if (beforeTrans.loadTable(pNdb, records) != 0){
+      return NDBT_FAILED;
+    }
+    ndbout << "Load table completed" << endl;
+
+        // Add attributes to table.
+    BaseString pTabName(pTab2->getName());
+
+    const NdbDictionary::Table * oldTable = dict->getTable(pTabName.c_str());
+    if (oldTable) {
+      NdbDictionary::Table newTable= *oldTable;
+
+      NDBT_Attribute newcol1("NEWKOL1", NdbDictionary::Column::Unsigned, 1,
+                            false, true, 0,
+                            NdbDictionary::Column::StorageTypeMemory, true);
+      newTable.addColumn(newcol1);
+      CHECK2(dict->alterTable(*oldTable, newTable) == 0,
+	     "runColumnRename failed");
+      /* Need to purge old version and reload new version after alter table. */
+      dict->invalidateTable(pTabName.c_str());
+    }
+    else {
+      result = NDBT_FAILED;
+    }
+    ndbout << "Added column completed" << endl;
+    {
+      const NdbDictionary::Table* oldTable = dict->getTable(pTabName.c_str());
+      if (oldTable) {
+        NdbDictionary::Table newTable= *oldTable;
+        int colNum= newTable.getNoOfColumns()-1;
+        NdbDictionary::Column* addedCol= newTable.getColumn(colNum);
+        addedCol->setName("renamed_NEWKOL1");
+        CHECK2(dict->alterTable(*oldTable, newTable) == 0,
+               "runColumnRename failed");
+        /* Need to purge old version and reload new version after alter table. */
+        dict->invalidateTable(pTabName.c_str());
+      }
+      else {
+        result = NDBT_FAILED;
+        break;
+      }
+    }
+
+    ndbout << "Column rename completed" << endl;
+    {
+      const NdbDictionary::Table* pTab = dict->getTable(pTabName.c_str());
+      CHECK2(pTab != NULL, "Table not found");
+      HugoTransactions afterTrans(*pTab);
+
+      ndbout_c("performing system restart");
+      CHECK2(res.restartAll(false, true, false) == 0,
+             "restart all failed");
+      CHECK2(res.waitClusterNoStart() == 0,
+             "waitClusterNoStart failed");
+      CHECK2(res.startAll() == 0,
+             "startAll failed");
+      CHECK2(res.waitClusterStarted() == 0,
+             "waitClusterStarted failed");
+
+      ndbout << "Checking renamed column" << endl;
+      pTab = dict->getTable(pTabName.c_str());
+      const NdbDictionary::Column* addedCol= pTab->getColumn("renamed_NEWKOL1");
+      CHECK2((addedCol) && addedCol->getColumnNo() == pTab->getNoOfColumns()-1,
+             "runColumnRename failed");
+
+      ndbout << "delete...";
+      if (afterTrans.clearTable(pNdb) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "insert...";
+      if (afterTrans.loadTable(pNdb, records) != 0){
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "update...";
+      if (afterTrans.scanUpdateRecords(pNdb, records) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+
+      ndbout << "delete...";
+      if (afterTrans.clearTable(pNdb) != 0)
+      {
+        return NDBT_FAILED;
+      }
+      ndbout << endl;
+    }
+
+    // Drop table
+    dict->dropTable(pTabName.c_str());
+  }
+ end:
+
+  return result;
+}
+
+/*
   Run online alter table add attributes.
  */
 int
@@ -2770,7 +3089,6 @@ runRestarts(NDBT_Context* ctx, NDBT_Step* step)
   };
   static int errlst_node[] = {
     7174,       // crash before sending DICT_LOCK_REQ
-    7176,       // pretend master does not support DICT lock
     7121,       // crash at receive START_PERMCONF
     0
   };
@@ -2807,7 +3125,7 @@ runRestarts(NDBT_Context* ctx, NDBT_Step* step)
       nodeIdList[nodeIdCnt++] = nodeId;
     }
 
-    if (numnodes >= 4 && myRandom48(2) == 0) {
+    if (numnodes >= 4 && (myRandom48(2) == 0) && (restarter.getNumNodeGroups() > 1)) {
       int rand = myRandom48(numnodes);
       int nodeId = restarter.getRandomNodeOtherNodeGroup(nodeIdList[0], rand);
       CHECK(nodeId != -1);
@@ -2865,14 +3183,6 @@ runRestarts(NDBT_Context* ctx, NDBT_Step* step)
 
       for (int i = 0; i < nodeIdCnt && nodeIdCnt == 1; i++) {
         err_node[i] = errlst_node[l % errcnt_node];
-
-        // 7176 - no DICT lock protection
-
-        if (err_node[i] == 7176) {
-          g_info << "1: no dict ops due to error insert "
-                 << err_node[i] << endl;
-          NR_ops = false;
-        }
       }
     }
 
@@ -9692,6 +10002,7 @@ runBug13416603(NDBT_Context* ctx, NDBT_Step* step)
 
   if (pIdx == 0)
   {
+    // Exit if there aren't any indexes in the table
     return NDBT_OK;
   }
 
@@ -11995,6 +12306,14 @@ TESTCASE("TableRenameSR",
 	 "Test that table rename can handle system restart"){
   INITIALIZER(runTableRenameSR);
 }
+TESTCASE("ColumnRename",
+	 "Test basic column rename"){
+  INITIALIZER(runColumnRename);
+}
+TESTCASE("ColumnRenameSR",
+	 "Test that column rename can handle system restart"){
+  INITIALIZER(runColumnRenameSR);
+}
 TESTCASE("DictionaryPerf",
 	 ""){
   INITIALIZER(runTestDictionaryPerf);
@@ -12272,7 +12591,7 @@ TESTCASE("CreateManyDataFiles", "Test lack of DiskPageBufferMemory "
   FINALIZER(changeStartDiskPageBufMem);
 }
 
-NDBT_TESTSUITE_END(testDict);
+NDBT_TESTSUITE_END(testDict)
 
 int main(int argc, const char** argv){
   ndb_init();

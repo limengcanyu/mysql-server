@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2014, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2014, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -44,7 +44,6 @@ long innobase_fill_factor;
 Note: we commit all mtrs on failure.
 @return error code. */
 dberr_t PageBulk::init() {
-  mtr_t *mtr;
   buf_block_t *new_block;
   page_t *new_page;
   page_zip_des_t *new_page_zip;
@@ -54,9 +53,14 @@ dberr_t PageBulk::init() {
 
   m_heap = mem_heap_create(1000);
 
-  mtr = static_cast<mtr_t *>(mem_heap_alloc(m_heap, sizeof(mtr_t)));
+  auto mtr_alloc = mem_heap_alloc(m_heap, sizeof(mtr_t));
+  mtr_t *mtr = new (mtr_alloc) mtr_t();
   mtr_start(mtr);
-  mtr_x_lock(dict_index_get_lock(m_index), mtr);
+
+  if (!dict_index_is_online_ddl(m_index)) {
+    mtr_x_lock(dict_index_get_lock(m_index), mtr);
+  }
+
   mtr_set_log_mode(mtr, MTR_LOG_NO_REDO);
   mtr_set_flush_observer(mtr, m_flush_observer);
 
@@ -163,10 +167,9 @@ dberr_t PageBulk::init() {
 @param[in]  tuple     tuple to insert
 @param[in]  big_rec   external record
 @param[in]  rec_size  record size
-@param[in]  n_ext     number of externally stored columns
 @return error code */
 dberr_t PageBulk::insert(const dtuple_t *tuple, const big_rec_t *big_rec,
-                         ulint rec_size, ulint n_ext) {
+                         ulint rec_size) {
   ulint *offsets = nullptr;
 
   DBUG_EXECUTE_IF("BtrBulk_insert_inject_error", return DB_INTERRUPTED;);
@@ -174,7 +177,7 @@ dberr_t PageBulk::insert(const dtuple_t *tuple, const big_rec_t *big_rec,
   /* Convert tuple to record. */
   byte *rec_mem = static_cast<byte *>(mem_heap_alloc(m_heap, rec_size));
 
-  rec_t *rec = rec_convert_dtuple_to_rec(rec_mem, m_index, tuple, n_ext);
+  rec_t *rec = rec_convert_dtuple_to_rec(rec_mem, m_index, tuple);
   offsets = rec_get_offsets(rec, m_index, offsets, ULINT_UNDEFINED, &m_heap);
 
   /* Insert the record.*/
@@ -210,7 +213,11 @@ void PageBulk::insert(const rec_t *rec, ulint *offsets) {
     ulint *old_offsets =
         rec_get_offsets(old_rec, m_index, nullptr, ULINT_UNDEFINED, &m_heap);
 
-    ut_ad(cmp_rec_rec(rec, old_rec, offsets, old_offsets, m_index) > 0);
+    ut_ad(cmp_rec_rec(rec, old_rec, offsets, old_offsets, m_index,
+                      page_is_spatial_non_leaf(old_rec, m_index)) > 0 ||
+          (m_index->is_multi_value() &&
+           cmp_rec_rec(rec, old_rec, offsets, old_offsets, m_index,
+                       page_is_spatial_non_leaf(old_rec, m_index)) >= 0));
   }
 
   m_total_data += rec_size;
@@ -605,7 +612,11 @@ void PageBulk::release() {
 /** Start mtr and latch the block */
 void PageBulk::latch() {
   mtr_start(m_mtr);
-  mtr_x_lock(dict_index_get_lock(m_index), m_mtr);
+
+  if (!dict_index_is_online_ddl(m_index)) {
+    mtr_x_lock(dict_index_get_lock(m_index), m_mtr);
+  }
+
   mtr_set_log_mode(m_mtr, MTR_LOG_NO_REDO);
   mtr_set_flush_observer(m_mtr, m_flush_observer);
 
@@ -628,6 +639,15 @@ void PageBulk::latch() {
 
   ut_ad(m_cur_rec > m_page && m_cur_rec < m_heap_top);
 }
+
+#ifdef UNIV_DEBUG
+/* Check if an index is locked */
+bool PageBulk::isIndexXLocked() {
+  return (dict_index_is_online_ddl(m_index) &&
+          mtr_memo_contains_flagged(m_mtr, dict_index_get_lock(m_index),
+                                    MTR_MEMO_X_LOCK | MTR_MEMO_SX_LOCK));
+}
+#endif  // UNIV_DEBUG
 
 /** Split a page
 @param[in]	page_bulk	page to split
@@ -695,6 +715,15 @@ dberr_t BtrBulk::pageCommit(PageBulk *page_bulk, PageBulk *next_page_bulk,
     page_bulk->setNext(FIL_NULL);
   }
 
+  /* Assert that no locks are held during bulk load operation
+  in case of a online ddl operation. Insert thread acquires index->lock
+  to check the online status of index. During bulk load index,
+  there are no concurrent insert or reads and hence, there is no
+  need to acquire a lock in that case. */
+  ut_ad(!page_bulk->isIndexXLocked());
+
+  DBUG_EXECUTE_IF("innodb_bulk_load_sleep", os_thread_sleep(1000000););
+
   /* Compress page if it's a compressed table. */
   if (page_bulk->isTableCompressed() && !page_bulk->compress()) {
     return (pageSplit(page_bulk, next_page_bulk));
@@ -740,6 +769,7 @@ BtrBulk::BtrBulk(dict_index_t *index, trx_id_t trx_id, FlushObserver *observer)
   ut_ad(m_flush_observer != nullptr);
 #ifdef UNIV_DEBUG
   fil_space_inc_redo_skipped_count(m_index->space);
+  m_index_online = m_index->online_status;
 #endif /* UNIV_DEBUG */
 }
 
@@ -860,10 +890,9 @@ dberr_t BtrBulk::prepareSpace(PageBulk *&page_bulk, ulint level,
 @param[in]  big_rec     big record vector, could be nullptr if there is no
                         data to be stored externally.
 @param[in]  rec_size    record size
-@param[in]  n_ext       number of externally stored columns
 @return error code */
 dberr_t BtrBulk::insert(PageBulk *page_bulk, dtuple_t *tuple,
-                        big_rec_t *big_rec, ulint rec_size, ulint n_ext) {
+                        big_rec_t *big_rec, ulint rec_size) {
   dberr_t err = DB_SUCCESS;
 
   if (big_rec != nullptr) {
@@ -879,7 +908,7 @@ dberr_t BtrBulk::insert(PageBulk *page_bulk, dtuple_t *tuple,
     }
   }
 
-  err = page_bulk->insert(tuple, big_rec, rec_size, n_ext);
+  err = page_bulk->insert(tuple, big_rec, rec_size);
 
   if (big_rec != nullptr) {
     /* Restore latches */
@@ -915,6 +944,7 @@ dberr_t BtrBulk::insert(dtuple_t *tuple, ulint level) {
       return (err);
     }
 
+    DEBUG_SYNC_C("bulk_load_insert");
     m_page_bulks->push_back(new_page_bulk);
     ut_ad(level + 1 == m_page_bulks->size());
     m_root_level = level;
@@ -934,19 +964,18 @@ dberr_t BtrBulk::insert(dtuple_t *tuple, ulint level) {
                          dtuple_get_info_bits(tuple) | REC_INFO_MIN_REC_FLAG);
   }
 
-  ulint n_ext = 0;
-  ulint rec_size = rec_get_converted_size(m_index, tuple, n_ext);
+  ulint rec_size = rec_get_converted_size(m_index, tuple);
   big_rec_t *big_rec = nullptr;
 
   if (page_bulk->needExt(tuple, rec_size)) {
     /* The record is so big that we have to store some fields
     externally on separate database pages */
-    big_rec = dtuple_convert_big_rec(m_index, 0, tuple, &n_ext);
+    big_rec = dtuple_convert_big_rec(m_index, nullptr, tuple);
     if (big_rec == nullptr) {
       return (DB_TOO_BIG_RECORD);
     }
 
-    rec_size = rec_get_converted_size(m_index, tuple, n_ext);
+    rec_size = rec_get_converted_size(m_index, tuple);
   }
 
   if (page_bulk->isTableCompressed() && page_zip_is_too_big(m_index, tuple)) {
@@ -968,11 +997,11 @@ dberr_t BtrBulk::insert(dtuple_t *tuple, ulint level) {
     }
   });
 
-  err = insert(page_bulk, tuple, big_rec, rec_size, n_ext);
+  err = insert(page_bulk, tuple, big_rec, rec_size);
 
 func_exit:
   if (big_rec != nullptr) {
-    dtuple_convert_back_big_rec(m_index, tuple, big_rec);
+    dtuple_convert_back_big_rec(tuple, big_rec);
   }
 
   return (err);
@@ -1013,6 +1042,11 @@ if no error occurs.
 dberr_t BtrBulk::finish(dberr_t err) {
   ut_ad(m_page_bulks);
   ut_ad(!m_index->table->is_temporary());
+
+#ifdef UNIV_DEBUG
+  /* Assert that the index online status has not changed */
+  ut_ad(m_index->online_status == m_index_online);
+#endif  // UNIV_DEBUG
 
   page_no_t last_page_no = FIL_NULL;
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -25,6 +25,7 @@
 #include "mysql/gcs/gcs_group_identifier.h"
 #include "mysql/gcs/gcs_member_identifier.h"
 #include "mysql/gcs/gcs_message.h"
+#include "template_utils.h"
 
 #include <string>
 #include <vector>
@@ -59,21 +60,21 @@ TEST_F(MessageEncodingDecodingTest, EncodeDecodeTest) {
   message_data32->append_to_header(uint32_buf, n32);
   message_data32->append_to_payload(uint32_buf, n32);
 
-  uchar *buffer16 = NULL;
+  uchar *buffer16 = nullptr;
   uint64_t buffer16_len = 0;
   message_data16->encode(&buffer16, &buffer16_len);
   message_data16->release_ownership();
 
-  uchar *buffer32 = NULL;
+  uchar *buffer32 = nullptr;
   uint64_t buffer32_len = 0;
   message_data32->encode(&buffer32, &buffer32_len);
   message_data32->release_ownership();
 
-  EXPECT_TRUE(buffer16 != NULL);
+  EXPECT_TRUE(buffer16 != nullptr);
   EXPECT_EQ(WIRE_HEADER_LEN_SIZE + WIRE_PAYLOAD_LEN_SIZE + n16 * 2,
             buffer16_len);
 
-  EXPECT_TRUE(buffer32 != NULL);
+  EXPECT_TRUE(buffer32 != nullptr);
   EXPECT_EQ(WIRE_HEADER_LEN_SIZE + WIRE_PAYLOAD_LEN_SIZE + n32 * 2,
             buffer32_len);
 
@@ -111,7 +112,7 @@ TEST_F(MessageDataTest, AppendtoHeaderTest) {
   std::string test_data("to_append");
   Gcs_message_data *message_data = new Gcs_message_data(test_data.length(), 0);
 
-  message_data->append_to_header((uchar *)test_data.c_str(),
+  message_data->append_to_header(pointer_cast<const uchar *>(test_data.c_str()),
                                  test_data.length());
 
   EXPECT_EQ(test_data.length(), message_data->get_header_length());
@@ -123,8 +124,8 @@ TEST_F(MessageDataTest, AppendtoPayloadTest) {
   std::string test_data("to_append");
   Gcs_message_data *message_data = new Gcs_message_data(0, test_data.length());
 
-  message_data->append_to_payload((uchar *)test_data.c_str(),
-                                  test_data.length());
+  message_data->append_to_payload(
+      pointer_cast<const uchar *>(test_data.c_str()), test_data.length());
 
   EXPECT_EQ(test_data.length(), message_data->get_payload_length());
   EXPECT_EQ((size_t)0, message_data->get_header_length());
@@ -137,18 +138,18 @@ TEST_F(MessageDataTest, EncodeTest) {
   Gcs_message_data *message_data =
       new Gcs_message_data(test_header.length(), test_payload.length());
 
-  message_data->append_to_header((uchar *)test_header.c_str(),
-                                 test_header.length());
+  message_data->append_to_header(
+      pointer_cast<const uchar *>(test_header.c_str()), test_header.length());
 
-  message_data->append_to_payload((uchar *)test_payload.c_str(),
-                                  test_payload.length());
+  message_data->append_to_payload(
+      pointer_cast<const uchar *>(test_payload.c_str()), test_payload.length());
 
-  uchar *buffer = NULL;
+  uchar *buffer = nullptr;
   uint64_t buffer_len = 0;
   message_data->encode(&buffer, &buffer_len);
   message_data->release_ownership();
 
-  EXPECT_TRUE(buffer != NULL);
+  EXPECT_TRUE(buffer != nullptr);
 
   EXPECT_EQ(WIRE_HEADER_LEN_SIZE + WIRE_PAYLOAD_LEN_SIZE +
                 test_header.length() + test_payload.length(),
@@ -164,27 +165,28 @@ TEST_F(MessageDataTest, EncodeNullTest) {
   Gcs_message_data *message_data =
       new Gcs_message_data(test_header.length(), test_payload.length());
 
-  message_data->append_to_header((uchar *)test_header.c_str(),
-                                 test_header.length());
+  message_data->append_to_header(
+      pointer_cast<const uchar *>(test_header.c_str()), test_header.length());
 
-  message_data->append_to_payload((uchar *)test_payload.c_str(),
-                                  test_payload.length());
+  message_data->append_to_payload(
+      pointer_cast<const uchar *>(test_payload.c_str()), test_payload.length());
 
-  uchar *buffer = NULL;
+  uchar *buffer = nullptr;
   uint64_t buffer_len = 0;
 
-  EXPECT_TRUE(message_data->encode(static_cast<uchar **>(NULL),
-                                   static_cast<uint64_t *>(NULL)));
+  EXPECT_TRUE(message_data->encode(static_cast<uchar **>(nullptr),
+                                   static_cast<uint64_t *>(nullptr)));
 
-  EXPECT_TRUE(message_data->encode(&buffer, static_cast<uint64_t *>(NULL)));
+  EXPECT_TRUE(message_data->encode(&buffer, static_cast<uint64_t *>(nullptr)));
 
-  EXPECT_TRUE(message_data->encode(static_cast<uchar **>(NULL), &buffer_len));
+  EXPECT_TRUE(
+      message_data->encode(static_cast<uchar **>(nullptr), &buffer_len));
 
-  EXPECT_TRUE(message_data->encode(static_cast<uchar *>(NULL),
-                                   static_cast<uint64_t *>(NULL)));
+  EXPECT_TRUE(message_data->encode(static_cast<uchar *>(nullptr),
+                                   static_cast<uint64_t *>(nullptr)));
 
   buffer = static_cast<uchar *>(malloc(1));
-  EXPECT_TRUE(message_data->encode(buffer, static_cast<uint64_t *>(NULL)));
+  EXPECT_TRUE(message_data->encode(buffer, static_cast<uint64_t *>(nullptr)));
 
   EXPECT_TRUE(message_data->encode(buffer, &buffer_len));
 
@@ -198,18 +200,20 @@ TEST_F(MessageDataTest, DecodeTest) {
   Gcs_message_data *message_data =
       new Gcs_message_data(test_header.length() + 1, test_payload.length() + 1);
 
-  message_data->append_to_header((uchar *)test_header.c_str(),
-                                 test_header.length() + 1);
+  message_data->append_to_header(
+      pointer_cast<const uchar *>(test_header.c_str()),
+      test_header.length() + 1);
 
-  message_data->append_to_payload((uchar *)test_payload.c_str(),
-                                  test_payload.length() + 1);
+  message_data->append_to_payload(
+      pointer_cast<const uchar *>(test_payload.c_str()),
+      test_payload.length() + 1);
 
-  uchar *buffer = NULL;
+  uchar *buffer = nullptr;
   uint64_t buffer_len = 0;
   message_data->encode(&buffer, &buffer_len);
   message_data->release_ownership();
 
-  EXPECT_TRUE(buffer != NULL);
+  EXPECT_TRUE(buffer != nullptr);
   EXPECT_EQ(WIRE_HEADER_LEN_SIZE + WIRE_PAYLOAD_LEN_SIZE +
                 test_header.length() + test_payload.length() + 2,
             buffer_len);
@@ -237,12 +241,12 @@ TEST_F(MessageDataTest, DecodeNullTest) {
   Gcs_message_data *message_data =
       new Gcs_message_data(test_header.length(), test_payload.length());
 
-  message_data->append_to_header((uchar *)test_header.c_str(),
-                                 test_header.length());
-  message_data->append_to_payload((uchar *)test_payload.c_str(),
-                                  test_payload.length());
+  message_data->append_to_header(
+      pointer_cast<const uchar *>(test_header.c_str()), test_header.length());
+  message_data->append_to_payload(
+      pointer_cast<const uchar *>(test_payload.c_str()), test_payload.length());
 
-  uchar *buffer = NULL;
+  uchar *buffer = nullptr;
   uint64_t buffer_len = 0;
 
   EXPECT_TRUE(message_data->decode(buffer, buffer_len));

@@ -1,147 +1,198 @@
 //>>built
-define(["dijit","dojo","dojox","dojo/require!dojo/parser"],function(_1,_2,_3){
-_2.provide("dojox.widget.Rotator");
-_2.require("dojo.parser");
-(function(d){
-var _4="dojox.widget.rotator.swap",_5=500,_6="display",_7="none",_8="zIndex";
-d.declare("dojox.widget.Rotator",null,{transition:_4,transitionParams:"duration:"+_5,panes:null,constructor:function(_9,_a){
-d.mixin(this,_9);
-var _b=this,t=_b.transition,tt=_b._transitions={},_c=_b._idMap={},tp=_b.transitionParams=eval("({ "+_b.transitionParams+" })"),_a=_b._domNode=_2.byId(_a),cb=_b._domNodeContentBox=d.contentBox(_a),p={left:0,top:0},_d=function(bt,dt){
-console.warn(_b.declaredClass," - Unable to find transition \"",bt,"\", defaulting to \"",dt,"\".");
-};
-_b.id=_a.id||(new Date()).getTime();
-if(d.style(_a,"position")=="static"){
-d.style(_a,"position","relative");
+define("dojox/widget/Rotator",["dojo/aspect","dojo/_base/declare","dojo/_base/Deferred","dojo/_base/lang","dojo/_base/array","dojo/_base/fx","dojo/dom","dojo/dom-attr","dojo/dom-construct","dojo/dom-geometry","dojo/dom-style","dojo/topic","dojo/on","dojo/parser","dojo/query","dojo/fx/easing","dojo/NodeList-dom"],function(_1,_2,_3,_4,_5,fx,_6,_7,_8,_9,_a,_b,on,_c,_d){
+var _e="dojox.widget.rotator.swap",_f=500,_10="display",_11="none",_12="zIndex";
+var _13=_2("dojox.widget.Rotator",null,{transition:_e,transitionParams:"duration:"+_f,panes:null,constructor:function(_14,_15){
+_4.mixin(this,_14);
+var _16=this,t=_16.transition,tt=_16._transitions={},idm=_16._idMap={},tp=_16.transitionParams=eval("({ "+_16.transitionParams+" })"),_15=_16._domNode=_6.byId(_15),cb=_16._domNodeContentBox=_9.getContentBox(_15);
+_16.id=_15.id||(new Date()).getTime();
+if(_a.get(_15,"position")=="static"){
+_a.set(_15,"position","relative");
 }
-tt[t]=d.getObject(t);
+tt[t]=_4.getObject(t);
 if(!tt[t]){
-_d(t,_4);
-tt[_b.transition=_4]=d.getObject(_4);
+this._transitionWarn(t,_e);
+tt[_16.transition=_e]=_4.getObject(_e);
 }
 if(!tp.duration){
-tp.duration=_5;
+tp.duration=_f;
 }
-d.forEach(_b.panes,function(p){
-d.create("div",p,_a);
+_5.forEach(_16.panes,function(p){
+_8.create("div",p,_15);
 });
-var pp=_b.panes=[];
-d.query(">",_a).forEach(function(n,i){
-var q={node:n,idx:i,params:d.mixin({},tp,eval("({ "+(d.attr(n,"transitionParams")||"")+" })"))},r=q.trans=d.attr(n,"transition")||_b.transition;
-d.forEach(["id","title","duration","waitForEvent"],function(a){
-q[a]=d.attr(n,a);
+_16.panes=[];
+_d("> *",_15).forEach(function(n,i){
+_16._initializePane(n,i);
 });
-if(q.id){
-_c[q.id]=i;
+_16._controlSub=_b.subscribe(_16.id+"/rotator/control",_4.hitch(_16,this.control));
+},insert:function(_17,_18){
+var _19,_1a=this.panes,_1b;
+if(_18==null){
+_18=_1a.length;
 }
-if(!tt[r]&&!(tt[r]=d.getObject(r))){
-_d(r,q.trans=_b.transition);
+if(_18<_1a.length){
+_19=_1a[_18];
+_8.place(_17,_19.node,"before");
+}else{
+_8.place(_17,this._domNode,"last");
 }
-p.position="absolute";
-p.display=_7;
-if(_b.idx==null||d.attr(n,"selected")){
-if(_b.idx!=null){
-d.style(pp[_b.idx].node,_6,_7);
+this._initializePane(_17,_18);
+},remove:function(_1c){
+function _1d(idx){
+var _1e=_1f.splice(idx,1)[0];
+if(_1e){
+if(_1e.id){
+_20._idMap[_1e.id]=undefined;
 }
-_b.idx=i;
-p.display="";
+_20._domNode.removeChild(_1e.node);
 }
-d.style(n,p);
-d.query("> script[type^='dojo/method']",n).orphan().forEach(function(s){
-var e=d.attr(s,"event");
-if(e){
-q[e]=d.parser._functionFromScript(s);
+if(_20.idx>idx){
+_20.idx--;
 }
+};
+var _21,_20=this,_1f=this.panes;
+if(typeof _1c==="number"){
+_21=_1c;
+}else{
+for(var i=0;i<_1f.length;i++){
+if(_1f[i].node===_1c){
+_21=i;
+break;
+}
+}
+if(_21==null){
+return;
+}
+}
+if(_21===this.idx){
+var def=this.go(this.idx-1);
+if(def){
+return def.then(function(){
+_1d(_21);
 });
-pp.push(q);
-});
-_b._controlSub=d.subscribe(_b.id+"/rotator/control",_b,"control");
+}else{
+_1d(_21);
+}
+}else{
+_1d(_21);
+}
 },destroy:function(){
-d.forEach([this._controlSub,this.wfe],d.unsubscribe);
-d.destroy(this._domNode);
+_5.forEach([this._controlSub,this.wfe],function(wfe){
+wfe&&wfe.remove();
+});
+_8.destroy(this._domNode);
+this.panes=[];
 },next:function(){
 return this.go(this.idx+1);
 },prev:function(){
 return this.go(this.idx-1);
 },go:function(p){
-var _e=this,i=_e.idx,pp=_e.panes,_f=pp.length,idm=_e._idMap[p];
-_e._resetWaitForEvent();
+var _22=this,i=_22.idx,pp=_22.panes,len=pp.length,idm=_22._idMap[p];
+_22._resetWaitForEvent();
 p=idm!=null?idm:(p||0);
-p=p<_f?(p<0?_f-1:p):0;
-if(p==i||_e.anim){
+p=p<len?(p<0?len-1:p):0;
+if(p==i||_22.anim){
 return null;
 }
-var _10=pp[i],_11=pp[p];
-d.style(_10.node,_8,2);
-d.style(_11.node,_8,1);
-var _12={current:_10,next:_11,rotator:_e},_13=_e.anim=_e._transitions[_11.trans](d.mixin({rotatorBox:_e._domNodeContentBox},_12,_11.params));
-if(_13){
-var def=new d.Deferred(),ev=_11.waitForEvent,h=d.connect(_13,"onEnd",function(){
-d.style(_10.node,{display:_7,left:0,opacity:1,top:0,zIndex:0});
-d.disconnect(h);
-_e.anim=null;
-_e.idx=p;
-if(_10.onAfterOut){
-_10.onAfterOut(_12);
+var _23=pp[i],_24=pp[p];
+_a.set(_23.node,_12,2);
+_a.set(_24.node,_12,1);
+var _25={current:_23,next:_24,rotator:_22},_26=_22.anim=_22._transitions[_24.trans](_4.mixin({rotatorBox:_22._domNodeContentBox},_25,_24.params));
+if(_26){
+var def=new _3(),ev=_24.waitForEvent,h=_1.after(_26,"onEnd",function(){
+_a.set(_23.node,{display:_11,left:0,opacity:1,top:0,zIndex:0});
+h.remove();
+_22.anim=null;
+_22.idx=p;
+if(_23.onAfterOut){
+_23.onAfterOut(_25);
 }
-if(_11.onAfterIn){
-_11.onAfterIn(_12);
+if(_24.onAfterIn){
+_24.onAfterIn(_25);
 }
-_e.onUpdate("onAfterTransition");
+_22.onUpdate("onAfterTransition");
 if(!ev){
-_e._resetWaitForEvent();
+_22._resetWaitForEvent();
 def.callback();
 }
-});
-_e.wfe=ev?d.subscribe(ev,function(){
-_e._resetWaitForEvent();
+},true);
+_22.wfe=ev?_b.subscribe(ev,function(){
+_22._resetWaitForEvent();
 def.callback(true);
 }):null;
-_e.onUpdate("onBeforeTransition");
-if(_10.onBeforeOut){
-_10.onBeforeOut(_12);
+_22.onUpdate("onBeforeTransition");
+if(_23.onBeforeOut){
+_23.onBeforeOut(_25);
 }
-if(_11.onBeforeIn){
-_11.onBeforeIn(_12);
+if(_24.onBeforeIn){
+_24.onBeforeIn(_25);
 }
-_13.play();
+_26.play();
 return def;
 }
-},onUpdate:function(_14,_15){
-d.publish(this.id+"/rotator/update",[_14,this,_15||{}]);
+},onUpdate:function(_27,_28){
+_b.publish(this.id+"/rotator/update",_27,this,_28||{});
+},_initializePane:function(_29,_2a){
+var tp=this.transitionParams,q={node:_29,idx:_2a,params:_4.mixin({},tp,eval("({ "+(_7.get(_29,"transitionParams")||"")+" })"))},r=q.trans=_7.get(_29,"transition")||this.transition,tt=this._transitions,_2b=this.panes,p={left:0,top:0,position:"absolute",display:_11};
+_5.forEach(["id","title","duration","waitForEvent"],function(a){
+q[a]=_7.get(_29,a);
+});
+if(q.id){
+this._idMap[q.id]=_2a;
+}
+if(!tt[r]&&!(tt[r]=_4.getObject(r))){
+this._transitionWarn(r,q.trans=this.transition);
+}
+if(this.idx==null||_7.get(_29,"selected")){
+if(this.idx!=null){
+_a.set(_2b[this.idx].node,_10,_11);
+}
+this.idx=_2a;
+p.display="";
+}
+_a.set(_29,p);
+_d("> script[type^='dojo/method']",_29).orphan().forEach(function(s){
+var e=_7.get(s,"event");
+if(e){
+q[e]=_c._functionFromScript(s);
+}
+});
+_2b.splice(_2a,0,q);
 },_resetWaitForEvent:function(){
 if(this.wfe){
-d.unsubscribe(this.wfe);
-this.wfe=null;
+this.wfe.remove();
+delete this.wfe;
 }
-},control:function(_16){
-var _17=d._toArray(arguments),_18=this;
-_17.shift();
-_18._resetWaitForEvent();
-if(_18[_16]){
-var def=_18[_16].apply(_18,_17);
+},control:function(_2c){
+var _2d=_4._toArray(arguments),_2e=this;
+_2d.shift();
+_2e._resetWaitForEvent();
+if(_2e[_2c]){
+var def=_2e[_2c].apply(_2e,_2d);
 if(def){
 def.addCallback(function(){
-_18.onUpdate(_16);
+_2e.onUpdate(_2c);
 });
 }
-_18.onManualChange(_16);
+_2e.onManualChange(_2c);
 }else{
-console.warn(_18.declaredClass," - Unsupported action \"",_16,"\".");
+console.warn(_2e.declaredClass," - Unsupported action \"",_2c,"\".");
 }
-},resize:function(_19,_1a){
-var b=this._domNodeContentBox={w:_19,h:_1a};
-d.contentBox(this._domNode,b);
-d.forEach(this.panes,function(p){
-d.contentBox(p.node,b);
+},resize:function(_2f,_30){
+var b=this._domNodeContentBox={w:_2f,h:_30};
+_9.setContentSize(this._domNode,b);
+_5.forEach(this.panes,function(p){
+_9.setContentSize(p.node,b);
 });
 },onManualChange:function(){
+},_transitionWarn:function(bt,dt){
+console.warn(this.declaredClass," - Unable to find transition \"",bt,"\", defaulting to \"",dt,"\".");
 }});
-d.setObject(_4,function(_1b){
-return new d._Animation({play:function(){
-d.style(_1b.current.node,_6,_7);
-d.style(_1b.next.node,_6,"");
+_4.setObject(_e,function(_31){
+return new fx.Animation({play:function(){
+_a.set(_31.current.node,_10,_11);
+_a.set(_31.next.node,_10,"");
 this._fire("onEnd");
 }});
 });
-})(_2);
+return _13;
 });

@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -20,13 +20,13 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
+#ifndef M_CTYPE_INCLUDED
+#define M_CTYPE_INCLUDED
+
 /**
   @file include/m_ctype.h
   A better implementation of the UNIX ctype(3) library.
 */
-
-#ifndef _m_ctype_h
-#define _m_ctype_h
 
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -39,6 +39,7 @@
 #include "my_loglevel.h"
 #include "my_macros.h"
 #include "my_sharedlib.h"
+#include "template_utils.h"
 
 #define MY_CS_NAME_SIZE 32
 #define MY_CS_CTYPE_TABLE_SIZE 257
@@ -340,8 +341,8 @@ typedef struct MY_CHARSET_HANDLER {
                        const char **e, int *err);
   ulonglong (*strntoull)(const CHARSET_INFO *, const char *s, size_t l,
                          int base, const char **e, int *err);
-  double (*strntod)(const CHARSET_INFO *, char *s, size_t l, const char **e,
-                    int *err);
+  double (*strntod)(const CHARSET_INFO *, const char *s, size_t l,
+                    const char **e, int *err);
   longlong (*strtoll10)(const CHARSET_INFO *cs, const char *nptr,
                         const char **endptr, int *error);
   ulonglong (*strntoull10rnd)(const CHARSET_INFO *cs, const char *str,
@@ -409,11 +410,10 @@ struct CHARSET_INFO {
 */
 
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO my_charset_bin;
-C_MODE_START
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO my_charset_latin1;
-C_MODE_END
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO my_charset_filename;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO my_charset_utf8mb4_0900_ai_ci;
+extern MYSQL_PLUGIN_IMPORT CHARSET_INFO my_charset_utf8mb4_0900_bin;
 
 extern CHARSET_INFO my_charset_latin1_bin;
 extern CHARSET_INFO my_charset_utf32_unicode_ci;
@@ -481,8 +481,8 @@ longlong my_strntoll_8bit(const CHARSET_INFO *, const char *s, size_t l,
                           int base, const char **e, int *err);
 ulonglong my_strntoull_8bit(const CHARSET_INFO *, const char *s, size_t l,
                             int base, const char **e, int *err);
-double my_strntod_8bit(const CHARSET_INFO *, char *s, size_t l, const char **e,
-                       int *err);
+double my_strntod_8bit(const CHARSET_INFO *, const char *s, size_t l,
+                       const char **e, int *err);
 size_t my_long10_to_str_8bit(const CHARSET_INFO *, char *to, size_t l,
                              int radix, long int val);
 size_t my_longlong10_to_str_8bit(const CHARSET_INFO *, char *to, size_t l,
@@ -685,7 +685,17 @@ values < 0x7F. */
   (cs)->cset->charpos((cs), (const char *)(b), (const char *)(e), (num))
 
 #define use_mb(s) ((s)->cset->ismbchar != NULL)
-#define my_ismbchar(s, a, b) ((s)->cset->ismbchar((s), (a), (b)))
+static inline uint my_ismbchar(const CHARSET_INFO *cs, const char *str,
+                               const char *strend) {
+  return cs->cset->ismbchar(cs, str, strend);
+}
+
+static inline uint my_ismbchar(const CHARSET_INFO *cs, const uchar *str,
+                               const uchar *strend) {
+  return cs->cset->ismbchar(cs, pointer_cast<const char *>(str),
+                            pointer_cast<const char *>(strend));
+}
+
 #define my_mbcharlen(s, a) ((s)->cset->mbcharlen((s), (a)))
 /**
   Get the length of gb18030 code by the given two leading bytes
@@ -733,4 +743,8 @@ values < 0x7F. */
   ((s)->cset->strntoull((s), (a), (b), (c), (d), (e)))
 #define my_strntod(s, a, b, c, d) ((s)->cset->strntod((s), (a), (b), (c), (d)))
 
-#endif /* _m_ctype_h */
+static inline bool is_supported_parser_charset(const CHARSET_INFO *cs) {
+  return (cs->mbminlen == 1);
+}
+
+#endif  // M_CTYPE_INCLUDED

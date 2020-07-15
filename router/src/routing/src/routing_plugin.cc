@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -22,21 +22,21 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#include "mysql_routing.h"
-#include "plugin_config.h"
-#include "utils.h"
-
-#include "dim.h"
-#include "mysql/harness/loader_config.h"
-
-#include "mysql/harness/config_parser.h"
-#include "mysql/harness/logging/logging.h"
-
 #include <atomic>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
+
+#include "dim.h"
+#include "mysql/harness/config_parser.h"
+#include "mysql/harness/loader_config.h"
+#include "mysql/harness/logging/logging.h"
+#include "mysql_routing.h"
+#include "mysqlrouter/routing_component.h"
+#include "mysqlrouter/routing_export.h"  // ROUTING_EXPORT
+#include "plugin_config.h"
+#include "utils.h"
 
 using mysql_harness::AppInfo;
 using mysql_harness::ConfigSection;
@@ -217,7 +217,6 @@ static void start(mysql_harness::PluginFuncEnv *env) {
 
   try {
     RoutingPluginConfig config(section);
-    config.section_name = name;
 
     // connect_timeout is in seconds, we want milli's
     //
@@ -226,23 +225,25 @@ static void start(mysql_harness::PluginFuncEnv *env) {
     std::chrono::milliseconds client_connect_timeout(
         config.client_connect_timeout * 1000);
 
-    MySQLRouting r(config.routing_strategy, config.bind_address.port,
-                   config.protocol, config.mode, config.bind_address.addr,
-                   config.named_socket, name, config.max_connections,
-                   destination_connect_timeout, config.max_connect_errors,
-                   client_connect_timeout, routing::kDefaultNetBufferLength,
-                   routing::RoutingSockOps::instance(
-                       mysql_harness::SocketOperations::instance()),
-                   config.thread_stack_size);
+    auto r = std::make_shared<MySQLRouting>(
+        config.routing_strategy, config.bind_address.port, config.protocol,
+        config.mode, config.bind_address.addr, config.named_socket, name,
+        config.max_connections, destination_connect_timeout,
+        config.max_connect_errors, client_connect_timeout,
+        routing::kDefaultNetBufferLength,
+        routing::RoutingSockOps::instance(
+            mysql_harness::SocketOperations::instance()),
+        config.thread_stack_size);
 
     try {
       // don't allow rootless URIs as we did already in the
       // get_option_destinations()
-      r.set_destinations_from_uri(URI(config.destinations, false));
+      r->set_destinations_from_uri(URI(config.destinations, false));
     } catch (URIError &) {
-      r.set_destinations_from_csv(config.destinations);
+      r->set_destinations_from_csv(config.destinations);
     }
-    r.start(env);
+    MySQLRoutingComponent::get_instance().init(section->key, r);
+    r->start(env);
   } catch (const std::invalid_argument &exc) {
     log_error("%s", exc.what());  // TODO remove after Loader starts logging
     set_error(env, mysql_harness::kConfigInvalidArgument, "%s", exc.what());
@@ -258,19 +259,23 @@ static void start(mysql_harness::PluginFuncEnv *env) {
   }
 }
 
-extern "C" {
-mysql_harness::Plugin ROUTING_API harness_plugin_routing = {
-    mysql_harness::PLUGIN_ABI_VERSION,
-    mysql_harness::ARCHITECTURE_DESCRIPTOR,
-    "Routing MySQL connections between MySQL clients/connectors and servers",
+static const std::array<const char *, 2> required = {{
+    "logger",
+    "router_protobuf",
+}};
+
+mysql_harness::Plugin ROUTING_EXPORT harness_plugin_routing = {
+    mysql_harness::PLUGIN_ABI_VERSION,       // abi-version
+    mysql_harness::ARCHITECTURE_DESCRIPTOR,  // arch
+    "Routing MySQL connections between MySQL clients/connectors and "
+    "servers",  // name
     VERSION_NUMBER(0, 0, 1),
-    0,
-    nullptr,  // requires
-    0,
-    nullptr,  // Conflicts
+    // requires
+    required.size(), required.data(),
+    // conflicts
+    0, nullptr,
     init,     // init
     nullptr,  // deinit
     start,    // start
     nullptr   // stop
 };
-}

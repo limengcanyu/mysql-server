@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -42,8 +42,12 @@ static SERVICE_TYPE(group_member_status_listener) svc_gmst_def = {
     group_member_status_listener_example_impl::notify_member_role_change,
     group_member_status_listener_example_impl::notify_member_state_change};
 
-my_h_service h_gms_listener_example = (my_h_service)&svc_gms_def;
-my_h_service h_gmst_listener_example = (my_h_service)&svc_gmst_def;
+using svc_gms_t = SERVICE_TYPE_NO_CONST(group_membership_listener);
+using svc_gmst_t = SERVICE_TYPE_NO_CONST(group_member_status_listener);
+my_h_service h_gms_listener_example =
+    reinterpret_cast<my_h_service>(const_cast<svc_gms_t *>(&svc_gms_def));
+my_h_service h_gmst_listener_example =
+    reinterpret_cast<my_h_service>(const_cast<svc_gmst_t *>(&svc_gmst_def));
 
 bool log_notification_to_test_table(std::string msg) {
   int res = 0;
@@ -51,9 +55,9 @@ bool log_notification_to_test_table(std::string msg) {
   ulong srv_err = 0;
   bool was_read_only = false;
   Sql_service_command_interface *sql_cmd = new Sql_service_command_interface();
-  Sql_service_interface *sql_intf = NULL;
+  Sql_service_interface *sql_intf = nullptr;
   enum_plugin_con_isolation trx_iso =
-      current_thd == NULL ? PSESSION_INIT_THREAD : PSESSION_USE_THREAD;
+      current_thd == nullptr ? PSESSION_INIT_THREAD : PSESSION_USE_THREAD;
   std::stringstream ss;
 
   ss.str("");
@@ -182,8 +186,8 @@ DEFINE_BOOL_METHOD(
 
 static void handle_example_listener(int action) {
   SERVICE_TYPE(registry) *r = mysql_plugin_registry_acquire();
-  SERVICE_TYPE(registry_registration) *reg_reg = NULL;
-  my_h_service h_reg_svc = NULL;
+  SERVICE_TYPE(registry_registration) *reg_reg = nullptr;
+  my_h_service h_reg_svc = nullptr;
   int error = 0;
 
   if (!r) goto err; /* purecov: inspected */

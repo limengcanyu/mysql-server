@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2008, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -45,16 +45,20 @@ extern "C" {
   Struct to share server ssl variables
 */
 struct st_server_ssl_variables {
-  bool have_ssl_opt;
   char *ssl_ca;
   char *ssl_capath;
   char *tls_version;
+  char *tls_ciphersuites;
   char *ssl_cert;
   char *ssl_cipher;
   char *ssl_key;
   char *ssl_crl;
   char *ssl_crlpath;
   unsigned int ssl_fips_mode;
+
+  void init();
+
+  void deinit();
 };
 
 /**
@@ -93,7 +97,7 @@ typedef struct Trans_table_info {
  */
 typedef struct Trans_context_info {
   bool binlog_enabled;
-  ulong gtid_mode;  // enum values in enum_gtid_mode
+  ulong gtid_mode;  // enum values in Gtid_mode::value_type
   bool log_slave_updates;
   ulong binlog_checksum_options;  // enum values in enum
                                   // enum_binlog_checksum_alg
@@ -170,7 +174,7 @@ typedef struct Trans_param {
   Trans_context_info trans_ctx_info;
 
   /// pointer to the status var original_commit_timestamp
-  uint64 *original_commit_timestamp;
+  unsigned long long *original_commit_timestamp;
 
   /** Replication channel info associated to this transaction/THD */
   enum_rpl_channel_type rpl_channel_type;
@@ -186,6 +190,11 @@ typedef struct Trans_param {
 
   /// pointer to immediate_server_version
   uint32_t *immediate_server_version;
+
+  /*
+    Flag to identify a 'CREATE TABLE ... AS SELECT'.
+  */
+  bool is_create_table_as_select;
 } Trans_param;
 
 /**
@@ -364,6 +373,17 @@ typedef int (*before_server_shutdown_t)(Server_state_param *param);
 typedef int (*after_server_shutdown_t)(Server_state_param *param);
 
 /**
+  This is called just after an upgrade from MySQL 5.7 populates the data
+  dictionary for the first time.
+
+  @param[in]  param Observer common parameter
+
+  @retval 0 Success
+  @retval >0 Failure
+*/
+typedef int (*after_dd_upgrade_t)(Server_state_param *param);
+
+/**
   Observer server state
  */
 typedef struct Server_state_observer {
@@ -375,6 +395,7 @@ typedef struct Server_state_observer {
   after_recovery_t after_recovery;
   before_server_shutdown_t before_server_shutdown;
   after_server_shutdown_t after_server_shutdown;
+  after_dd_upgrade_t after_dd_upgrade_from_57;
 } Server_state_observer;
 
 /**
@@ -678,7 +699,9 @@ typedef int (*after_reset_slave_t)(Binlog_relay_IO_param *param);
   This callback is called before event gets applied
 
   @param param  Observer common parameter
-  @param reason Event skip reason
+  @param trans_param The parameter for transaction observers
+  @param out Return value from observer execution to help validate event
+  according to observer requirement.
 
   @retval 0 Success
   @retval 1 Failure

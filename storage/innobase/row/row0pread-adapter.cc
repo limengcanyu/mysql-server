@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2019, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2018, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -29,204 +29,222 @@ Parallel read adapter interface implementation
 
 Created 2018-02-28 by Darshan M N */
 
+#ifndef UNIV_HOTBACKUP
+
 #include "row0pread-adapter.h"
 #include "row0sel.h"
+#include "univ.i"
 
-dberr_t Parallel_reader_adapter::worker(size_t id, Queue &ctxq, Function &f) {
-  ulong *mysql_row_offsets;
-  ulong *mysql_nullbit_offsets;
-  ulong *mysql_null_bit_mask;
-
-  mysql_row_offsets =
-      static_cast<ulong *>(alloca(sizeof(ulong) * m_prebuilt->n_template));
-  mysql_nullbit_offsets =
-      static_cast<ulong *>(alloca(sizeof(ulong) * m_prebuilt->n_template));
-  mysql_null_bit_mask =
-      static_cast<ulong *>(alloca(sizeof(ulong) * m_prebuilt->n_template));
-
-  for (uint i = 0; i < m_prebuilt->n_template; i++) {
-    mysql_row_offsets[i] = m_prebuilt->mysql_template[i].mysql_col_offset;
-    mysql_nullbit_offsets[i] =
-        m_prebuilt->mysql_template[i].mysql_null_byte_offset;
-    mysql_null_bit_mask[i] = m_prebuilt->mysql_template[i].mysql_null_bit_mask;
-  }
-
-  dberr_t err = DB_SUCCESS;
-  bool initError = m_load_init(m_thread_contexts[id], m_prebuilt->n_template,
-                               m_prebuilt->mysql_row_len, mysql_row_offsets,
-                               mysql_nullbit_offsets, mysql_null_bit_mask);
-  if (initError) {
-    err = DB_INTERRUPTED;
-  } else {
-    err = Key_reader::worker(id, ctxq, f);
-
-    /** It's possible that we might not have sent the records in the buffer when
-    we have reached the end of records and the buffer is not full. Send them
-    now. */
-    if (n_recs[id] % m_send_num_recs != 0 && err == DB_SUCCESS) {
-      if (m_load_rows(m_thread_contexts[id], n_recs[id] % m_send_num_recs,
-                      (void *)m_bufs[id])) {
-        err = DB_INTERRUPTED;
-      }
-      n_total_recs_sent.add(id, n_recs[id] % m_send_num_recs);
-    }
-  }
-  m_load_end(m_thread_contexts[id]);
-
-  return (err);
+Parallel_reader_adapter::Parallel_reader_adapter(size_t max_threads,
+                                                 ulint rowlen)
+    : m_parallel_reader(max_threads) {
+  m_batch_size = ADAPTER_SEND_BUFFER_SIZE / rowlen;
 }
 
-dberr_t Parallel_reader_adapter::process_rows(size_t thread_id,
-                                              const rec_t *rec,
-                                              dict_index_t *index,
-                                              row_prebuilt_t *prebuilt) {
-  dberr_t err = DB_ERROR;
+dberr_t Parallel_reader_adapter::add_scan(trx_t *trx,
+                                          const Parallel_reader::Config &config,
+                                          Parallel_reader::F &&f) {
+  return (m_parallel_reader.add_scan(trx, config, std::move(f)));
+}
+
+Parallel_reader_adapter::Thread_ctx::Thread_ctx() {
+  m_buffer.resize(ADAPTER_SEND_BUFFER_SIZE);
+}
+
+void Parallel_reader_adapter::set(row_prebuilt_t *prebuilt) {
+  ut_a(prebuilt->n_template > 0);
+  ut_a(m_mysql_row.m_offsets.empty());
+  ut_a(m_mysql_row.m_null_bit_mask.empty());
+  ut_a(m_mysql_row.m_null_bit_offsets.empty());
+
+  /* Partition structure should be the same across all partitions.
+  Therefore MySQL row meta-data is common across all paritions. */
+
+  for (uint i = 0; i < prebuilt->n_template; ++i) {
+    const auto &templt = prebuilt->mysql_template[i];
+
+    m_mysql_row.m_offsets.push_back(
+        static_cast<ulong>(templt.mysql_col_offset));
+    m_mysql_row.m_null_bit_mask.push_back(
+        static_cast<ulong>(templt.mysql_null_bit_mask));
+    m_mysql_row.m_null_bit_offsets.push_back(
+        static_cast<ulong>(templt.mysql_null_byte_offset));
+  }
+
+  ut_a(m_mysql_row.m_max_len == 0);
+  ut_a(prebuilt->mysql_row_len > 0);
+  m_mysql_row.m_max_len = static_cast<ulong>(prebuilt->mysql_row_len);
+
+  m_parallel_reader.set_start_callback(
+      [=](Parallel_reader::Thread_ctx *reader_thread_ctx) {
+        return init(reader_thread_ctx);
+      });
+
+  m_parallel_reader.set_finish_callback(
+      [=](Parallel_reader::Thread_ctx *reader_thread_ctx) {
+        return end(reader_thread_ctx);
+      });
+
+  ut_a(m_prebuilt == nullptr);
+  m_prebuilt = prebuilt;
+}
+
+dberr_t Parallel_reader_adapter::run(void **thread_ctxs, Init_fn init_fn,
+                                     Load_fn load_fn, End_fn end_fn) {
+  m_end_fn = end_fn;
+  m_init_fn = init_fn;
+  m_load_fn = load_fn;
+  m_thread_ctxs = thread_ctxs;
+
+  return m_parallel_reader.run();
+}
+
+dberr_t Parallel_reader_adapter::init(
+    Parallel_reader::Thread_ctx *reader_thread_ctx) {
+  auto thread_ctx = UT_NEW(Thread_ctx(), mem_key_archive);
+
+  if (thread_ctx == nullptr) {
+    return DB_OUT_OF_MEMORY;
+  }
+
+  reader_thread_ctx->set_callback_ctx<Thread_ctx>(thread_ctx);
+
+  /** There are data members in row_prebuilt_t that cannot be accessed in
+  multi-threaded mode e.g., blob_heap.
+
+  row_prebuilt_t is designed for single threaded access and to share
+  it among threads is not recommended unless "you know what you are doing".
+  This is very fragile code as it stands.
+
+  To solve the blob heap issue in prebuilt we request parallel reader thread to
+  use blob heap per thread and we pass this blob heap to the InnoDB to MySQL
+  row format conversion function. */
+  reader_thread_ctx->create_blob_heap();
+
+  auto ret = m_init_fn(m_thread_ctxs[reader_thread_ctx->m_thread_id],
+                       static_cast<ulong>(m_mysql_row.m_offsets.size()),
+                       m_mysql_row.m_max_len, &m_mysql_row.m_offsets[0],
+                       &m_mysql_row.m_null_bit_offsets[0],
+                       &m_mysql_row.m_null_bit_mask[0]);
+
+  return (ret ? DB_INTERRUPTED : DB_SUCCESS);
+}
+
+dberr_t Parallel_reader_adapter::send_batch(
+    Parallel_reader::Thread_ctx *reader_thread_ctx, size_t partition_id,
+    uint64_t n_recs) {
+  auto ctx = reader_thread_ctx->get_callback_ctx<Thread_ctx>();
+  const auto thread_id = reader_thread_ctx->m_thread_id;
+
+  const auto start = ctx->m_n_sent % m_batch_size;
+
+  ut_a(n_recs <= m_batch_size);
+  ut_a(start + n_recs <= m_batch_size);
+
+  const auto rec_loc = &ctx->m_buffer[start * m_mysql_row.m_max_len];
+
+  dberr_t err{DB_SUCCESS};
+
+  if (m_load_fn(m_thread_ctxs[thread_id], n_recs, rec_loc, partition_id)) {
+    err = DB_INTERRUPTED;
+    m_parallel_reader.set_error_state(DB_INTERRUPTED);
+  }
+
+  ctx->m_n_sent += n_recs;
+
+  return err;
+}
+
+dberr_t Parallel_reader_adapter::process_rows(
+    const Parallel_reader::Ctx *reader_ctx) {
+  auto reader_thread_ctx = reader_ctx->thread_ctx();
+  auto ctx = reader_thread_ctx->get_callback_ctx<Thread_ctx>();
+
+  ut_a(ctx->m_n_read >= ctx->m_n_sent);
+  ut_a(ctx->m_n_read - ctx->m_n_sent <= m_batch_size);
+
+  dberr_t err{DB_SUCCESS};
+
+  {
+    auto n_pending = pending(ctx);
+
+    /* Start of a new range, send what we have buffered. */
+    if ((reader_ctx->m_start && n_pending > 0) || is_buffer_full(ctx)) {
+      auto part_id = reader_ctx->m_start
+                         ? reader_thread_ctx->m_prev_partition_id
+                         : reader_ctx->partition_id();
+
+      err = send_batch(reader_thread_ctx, part_id, n_pending);
+
+      if (err != DB_SUCCESS) {
+        return (err);
+      }
+    }
+  }
+
+  mem_heap_t *heap{};
   ulint offsets_[REC_OFFS_NORMAL_SIZE];
   ulint *offsets = offsets_;
-  mem_heap_t *heap = nullptr;
 
   rec_offs_init(offsets_);
 
-  offsets = rec_get_offsets(rec, index, offsets, ULINT_UNDEFINED, &heap);
+  offsets = rec_get_offsets(reader_ctx->m_rec, reader_ctx->index(), offsets,
+                            ULINT_UNDEFINED, &heap);
 
-  auto rec_offset =
-      (n_recs[thread_id] % m_send_num_recs) * prebuilt->mysql_row_len;
+  const auto next_rec = ctx->m_n_read % m_batch_size;
 
-  if (row_sel_store_mysql_rec(m_bufs[thread_id] + rec_offset, prebuilt, rec,
-                              NULL, true, index, offsets, false, nullptr)) {
-    err = DB_SUCCESS;
+  const auto buffer_loc = &ctx->m_buffer[0] + next_rec * m_mysql_row.m_max_len;
 
-    n_recs.add(thread_id, 1);
+  if (row_sel_store_mysql_rec(buffer_loc, m_prebuilt, reader_ctx->m_rec,
+                              nullptr, true, reader_ctx->index(),
+                              reader_ctx->index(), offsets, false, nullptr,
+                              reader_thread_ctx->m_blob_heap)) {
+    ++ctx->m_n_read;
 
-    /** Call the adapter callback if we have filled the buffer with
-    ADAPTER_SEND_NUM_RECS number of records. */
-    if (n_recs[thread_id] % m_send_num_recs == 0) {
-      if (m_load_rows(m_thread_contexts[thread_id], m_send_num_recs,
-                      (void *)m_bufs[thread_id])) {
-        err = DB_INTERRUPTED;
-      }
-      n_total_recs_sent.add(thread_id, m_send_num_recs);
+    if (m_parallel_reader.is_error_set()) {
+      /* Simply skip sending the records to RAPID in case of an error in the
+      parallel reader and return DB_ERROR as the error could have been
+      originated from RAPID threads. */
+      err = DB_ERROR;
     }
+  } else {
+    err = DB_ERROR;
   }
 
-  if (heap != NULL) {
+  if (heap != nullptr) {
     mem_heap_free(heap);
   }
 
   return (err);
 }
 
-void Parallel_partition_reader_adapter::set_info(dict_table_t *table,
-                                                 dict_index_t *index,
-                                                 trx_t *trx,
-                                                 row_prebuilt_t *prebuilt) {
-  m_index.push_back(index);
-  m_table.push_back(table);
-  m_trx.push_back(trx);
-  m_prebuilt.push_back(prebuilt);
-}
+dberr_t Parallel_reader_adapter::end(
+    Parallel_reader::Thread_ctx *reader_thread_ctx) {
+  dberr_t err{DB_SUCCESS};
 
-size_t Parallel_partition_reader_adapter::calc_num_threads() {
-  size_t num_threads = 0;
+  auto thread_id = reader_thread_ctx->m_thread_id;
+  auto thread_ctx = reader_thread_ctx->get_callback_ctx<Thread_ctx>();
 
-  if (m_num_parts == 0) {
-    return (0);
+  ut_a(thread_ctx->m_n_sent <= thread_ctx->m_n_read);
+  ut_a(thread_ctx->m_n_read - thread_ctx->m_n_sent <= m_batch_size);
+
+  if (!m_parallel_reader.is_error_set()) {
+    /* It's possible that we might not have sent the records in the buffer
+    when we have reached the end of records and the buffer is not full.
+    Send them now. */
+    size_t n_pending = pending(thread_ctx);
+
+    err = (n_pending != 0)
+              ? send_batch(reader_thread_ctx,
+                           reader_thread_ctx->m_prev_partition_id, n_pending)
+              : DB_SUCCESS;
   }
 
-  /** If partitions have already been created just return the number of threads
-   that needs to be spawned */
-  if (!m_partitions.empty()) {
-    for (uint i = 0; i < m_num_parts; ++i) {
-      num_threads += m_partitions[i].size();
-    }
+  m_end_fn(m_thread_ctxs[thread_id]);
 
-    return (std::min(num_threads, m_n_threads));
-  }
-
-  for (uint i = 0; i < m_num_parts; ++i) {
-    Parallel_reader_adapter::set_info(m_table[i], m_index[i], m_trx[i],
-                                      m_prebuilt[i]);
-    m_partitions.push_back(partition());
-    num_threads += m_partitions[i].size();
-    std::cerr << "Partition " << i << " would be using "
-              << std::min(m_partitions[i].size(), m_n_threads) << " threads."
-              << std::endl;
-  }
-
-  Parallel_reader_adapter::set_info(nullptr, nullptr, nullptr, m_prebuilt[0]);
-
-  num_threads = std::min(num_threads, m_n_threads);
-
-  return (num_threads);
-}
-
-dberr_t Parallel_partition_reader_adapter::read(Function &&f) {
-  m_n_threads = calc_num_threads();
-
-  if (m_n_threads == 0) {
-    return (DB_SUCCESS);
-  }
-
-  size_t id = 0;
-
-  dberr_t err = DB_SUCCESS;
-
-  for (uint i = 0; i < m_num_parts; ++i) {
-    for (auto range : m_partitions[i]) {
-      m_ctxs.push_back(UT_NEW_NOKEY(
-          Ctx(id, range, m_table[i], m_index[i], m_trx[i], m_prebuilt[i])));
-
-      if (m_ctxs.back() == nullptr) {
-        err = DB_OUT_OF_MEMORY;
-        break;
-      }
-
-      ++id;
-    }
-  }
-
-  if (err != DB_SUCCESS) {
-    uint part_first_ctx = 0;
-
-    for (uint i = 0; i < m_num_parts && part_first_ctx < m_ctxs.size(); ++i) {
-      if (m_partitions[i].size()) {
-        auto &ctx = m_ctxs[part_first_ctx];
-        ctx->destroy(ctx->m_range.first);
-        part_first_ctx += m_partitions[i].size();
-      }
-    }
-
-    for (auto &ctx : m_ctxs) {
-      UT_DELETE(ctx);
-    }
-
-    return (err);
-  }
-
-  start_parallel_load(f);
-
-  uint part_first_ctx = 0;
-
-  for (uint i = 0; i < m_num_parts && part_first_ctx < m_ctxs.size(); ++i) {
-    if (m_partitions[i].size()) {
-      auto &ctx = m_ctxs[part_first_ctx];
-      ctx->destroy(ctx->m_range.first);
-      part_first_ctx += m_partitions[i].size();
-    }
-  }
-
-  for (auto &ctx : m_ctxs) {
-    if (ctx->m_err != DB_SUCCESS) {
-      /* Note: We return the error of the last context. We can't return
-      multiple values. The expectation is that the callback function has
-      the error state per thread. */
-      err = ctx->m_err;
-    }
-
-    UT_DELETE(ctx);
-  }
-
-  m_ctxs.clear();
+  UT_DELETE(thread_ctx);
+  reader_thread_ctx->set_callback_ctx<Thread_ctx>(nullptr);
 
   return (err);
 }
+#endif /* !UNIV_HOTBACKUP */

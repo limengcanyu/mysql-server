@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -26,25 +26,28 @@
 #define MYSQL_HARNESS_SOCKETOPERATIONS_INCLUDED
 
 #include <chrono>
+#include <memory>  // unique_ptr
 #include <stdexcept>
 #include <string>
+#include <system_error>
+
 #ifdef _WIN32
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-typedef ULONG nfds_t;
-typedef long ssize_t;
 #else
-#include <errno.h>
-#include <netdb.h>
-#include <poll.h>
-#include <sys/types.h>
+#include <netdb.h>       // addrinfo
+#include <sys/socket.h>  // sockaddr
 #endif
 
 #include "harness_export.h"
-#include "tcp_address.h"
+#include "mysql/harness/net_ts/impl/socket_constants.h"
+#include "mysql/harness/stdx/expected.h"
 
 namespace mysql_harness {
+
+using socket_t = net::impl::socket::native_handle_type;
+constexpr socket_t kInvalidSocket = net::impl::socket::kInvalidSocket;
 
 /** @class SocketOperationsBase
  * @brief Base class to allow multiple SocketOperations implementations
@@ -52,11 +55,11 @@ namespace mysql_harness {
  */
 class HARNESS_EXPORT SocketOperationsBase {
  public:
-#ifdef _WIN32
-  using socket_t = SOCKET;
-#else
-  using socket_t = int;
-#endif
+  template <class T>
+  using result = stdx::expected<T, std::error_code>;
+
+  using addrinfo_result =
+      result<std::unique_ptr<struct ::addrinfo, void (*)(struct ::addrinfo *)>>;
 
   explicit SocketOperationsBase() = default;
   explicit SocketOperationsBase(const SocketOperationsBase &) = default;
@@ -64,40 +67,45 @@ class HARNESS_EXPORT SocketOperationsBase {
   virtual ~SocketOperationsBase() = default;
 
   // the following functions are thin wrappers around syscalls
-  virtual ssize_t write(int fd, void *buffer, size_t nbyte) = 0;
-  virtual ssize_t read(int fd, void *buffer, size_t nbyte) = 0;
-  virtual void close(int fd) = 0;
-  virtual void shutdown(int fd) = 0;
-  virtual void freeaddrinfo(addrinfo *ai) = 0;
-  virtual int getaddrinfo(const char *node, const char *service,
-                          const addrinfo *hints, addrinfo **res) = 0;
-  virtual int bind(int fd, const struct sockaddr *addr, socklen_t len) = 0;
-  virtual int socket(int domain, int type, int protocol) = 0;
-  virtual int setsockopt(int fd, int level, int optname, const void *optval,
-                         socklen_t optlen) = 0;
-  virtual int listen(int fd, int n) = 0;
-  virtual int get_errno() = 0;
-  virtual void set_errno(int) = 0;
-  virtual int poll(struct pollfd *fds, nfds_t nfds,
-                   std::chrono::milliseconds timeout) = 0;
-  virtual const char *inetntop(int af, void *cp, char *buf, socklen_t len) = 0;
-  virtual int getpeername(int fd, struct sockaddr *addr, socklen_t *len) = 0;
+  virtual result<size_t> write(socket_t fd, const void *buffer,
+                               size_t nbyte) = 0;
+  virtual result<size_t> read(socket_t fd, void *buffer, size_t nbyte) = 0;
+  virtual result<void> close(socket_t fd) = 0;
+  virtual result<void> shutdown(socket_t fd) = 0;
+  virtual addrinfo_result getaddrinfo(const char *node, const char *service,
+                                      const addrinfo *hints) = 0;
+  virtual result<void> connect(socket_t fd, const struct sockaddr *addr,
+                               size_t len) = 0;
+  virtual result<void> bind(socket_t fd, const struct sockaddr *addr,
+                            size_t len) = 0;
+  virtual result<socket_t> socket(int domain, int type, int protocol) = 0;
+  virtual result<void> setsockopt(socket_t fd, int level, int optname,
+                                  const void *optval, size_t optlen) = 0;
+  virtual result<void> listen(socket_t fd, int n) = 0;
+  virtual result<size_t> poll(struct pollfd *fds, size_t nfds,
+                              std::chrono::milliseconds timeout) = 0;
+  virtual result<const char *> inetntop(int af, const void *cp, char *out,
+                                        size_t out_len) = 0;
+  virtual result<void> getpeername(socket_t fd, struct sockaddr *addr,
+                                   size_t *len) = 0;
 
   /** @brief Wrapper around socket library write() with a looping logic
    *         making sure the whole buffer got written
    */
-  virtual ssize_t write_all(int fd, void *buffer, size_t nbyte) {
-    ssize_t written = 0;
+  virtual result<size_t> write_all(socket_t fd, const void *buffer,
+                                   size_t nbyte) {
     size_t buffer_offset = 0;
     while (buffer_offset < nbyte) {
-      if ((written =
-               this->write(fd, reinterpret_cast<char *>(buffer) + buffer_offset,
-                           nbyte - buffer_offset)) < 0) {
-        return -1;
+      const auto write_res = this->write(
+          fd, reinterpret_cast<const char *>(buffer) + buffer_offset,
+          nbyte - buffer_offset);
+
+      if (!write_res) {
+        return write_res;
       }
-      buffer_offset += static_cast<size_t>(written);
+      buffer_offset += write_res.value();
     }
-    return static_cast<ssize_t>(nbyte);
+    return buffer_offset;
   }
 
   /**
@@ -108,8 +116,16 @@ class HARNESS_EXPORT SocketOperationsBase {
    *
    * call connect_non_blocking_status() to get the final result
    */
-  virtual int connect_non_blocking_wait(socket_t sock,
-                                        std::chrono::milliseconds timeout) = 0;
+  virtual result<void> connect_non_blocking_wait(
+      socket_t sock, std::chrono::milliseconds timeout) = 0;
+
+  /**
+   * Sets blocking flag for given socket
+   *
+   * @param sock a socket file descriptor
+   * @param blocking whether to set blocking off (false) or on (true)
+   */
+  virtual result<void> set_socket_blocking(socket_t sock, bool blocking) = 0;
 
   /**
    * get the non-blocking connect() status
@@ -118,7 +134,7 @@ class HARNESS_EXPORT SocketOperationsBase {
    *
    * @see connect_non_blocking_wait() and poll()
    */
-  virtual int connect_non_blocking_status(int sock, int &so_error) = 0;
+  virtual result<void> connect_non_blocking_status(socket_t sock) = 0;
 
   /** @brief Exception thrown by `get_local_hostname()` on error */
   class LocalHostnameResolutionError : public std::runtime_error {
@@ -136,52 +152,59 @@ class HARNESS_EXPORT SocketOperations : public SocketOperationsBase {
  public:
   static SocketOperations *instance();
 
+  SocketOperations(const SocketOperations &) = delete;
+  SocketOperations operator=(const SocketOperations &) = delete;
+
   /** @brief Thin wrapper around socket library write() */
-  ssize_t write(int fd, void *buffer, size_t nbyte) override;
+  result<size_t> write(socket_t fd, const void *buffer, size_t nbyte) override;
 
   /** @brief Thin wrapper around socket library read() */
-  ssize_t read(int fd, void *buffer, size_t nbyte) override;
+  result<size_t> read(socket_t fd, void *buffer, size_t nbyte) override;
 
   /** @brief Thin wrapper around socket library close() */
-  void close(int fd) override;
+  result<void> close(socket_t fd) override;
 
   /** @brief Thin wrapper around socket library shutdown() */
-  void shutdown(int fd) override;
-
-  /** @brief Thin wrapper around socket library freeaddrinfo() */
-  void freeaddrinfo(addrinfo *ai) override;
+  result<void> shutdown(socket_t fd) override;
 
   /** @brief Thin wrapper around socket library getaddrinfo() */
-  int getaddrinfo(const char *node, const char *service, const addrinfo *hints,
-                  addrinfo **res) override;
+  result<std::unique_ptr<addrinfo, void (*)(addrinfo *)>> getaddrinfo(
+      const char *node, const char *service, const addrinfo *hints) override;
+
+  /** @brief Thin wrapper around socket library connect() */
+  result<void> connect(socket_t fd, const struct sockaddr *addr,
+                       size_t len) override;
 
   /** @brief Thin wrapper around socket library bind() */
-  int bind(int fd, const struct sockaddr *addr, socklen_t len) override;
+  result<void> bind(socket_t fd, const struct sockaddr *addr,
+                    size_t len) override;
 
   /** @brief Thin wrapper around socket library socket() */
-  int socket(int domain, int type, int protocol) override;
+  result<socket_t> socket(int domain, int type, int protocol) override;
 
   /** @brief Thin wrapper around socket library setsockopt() */
-  int setsockopt(int fd, int level, int optname, const void *optval,
-                 socklen_t optlen) override;
+  result<void> setsockopt(socket_t fd, int level, int optname,
+                          const void *optval, size_t optlen) override;
 
   /** @brief Thin wrapper around socket library listen() */
-  int listen(int fd, int n) override;
+  result<void> listen(socket_t fd, int n) override;
 
   /**
    * wrapper around poll()/WSAPoll()
    */
-  int poll(struct pollfd *fds, nfds_t nfds,
-           std::chrono::milliseconds timeout) override;
+  result<size_t> poll(struct pollfd *fds, size_t nfds,
+                      std::chrono::milliseconds timeout) override;
 
   /** @brief Wrapper around socket library inet_ntop()
              Can't call it inet_ntop as it is a macro on freebsd and causes
              compilation errors.
   */
-  const char *inetntop(int af, void *cp, char *buf, socklen_t len) override;
+  result<const char *> inetntop(int af, const void *cp, char *out,
+                                size_t out_len) override;
 
   /** @brief Wrapper around socket library getpeername() */
-  int getpeername(int fd, struct sockaddr *addr, socklen_t *len) override;
+  result<void> getpeername(socket_t fd, struct sockaddr *addr,
+                           size_t *len) override;
 
   /**
    * wait for a non-blocking connect() to finish
@@ -191,8 +214,8 @@ class HARNESS_EXPORT SocketOperations : public SocketOperationsBase {
    * @param sock a connected socket
    * @param timeout time to wait for the connect to complete
    */
-  int connect_non_blocking_wait(socket_t sock,
-                                std::chrono::milliseconds timeout) override;
+  result<void> connect_non_blocking_wait(
+      socket_t sock, std::chrono::milliseconds timeout) override;
 
   /**
    * get the non-blocking connect() status
@@ -201,7 +224,15 @@ class HARNESS_EXPORT SocketOperations : public SocketOperationsBase {
    *
    * @see connect_non_blocking_wait() and poll()
    */
-  int connect_non_blocking_status(int sock, int &so_error) override;
+  result<void> connect_non_blocking_status(socket_t sock) override;
+
+  /**
+   * Sets blocking flag for given socket
+   *
+   * @param sock a socket file descriptor
+   * @param blocking whether to set blocking off (false) or on (true)
+   */
+  result<void> set_socket_blocking(socket_t sock, bool blocking) override;
 
   /** @brief return hostname of local host
    *
@@ -209,33 +240,7 @@ class HARNESS_EXPORT SocketOperations : public SocketOperationsBase {
    */
   std::string get_local_hostname() override;
 
-  /**
-   * get the error-code of the last (socket) operation
-   *
-   * @see errno or WSAGetLastError()
-   */
-  int get_errno() override {
-#ifdef _WIN32
-    return WSAGetLastError();
-#else
-    return errno;
-#endif
-  }
-
-  /**
-   * wrapper around errno/WSAGetLastError()
-   */
-  void set_errno(int e) override {
-#ifdef _WIN32
-    WSASetLastError(e);
-#else
-    errno = e;
-#endif
-  }
-
  private:
-  SocketOperations(const SocketOperations &) = delete;
-  SocketOperations operator=(const SocketOperations &) = delete;
   SocketOperations() = default;
 };
 

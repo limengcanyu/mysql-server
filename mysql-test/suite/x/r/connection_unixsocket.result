@@ -22,6 +22,9 @@ CREATE TABLE `city` (
 `Population` int(11) NOT NULL default '0',
 PRIMARY KEY  (`ID`)
 );
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 INSERT INTO `city` VALUES (1,'Kabul','AFG','Kabol',1780);
 INSERT INTO `city` VALUES (2,'Qandahar','AFG','Qandahar',237);
 INSERT INTO `city` VALUES (3,'Herat','AFG','Herat',186);
@@ -418,5 +421,12 @@ Mysqlx.Ok {
   msg: "bye!"
 }
 ok
+# restart:
 DROP TABLE `city`;
-DROP USER user_127_0_0_1@127.0.0.1,user_8_8_8_8@8.8.8.8, user_all@'%', user_localhost@localhost, user_localhost_8_8_8_8@8.8.8.8, user_localhost_8_8_8_8@localhost;
+DROP USER user_127_0_0_1@127.0.0.1;
+DROP USER user_8_8_8_8@8.8.8.8;
+DROP USER user_all@'%';
+DROP USER user_localhost@localhost;
+DROP USER user_localhost_8_8_8_8@localhost;
+DROP USER user_localhost_8_8_8_8@8.8.8.8;
+DROP USER user_requires_ssl;

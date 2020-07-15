@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -37,6 +37,7 @@
 #include "NdbImport.hpp"
 #include "NdbImportUtil.hpp"
 #include "NdbImportCsv.hpp"
+#include "my_byteorder.h"
 // STL
 #include <map>
 #include <algorithm>
@@ -140,6 +141,7 @@ public:
                 const char* table,
                 uint& tabid,
                 Error& error);
+  int remove_table(uint table_id);
 
   // files
 
@@ -271,6 +273,7 @@ public:
     // add and set table
     int add_table(const char* database, const char* table, uint& tabid);
     void set_table(uint tabid);
+    int remove_table(uint table_id);
     // start teams and run the job until done
     void do_start();
     void start_diag_team();
@@ -528,6 +531,7 @@ public:
 
   struct Op : ListEnt {
     Op();
+    ~Op();
     Op* next() {
       return static_cast<Op*>(m_next);
     }
@@ -732,6 +736,7 @@ public:
     virtual void state_poll() = 0;
     virtual void str_state(char* str) const;
     void reject_row(Row* row, const Error& error);
+    virtual void handle_error(Op *op); // Release ops, reject rows at error
     ExecState::State m_execstate;
     uint m_nodeindex;   // index into ndb nodes array
     uint m_nodeid;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -79,8 +79,8 @@ void log_primary_member_details() {
     group_member_mgr->get_primary_member_uuid(primary_member_uuid);
     Group_member_info *primary_member_info =
         group_member_mgr->get_group_member_info(primary_member_uuid);
-    if (primary_member_info != NULL) {
-      LogPluginErr(INFORMATION_LEVEL, ER_GRP_RPL_SERVER_WORKING_AS_SECONDARY,
+    if (primary_member_info != nullptr) {
+      LogPluginErr(SYSTEM_LEVEL, ER_GRP_RPL_SRV_SECONDARY_MEM,
                    primary_member_info->get_hostname().c_str(),
                    primary_member_info->get_port());
       delete primary_member_info;
@@ -94,4 +94,14 @@ void abort_plugin_process(const char *message) {
     // If the shutdown failed then abort the server.
     abort();
   }
+}
+
+void plugin_escape_string(std::string &string_to_escape) {
+  size_t length = string_to_escape.length();
+  char *end_string =
+      (char *)my_malloc(PSI_NOT_INSTRUMENTED, 2 * length + 1, MYF(0));
+  escape_string_for_mysql(&my_charset_utf8_general_ci, end_string,
+                          2 * length + 1, string_to_escape.c_str(), length);
+  string_to_escape.assign(end_string);
+  my_free(end_string);
 }

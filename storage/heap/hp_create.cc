@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -24,11 +24,14 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include <algorithm>
+
 #include "my_dbug.h"
 #include "my_inttypes.h"
 #include "my_macros.h"
 #include "mysql/service_mysql_alloc.h"
 #include "storage/heap/heapdef.h"
+#include "template_utils.h"
 
 static int keys_compare(const void *a, const void *b, const void *c);
 static void init_block(HP_BLOCK *block, uint reclength, ulong min_records,
@@ -39,24 +42,24 @@ static void init_block(HP_BLOCK *block, uint reclength, ulong min_records,
 int heap_create(const char *name, HP_CREATE_INFO *create_info, HP_SHARE **res,
                 bool *created_new_share) {
   uint i, j, key_segs, max_length, length;
-  HP_SHARE *share = 0;
+  HP_SHARE *share = nullptr;
   HA_KEYSEG *keyseg;
   HP_KEYDEF *keydef = create_info->keydef;
   uint reclength = create_info->reclength;
   uint keys = create_info->keys;
   ulong min_records = create_info->min_records;
   ulong max_records = create_info->max_records;
-  DBUG_ENTER("heap_create");
+  DBUG_TRACE;
 
   if (!create_info->single_instance) {
     mysql_mutex_lock(&THR_LOCK_heap);
     share = hp_find_named_heap(name);
     if (share && share->open_count == 0) {
       hp_free(share);
-      share = 0;
+      share = nullptr;
     }
   }
-  *created_new_share = (share == NULL);
+  *created_new_share = (share == nullptr);
 
   if (!share) {
     HP_KEYDEF *keyinfo;
@@ -66,7 +69,7 @@ int heap_create(const char *name, HP_CREATE_INFO *create_info, HP_SHARE **res,
       We have to store sometimes uchar* del_link in records,
       so the record length should be at least sizeof(uchar*)
     */
-    set_if_bigger(reclength, sizeof(uchar *));
+    reclength = std::max(reclength, uint(sizeof(uchar *)));
 
     for (i = key_segs = max_length = 0, keyinfo = keydef; i < keys;
          i++, keyinfo++) {
@@ -179,8 +182,8 @@ int heap_create(const char *name, HP_CREATE_INFO *create_info, HP_SHARE **res,
         keyseg->null_bit = 0;
         keyseg++;
 
-        init_tree(&keyinfo->rb_tree, 0, 0, sizeof(uchar *), keys_compare, 1,
-                  NULL, NULL);
+        init_tree(&keyinfo->rb_tree, 0, sizeof(uchar *), keys_compare, true,
+                  nullptr, nullptr);
         keyinfo->delete_key = hp_rb_delete_key;
         keyinfo->write_key = hp_rb_write_key;
       } else {
@@ -205,7 +208,7 @@ int heap_create(const char *name, HP_CREATE_INFO *create_info, HP_SHARE **res,
     share->auto_key = create_info->auto_key;
     share->auto_key_type = create_info->auto_key_type;
     share->auto_increment = create_info->auto_increment;
-    share->create_time = (long)time((time_t *)0);
+    share->create_time = (long)time((time_t *)nullptr);
     /* Must be allocated separately for rename to work */
     if (!(share->name = my_strdup(hp_key_memory_HP_SHARE, name, MYF(0)))) {
       my_free(share);
@@ -229,18 +232,18 @@ int heap_create(const char *name, HP_CREATE_INFO *create_info, HP_SHARE **res,
   }
 
   *res = share;
-  DBUG_RETURN(0);
+  return 0;
 
 err:
   if (!create_info->single_instance) mysql_mutex_unlock(&THR_LOCK_heap);
-  DBUG_RETURN(1);
+  return 1;
 } /* heap_create */
 
 static int keys_compare(const void *a, const void *b, const void *c) {
   uint not_used[2];
-  heap_rb_param *param = (heap_rb_param *)a;
-  uchar *key1 = (uchar *)b;
-  uchar *key2 = (uchar *)c;
+  const heap_rb_param *param = pointer_cast<const heap_rb_param *>(a);
+  const uchar *key1 = pointer_cast<const uchar *>(b);
+  const uchar *key2 = pointer_cast<const uchar *>(c);
   return ha_key_cmp(param->keyseg, key1, key2, param->key_length,
                     param->search_flag, not_used);
 }
@@ -249,7 +252,7 @@ static void init_block(HP_BLOCK *block, uint reclength, ulong min_records,
                        ulong max_records) {
   uint i, recbuffer, records_in_block;
 
-  max_records = MY_MAX(min_records, max_records);
+  max_records = std::max(min_records, max_records);
   if (!max_records) max_records = 1000; /* As good as quess as anything */
   recbuffer =
       (uint)(reclength + sizeof(uchar **) - 1) & ~(sizeof(uchar **) - 1);
@@ -278,13 +281,13 @@ static inline void heap_try_free(HP_SHARE *share) {
   if (share->open_count == 0)
     hp_free(share);
   else
-    share->delete_on_close = 1;
+    share->delete_on_close = true;
 }
 
 int heap_delete_table(const char *name) {
   int result;
   HP_SHARE *share;
-  DBUG_ENTER("heap_delete_table");
+  DBUG_TRACE;
 
   mysql_mutex_lock(&THR_LOCK_heap);
   if ((share = hp_find_named_heap(name))) {
@@ -295,19 +298,18 @@ int heap_delete_table(const char *name) {
     set_my_errno(result);
   }
   mysql_mutex_unlock(&THR_LOCK_heap);
-  DBUG_RETURN(result);
+  return result;
 }
 
 void heap_drop_table(HP_INFO *info) {
-  DBUG_ENTER("heap_drop_table");
+  DBUG_TRACE;
   mysql_mutex_lock(&THR_LOCK_heap);
   heap_try_free(info->s);
   mysql_mutex_unlock(&THR_LOCK_heap);
-  DBUG_VOID_RETURN;
 }
 
 void hp_free(HP_SHARE *share) {
-  bool not_internal_table = (share->open_list.data != NULL);
+  bool not_internal_table = (share->open_list.data != nullptr);
   if (not_internal_table) /* If not internal table */
     heap_share_list = list_delete(heap_share_list, &share->open_list);
   hp_clear(share); /* Remove blocks from memory */

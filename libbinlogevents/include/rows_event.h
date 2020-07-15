@@ -387,6 +387,17 @@ namespace binary_log {
     the length of the geometry: 1, 2, 3, or 4.</td>
   </tr>
 
+  <tr>
+    <td>MYSQL_TYPE_TYPED_ARRAY</td><td>15</td>
+    <td>up to 4 bytes</td>
+    <td>
+      - The first byte holds the MySQL type for the elements.
+      - The following 0, 1, 2, or 3 bytes holds the metadata for the MySQL
+        type for the elements. The contents of these bytes depends on the
+        element type, as described in the other rows of this table.
+    </td>
+  </tr>
+
   </table>
 
   The table below lists all optional metadata types, along with the numerical
@@ -641,10 +652,10 @@ class Table_map_event : public Binary_log_event {
         m_tbllen(tbllen),
         m_colcnt(colcnt),
         m_field_metadata_size(0),
-        m_field_metadata(0),
-        m_null_bits(0),
+        m_field_metadata(nullptr),
+        m_null_bits(nullptr),
         m_optional_metadata_len(0),
-        m_optional_metadata(NULL) {
+        m_optional_metadata(nullptr) {
     if (dbnam) m_dbnam = std::string(dbnam, m_dblen);
     if (tblnam) m_tblnam = std::string(tblnam, m_tbllen);
   }
@@ -676,12 +687,12 @@ class Table_map_event : public Binary_log_event {
 
   Table_map_event()
       : Binary_log_event(TABLE_MAP_EVENT),
-        m_coltype(0),
+        m_coltype(nullptr),
         m_field_metadata_size(0),
-        m_field_metadata(0),
-        m_null_bits(0),
+        m_field_metadata(nullptr),
+        m_null_bits(nullptr),
         m_optional_metadata_len(0),
-        m_optional_metadata(NULL) {}
+        m_optional_metadata(nullptr) {}
 
   unsigned long long get_table_id() { return m_table_id.id(); }
   std::string get_table_name() { return m_tblnam; }
@@ -1136,7 +1147,8 @@ class Rows_query_event : public virtual Ignorable_event {
     It is the minimal constructor, and all it will do is set the type_code as
     ROWS_QUERY_LOG_EVENT in the header object in Binary_log_event.
   */
-  Rows_query_event() : Ignorable_event(ROWS_QUERY_LOG_EVENT), m_rows_query(0) {}
+  Rows_query_event()
+      : Ignorable_event(ROWS_QUERY_LOG_EVENT), m_rows_query(nullptr) {}
 
   virtual ~Rows_query_event();
 

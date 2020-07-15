@@ -1,7 +1,7 @@
 #ifndef SQL_PARTITION_INCLUDED
 #define SQL_PARTITION_INCLUDED
 
-/* Copyright (c) 2006, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2006, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -151,11 +151,6 @@ bool verify_data_with_partition(TABLE *table, TABLE *part_table,
 bool compare_partition_options(HA_CREATE_INFO *table_create_info,
                                partition_element *part_elem);
 
-void create_partition_name(char *out, const char *in1, const char *in2,
-                           bool translate);
-void create_subpartition_name(char *out, const char *in1, const char *in2,
-                              const char *in3);
-
 enum enum_partition_keywords {
   PKW_HASH = 0,
   PKW_RANGE,
@@ -167,6 +162,6 @@ enum enum_partition_keywords {
   PKW_ALGORITHM
 };
 
-extern const LEX_STRING partition_keywords[];
+extern const LEX_CSTRING partition_keywords[];
 
 #endif /* SQL_PARTITION_INCLUDED */

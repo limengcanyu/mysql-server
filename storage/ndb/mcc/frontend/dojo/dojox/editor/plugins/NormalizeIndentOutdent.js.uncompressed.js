@@ -1,16 +1,12 @@
-//>>built
 define("dojox/editor/plugins/NormalizeIndentOutdent", [
 	"dojo",
 	"dijit",
 	"dojox",
-	"dijit/_editor/range",
-	"dijit/_editor/selection",
 	"dijit/_editor/_Plugin",
-	"dojo/_base/connect",
 	"dojo/_base/declare"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, _Plugin) {
 
-dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin,{
+var NormalizeIndentOutdent = dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent", _Plugin, {
 	// summary:
 	//		This plugin provides improved indent and outdent handling to
 	//		the editor.  It tries to generate valid HTML, as well as be
@@ -191,10 +187,8 @@ dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin
 							end = div.nextSibling;
 						}
 						this._indentElement(div);
-						dojo.withGlobal(ed.window,
-							"selectElementChildren", dijit._editor.selection, [div]);
-						dojo.withGlobal(ed.window,
-							"collapse", dijit._editor.selection, [true]);
+						ed._sCall("selectElementChildren", [div]);
+						ed._sCall("collapse", [true]);
 					}
 				}else{
 					while(node && node !== ed.document && node !== ed.editNode){
@@ -230,7 +224,7 @@ dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin
 					// that is safely in the range.
 					curNode = start;
 					while(curNode.nextSibling &&
-						dojo.withGlobal(ed.window, "inSelection", dijit._editor.selection, [curNode])){
+						ed._sCall("inSelection", [curNode])){
 						curNode = curNode.nextSibling;
 					}
 					end = curNode;
@@ -531,10 +525,8 @@ dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin
 				}
 
 				// Move cursor.
-				dojo.withGlobal(ed.window,
-					"selectElementChildren", dijit._editor.selection, [listItem]);
-				dojo.withGlobal(ed.window,
-					"collapse", dijit._editor.selection, [true]);
+				ed._sCall("selectElementChildren", [listItem]);
+				ed._sCall("collapse", [true]);
 			}
 		}
 	},
@@ -662,10 +654,8 @@ dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin
 			}
 			
 			// Move our cursor to the list item we moved.
-			dojo.withGlobal(ed.window,
-				"selectElementChildren", dijit._editor.selection, [listItem]);
-			dojo.withGlobal(ed.window,
-				"collapse", dijit._editor.selection, [true]);
+			ed._sCall("selectElementChildren", [listItem]);
+			ed._sCall("collapse", [true]);
 		}else{
 			// Not in a nested list, so we can just defer to the
 			// browser and hope it outdents right.
@@ -768,10 +758,8 @@ dojo.declare("dojox.editor.plugins.NormalizeIndentOutdent",dijit._editor._Plugin
 		// tags:
 		//		private
 		var editDoc = this.editor.document.body;
-		return dojo.withGlobal(this.editor.window, function(){
-			var cs = dojo.getComputedStyle(editDoc);
-			return cs ? cs.direction == "ltr" : true;
-		});
+		var cs = dojo.getComputedStyle(editDoc);
+		return cs ? cs.direction == "ltr" : true;
 	},
 
 	_isInlineFormat: function(tag){
@@ -866,7 +854,7 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name.toLowerCase();
 	if(name === "normalizeindentoutdent"){
-		o.plugin = new dojox.editor.plugins.NormalizeIndentOutdent({
+		o.plugin = new NormalizeIndentOutdent({
 			indentBy: ("indentBy" in o.args) ?
 				(o.args.indentBy > 0 ? o.args.indentBy : 40) :
 				40,
@@ -877,6 +865,6 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	}
 });
 
-return dojox.editor.plugins.NormalizeIndentOutdent;
+return NormalizeIndentOutdent;
 
 });

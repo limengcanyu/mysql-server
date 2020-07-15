@@ -1,6 +1,6 @@
 /***********************************************************************
 
-Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
+Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -48,122 +48,25 @@ extern bool release_mdl_lock;
 
 extern option_t config_option_names[];
 
-cb_open_table_t ib_cb_open_table;
-cb_read_row_t ib_cb_read_row;
-cb_insert_row_t ib_cb_insert_row;
-cb_cursor_delete_row_t ib_cb_delete_row;
-cb_cursor_update_row_t ib_cb_update_row;
-cb_cursor_moveto_t ib_cb_moveto;
-cb_sec_search_tuple_create_t ib_cb_search_tuple_create;
-cb_sec_read_tuple_create_t ib_cb_read_tuple_create;
-cb_tuple_delete_t ib_cb_tuple_delete;
-cb_tuple_read_u8_t ib_cb_tuple_read_u8;
-cb_tuple_read_u16_t ib_cb_tuple_read_u16;
-cb_tuple_read_u32_t ib_cb_tuple_read_u32;
-cb_tuple_read_u64_t ib_cb_tuple_read_u64;
-cb_tuple_read_i8_t ib_cb_tuple_read_i8;
-cb_tuple_read_i16_t ib_cb_tuple_read_i16;
-cb_tuple_read_i32_t ib_cb_tuple_read_i32;
-cb_tuple_read_i64_t ib_cb_tuple_read_i64;
-cb_col_set_value_t ib_cb_col_set_value;
-cb_col_get_value_t ib_cb_col_get_value;
-cb_col_get_meta_t ib_cb_col_get_meta;
-cb_trx_begin_t ib_cb_trx_begin;
-cb_trx_commit_t ib_cb_trx_commit;
-cb_trx_rollback_t ib_cb_trx_rollback;
-cb_trx_start_t ib_cb_trx_start;
-cb_trx_release_t ib_cb_trx_release;
-cb_tuple_get_n_cols_t ib_cb_tuple_get_n_cols;
-cb_cursor_set_match_mode_t ib_cb_cursor_set_match_mode;
-cb_cursor_lock_t ib_cb_cursor_lock;
-cb_cursor_close_t ib_cb_cursor_close;
-cb_cursor_new_trx_t ib_cb_cursor_new_trx;
-cb_cursor_reset_t ib_cb_cursor_reset;
-cb_col_get_name_t ib_cb_col_get_name;
-cb_get_idx_field_name ib_cb_get_idx_field_name;
-cb_cursor_first_t ib_cb_cursor_first;
-cb_cursor_next_t ib_cb_cursor_next;
-cb_cursor_open_index_using_name_t ib_cb_cursor_open_index_using_name;
-cb_close_thd_t ib_cb_close_thd;
-cb_get_cfg_t ib_cb_get_cfg;
-cb_cursor_set_cluster_access_t ib_cb_cursor_set_cluster_access;
-cb_cursor_commit_trx_t ib_cb_cursor_commit_trx;
-cb_cfg_trx_level_t ib_cb_cfg_trx_level;
-cb_get_n_user_cols ib_cb_get_n_user_cols;
-cb_cursor_set_lock_t ib_cb_cursor_set_lock;
-cb_trx_get_start_time ib_cb_trx_get_start_time;
-cb_bk_commit_interval ib_cb_cfg_bk_commit_interval;
-cb_ut_strerr ib_cb_ut_strerr;
-cb_cursor_stmt_begin ib_cb_cursor_stmt_begin;
-#ifdef UNIV_MEMCACHED_SDI
-cb_sdi_get ib_cb_sdi_get;
-cb_sdi_delete ib_cb_sdi_delete;
-cb_sdi_set ib_cb_sdi_set;
-cb_sdi_create ib_cb_sdi_create;
-cb_sdi_drop ib_cb_sdi_drop;
-cb_sdi_get_keys ib_cb_sdi_get_keys;
-#endif /* UNIV_MEMCACHED_SDI */
-cb_trx_read_only_t ib_cb_trx_read_only;
-cb_is_virtual_table ib_cb_is_virtual_table;
+/*
+Generates declarations which look like:
+   cb_cursor_open_table_t ib_cb_cursor_open_table;
+for each api function.
+*/
+#define VARIABLE_DECLARATION_TRANSFORM(stem) cb_##stem##_t ib_cb_##stem;
+
+FOR_EACH_API_METHOD_NAME_STEM(VARIABLE_DECLARATION_TRANSFORM)
+
+/*
+Generates array elements which look like:
+    (ib_cb_t *)&ib_cb_cursor_open_table,
+for each api function.
+*/
+#define ARRAY_ELEMENT_TRANSFORM(stem) (ib_cb_t *)&ib_cb_##stem,
 
 /** InnoDB API callback functions */
 static ib_cb_t *innodb_memcached_api[] = {
-    (ib_cb_t *)&ib_cb_open_table,
-    (ib_cb_t *)&ib_cb_read_row,
-    (ib_cb_t *)&ib_cb_insert_row,
-    (ib_cb_t *)&ib_cb_delete_row,
-    (ib_cb_t *)&ib_cb_update_row,
-    (ib_cb_t *)&ib_cb_moveto,
-    (ib_cb_t *)&ib_cb_cursor_first,
-    (ib_cb_t *)&ib_cb_cursor_next,
-    (ib_cb_t *)&ib_cb_cursor_set_match_mode,
-    (ib_cb_t *)&ib_cb_search_tuple_create,
-    (ib_cb_t *)&ib_cb_read_tuple_create,
-    (ib_cb_t *)&ib_cb_tuple_delete,
-    (ib_cb_t *)&ib_cb_tuple_read_u8,
-    (ib_cb_t *)&ib_cb_tuple_read_u16,
-    (ib_cb_t *)&ib_cb_tuple_read_u32,
-    (ib_cb_t *)&ib_cb_tuple_read_u64,
-    (ib_cb_t *)&ib_cb_tuple_read_i8,
-    (ib_cb_t *)&ib_cb_tuple_read_i16,
-    (ib_cb_t *)&ib_cb_tuple_read_i32,
-    (ib_cb_t *)&ib_cb_tuple_read_i64,
-    (ib_cb_t *)&ib_cb_tuple_get_n_cols,
-    (ib_cb_t *)&ib_cb_col_set_value,
-    (ib_cb_t *)&ib_cb_col_get_value,
-    (ib_cb_t *)&ib_cb_col_get_meta,
-    (ib_cb_t *)&ib_cb_trx_begin,
-    (ib_cb_t *)&ib_cb_trx_commit,
-    (ib_cb_t *)&ib_cb_trx_rollback,
-    (ib_cb_t *)&ib_cb_trx_start,
-    (ib_cb_t *)&ib_cb_trx_release,
-    (ib_cb_t *)&ib_cb_cursor_lock,
-    (ib_cb_t *)&ib_cb_cursor_close,
-    (ib_cb_t *)&ib_cb_cursor_new_trx,
-    (ib_cb_t *)&ib_cb_cursor_reset,
-    (ib_cb_t *)&ib_cb_col_get_name,
-    (ib_cb_t *)&ib_cb_cursor_open_index_using_name,
-    (ib_cb_t *)&ib_cb_get_cfg,
-    (ib_cb_t *)&ib_cb_cursor_set_cluster_access,
-    (ib_cb_t *)&ib_cb_cursor_commit_trx,
-    (ib_cb_t *)&ib_cb_cfg_trx_level,
-    (ib_cb_t *)&ib_cb_get_n_user_cols,
-    (ib_cb_t *)&ib_cb_cursor_set_lock,
-    (ib_cb_t *)&ib_cb_get_idx_field_name,
-    (ib_cb_t *)&ib_cb_trx_get_start_time,
-    (ib_cb_t *)&ib_cb_cfg_bk_commit_interval,
-    (ib_cb_t *)&ib_cb_ut_strerr,
-    (ib_cb_t *)&ib_cb_cursor_stmt_begin,
-#ifdef UNIV_MEMCACHED_SDI
-    (ib_cb_t *)&ib_cb_sdi_get,
-    (ib_cb_t *)&ib_cb_sdi_delete,
-    (ib_cb_t *)&ib_cb_sdi_set,
-    (ib_cb_t *)&ib_cb_sdi_create,
-    (ib_cb_t *)&ib_cb_sdi_drop,
-    (ib_cb_t *)&ib_cb_sdi_get_keys,
-#endif /* UNIV_MEMCACHED_SDI */
-    (ib_cb_t *)&ib_cb_trx_read_only,
-    (ib_cb_t *)&ib_cb_is_virtual_table};
+    FOR_EACH_API_METHOD_NAME_STEM(ARRAY_ELEMENT_TRANSFORM)};
 
 /** Set expiration time. If the exp sent by client is larger than
 60*60*24*30 (number of seconds in 30 days), it  will be considered
@@ -218,16 +121,6 @@ ib_err_t innodb_api_begin(
     snprintf(table_name, sizeof(table_name), "%s/%s", dbname, name);
 #endif
 
-    err = ib_cb_open_table(table_name, ib_trx, crsr);
-
-    if (err != DB_SUCCESS) {
-      fprintf(stderr,
-              " InnoDB_Memcached: Unable to open"
-              " table '%s'\n",
-              table_name);
-      return (err);
-    }
-
     /* If MDL is enabled, we need to create mysql handler. */
     if (engine) {
       if (lock_mode == IB_LOCK_NONE) {
@@ -243,8 +136,6 @@ ib_err_t innodb_api_begin(
           conn_data->thd = handler_create_thd(engine->enable_binlog);
 
           if (!conn_data->thd) {
-            innodb_cb_cursor_close(*crsr);
-            *crsr = NULL;
             return (DB_ERROR);
           }
         }
@@ -256,6 +147,15 @@ ib_err_t innodb_api_begin(
               handler_open_table(conn_data->thd, dbname, name, lock_type);
         }
       }
+    }
+    err = ib_cb_cursor_open_table(table_name, ib_trx, crsr);
+
+    if (err != DB_SUCCESS) {
+      fprintf(stderr,
+              " InnoDB_Memcached: Unable to open"
+              " table '%s'\n",
+              table_name);
+      return (err);
     }
 
     err = innodb_cb_cursor_lock(engine, *crsr, lock_mode);
@@ -704,8 +604,8 @@ ib_err_t innodb_api_search(
   meta_column_t *col_info = meta_info->col_info;
   meta_index_t *meta_index = &meta_info->index_info;
   ib_tpl_t key_tpl;
-  ib_tpl_t cmp_tpl = NULL;
-  ib_crsr_t srch_crsr;
+  ib_tpl_t cmp_tpl = nullptr;
+  ib_crsr_t srch_crsr = nullptr;
 
   if (item) {
     memset(item, 0, sizeof(*item));
@@ -714,7 +614,7 @@ ib_err_t innodb_api_search(
   /* If srch_use_idx is set to META_USE_SECONDARY, we will use the
   secondary index to find the record first */
   if (meta_index->srch_use_idx == META_USE_SECONDARY) {
-    ib_crsr_t idx_crsr;
+    ib_crsr_t idx_crsr = nullptr;
 
     if (sel_only) {
       idx_crsr = cursor_data->idx_read_crsr;
@@ -725,7 +625,7 @@ ib_err_t innodb_api_search(
     ib_cb_cursor_set_cluster_access(idx_crsr);
 
     if (!cursor_data->idx_tpl) {
-      key_tpl = ib_cb_search_tuple_create(idx_crsr);
+      key_tpl = ib_cb_sec_search_tuple_create(idx_crsr);
       cursor_data->idx_tpl = key_tpl;
     } else {
       key_tpl = cursor_data->idx_tpl;
@@ -734,13 +634,13 @@ ib_err_t innodb_api_search(
     srch_crsr = idx_crsr;
 
   } else {
-    ib_crsr_t crsr;
+    ib_crsr_t crsr = nullptr;
 
     if (sel_only) {
       crsr = cursor_data->read_crsr;
 
       if (!cursor_data->sel_tpl) {
-        key_tpl = ib_cb_search_tuple_create(crsr);
+        key_tpl = ib_cb_sec_search_tuple_create(crsr);
         cursor_data->sel_tpl = key_tpl;
       } else {
         key_tpl = cursor_data->sel_tpl;
@@ -749,7 +649,7 @@ ib_err_t innodb_api_search(
       crsr = cursor_data->crsr;
 
       if (!cursor_data->tpl) {
-        key_tpl = ib_cb_search_tuple_create(crsr);
+        key_tpl = ib_cb_sec_search_tuple_create(crsr);
         cursor_data->tpl = key_tpl;
       } else {
         key_tpl = cursor_data->tpl;
@@ -765,9 +665,9 @@ ib_err_t innodb_api_search(
     assert(sel_only);
 
     if (meta_index->srch_use_idx == META_USE_SECONDARY) {
-      cmp_tpl = ib_cb_search_tuple_create(cursor_data->idx_read_crsr);
+      cmp_tpl = ib_cb_sec_search_tuple_create(cursor_data->idx_read_crsr);
     } else {
-      cmp_tpl = ib_cb_search_tuple_create(cursor_data->read_crsr);
+      cmp_tpl = ib_cb_sec_search_tuple_create(cursor_data->read_crsr);
     }
 
     err = innodb_api_setup_field_value(key_tpl, 0, &col_info[CONTAINER_KEY],
@@ -786,7 +686,7 @@ ib_err_t innodb_api_search(
     /* Exact search */
     ib_cb_cursor_set_match_mode(srch_crsr, IB_EXACT_MATCH);
 
-    err = ib_cb_moveto(srch_crsr, key_tpl, IB_CUR_GE, 0);
+    err = ib_cb_cursor_moveto(srch_crsr, key_tpl, IB_CUR_GE, 0);
   } else if (range_key->bound == UPPER_BOUND) {
     err = innodb_api_setup_field_value(key_tpl, 0, &col_info[CONTAINER_KEY],
                                        range_key->end, range_key->end_len, NULL,
@@ -805,8 +705,8 @@ ib_err_t innodb_api_search(
 
     /* Range search */
     ib_cb_cursor_set_match_mode(srch_crsr, IB_CLOSEST_MATCH);
-    err = ib_cb_moveto(srch_crsr, key_tpl,
-                       ib_srch_mode_t(range_key->start_mode), direction);
+    err = ib_cb_cursor_moveto(srch_crsr, key_tpl,
+                              ib_srch_mode_t(range_key->start_mode), direction);
   }
 
   if (err != DB_SUCCESS) {
@@ -824,17 +724,17 @@ ib_err_t innodb_api_search(
     int i;
 
     if (!cursor_data->read_tpl) {
-      read_tpl = ib_cb_read_tuple_create(sel_only ? cursor_data->read_crsr
-                                                  : cursor_data->crsr);
+      read_tpl = ib_cb_clust_read_tuple_create(sel_only ? cursor_data->read_crsr
+                                                        : cursor_data->crsr);
       cursor_data->read_tpl = read_tpl;
     } else {
       read_tpl = cursor_data->read_tpl;
     }
 
-    err = ib_cb_read_row(srch_crsr, read_tpl, cmp_tpl,
-                         range_key ? range_key->end_mode : 0,
-                         cursor_data->row_buf, &(cursor_data->row_buf_slot),
-                         &(cursor_data->row_buf_used));
+    err = ib_cb_cursor_read_row(
+        srch_crsr, read_tpl, cmp_tpl, range_key ? range_key->end_mode : 0,
+        cursor_data->row_buf, &(cursor_data->row_buf_slot),
+        &(cursor_data->row_buf_used));
 
     if (err != DB_SUCCESS) {
       if (r_tpl) {
@@ -1220,7 +1120,7 @@ ib_err_t innodb_api_insert(
 
   new_cas = mci_get_cas(engine);
 
-  tpl = ib_cb_read_tuple_create(cursor_data->crsr);
+  tpl = ib_cb_clust_read_tuple_create(cursor_data->crsr);
   assert(tpl != NULL);
 
   /* Set expiration time */
@@ -1235,7 +1135,7 @@ ib_err_t innodb_api_insert(
       engine->enable_binlog ? cursor_data->mysql_tbl : NULL, false);
 
   if (err == DB_SUCCESS) {
-    err = ib_cb_insert_row(cursor_data->crsr, tpl);
+    err = ib_cb_cursor_insert_row(cursor_data->crsr, tpl);
   }
 
   if (err == DB_SUCCESS) {
@@ -1277,7 +1177,7 @@ static ib_err_t innodb_api_update(
 
   assert(old_tpl != NULL);
 
-  new_tpl = ib_cb_read_tuple_create(cursor_data->crsr);
+  new_tpl = ib_cb_clust_read_tuple_create(cursor_data->crsr);
   assert(new_tpl != NULL);
 
   /* cas will be updated for each update */
@@ -1299,7 +1199,7 @@ static ib_err_t innodb_api_update(
       engine->enable_binlog ? cursor_data->mysql_tbl : NULL, true);
 
   if (err == DB_SUCCESS) {
-    err = ib_cb_update_row(srch_crsr, old_tpl, new_tpl);
+    err = ib_cb_cursor_update_row(srch_crsr, old_tpl, new_tpl);
   }
 
   if (err == DB_SUCCESS) {
@@ -1343,7 +1243,7 @@ innodb_api_delete(
 
   /* The "result" structure contains only pointers to the data value
   when returning from innodb_api_search(), so store the delete row info
-  before calling ib_cb_delete_row() */
+  before calling ib_cb_cursor_delete_row() */
   if (engine->enable_binlog) {
     meta_cfg_info_t *meta_info = cursor_data->conn_meta;
     meta_column_t *col_info = meta_info->col_info;
@@ -1353,7 +1253,7 @@ innodb_api_delete(
     innodb_api_setup_hdl_rec(&result, col_info, cursor_data->mysql_tbl);
   }
 
-  err = ib_cb_delete_row(srch_crsr);
+  err = ib_cb_cursor_delete_row(srch_crsr);
 
   /* Do the binlog of the row being deleted */
   if (engine->enable_binlog) {
@@ -1445,7 +1345,7 @@ static ib_err_t innodb_api_link(
     memcpy(append_buf + val_len, before_val, before_len);
   }
 
-  new_tpl = ib_cb_read_tuple_create(cursor_data->crsr);
+  new_tpl = ib_cb_clust_read_tuple_create(cursor_data->crsr);
 
   new_cas = mci_get_cas(engine);
 
@@ -1464,7 +1364,7 @@ static ib_err_t innodb_api_link(
       engine->enable_binlog ? cursor_data->mysql_tbl : NULL, true);
 
   if (err == DB_SUCCESS) {
-    err = ib_cb_update_row(srch_crsr, old_tpl, new_tpl);
+    err = ib_cb_cursor_update_row(srch_crsr, old_tpl, new_tpl);
   }
 
   free(append_buf);
@@ -1612,7 +1512,7 @@ innodb_api_arithmetic(
 create_new_value:
   *cas = mci_get_cas(engine);
 
-  new_tpl = ib_cb_read_tuple_create(cursor_data->crsr);
+  new_tpl = ib_cb_clust_read_tuple_create(cursor_data->crsr);
 
   assert(!cursor_data->mysql_tbl || engine->enable_binlog ||
          engine->enable_mdl);
@@ -1631,14 +1531,14 @@ create_new_value:
   }
 
   if (create_new) {
-    err = ib_cb_insert_row(cursor_data->crsr, new_tpl);
+    err = ib_cb_cursor_insert_row(cursor_data->crsr, new_tpl);
     *out_result = initial;
 
     if (engine->enable_binlog) {
       handler_binlog_row(cursor_data->thd, cursor_data->mysql_tbl, HDL_INSERT);
     }
   } else {
-    err = ib_cb_update_row(srch_crsr, old_tpl, new_tpl);
+    err = ib_cb_cursor_update_row(srch_crsr, old_tpl, new_tpl);
     *out_result = value;
 
     if (engine->enable_binlog) {
@@ -1806,7 +1706,7 @@ innodb_api_flush(
 
   for (err = ib_cb_cursor_first(crsr); err == DB_SUCCESS;
        err = ib_cb_cursor_next(crsr)) {
-    err = ib_cb_delete_row(crsr);
+    err = ib_cb_cursor_delete_row(crsr);
 
     if (err == DB_RECORD_NOT_FOUND) {
       err = DB_SUCCESS;
@@ -1861,7 +1761,7 @@ bool innodb_reset_conn(
   }
 
   if (conn_data->crsr_trx) {
-    ib_crsr_t ib_crsr;
+    ib_crsr_t ib_crsr = nullptr;
     meta_cfg_info_t *meta_info = conn_data->conn_meta;
     meta_index_t *meta_index = &meta_info->index_info;
 
@@ -1933,32 +1833,29 @@ void innodb_api_cursor_reset(
       conn_data->n_reads_since_commit >= engine->read_batch_size ||
       conn_data->n_writes_since_commit >= engine->write_batch_size ||
       (op_type == CONN_OP_FLUSH) || !commit) {
-    commit_trx = innodb_reset_conn(conn_data, op_type == CONN_OP_FLUSH, commit,
-                                   engine->enable_binlog);
+    commit_trx =
+        innodb_reset_conn(conn_data, false, commit, engine->enable_binlog);
   }
 
   if (!commit_trx) {
-    LOCK_CURRENT_CONN_IF_NOT_LOCKED(op_type == CONN_OP_FLUSH, conn_data);
+    LOCK_CURRENT_CONN_IF_NOT_LOCKED(false, conn_data);
     if (op_type != CONN_OP_FLUSH) {
       assert(conn_data->in_use);
     }
 
     conn_data->in_use = false;
-    UNLOCK_CURRENT_CONN_IF_NOT_LOCKED(op_type == CONN_OP_FLUSH, conn_data);
+    UNLOCK_CURRENT_CONN_IF_NOT_LOCKED(false, conn_data);
   }
 }
 
 /** Following are a set of InnoDB callback function wrappers for functions
 that will be used outside innodb_api.c */
 
-/*************************************************************/ /**
- Close a cursor
- @return DB_SUCCESS if successful or error code */
-ib_err_t innodb_cb_cursor_close(
-    /*===================*/
-    ib_crsr_t ib_crsr) /*!< in/out: cursor to close */
-{
-  return (ib_cb_cursor_close(ib_crsr));
+void innodb_cb_cursor_close(ib_crsr_t &ib_crsr) {
+  if (ib_crsr != nullptr) {
+    ib_cb_cursor_close(ib_crsr);
+    ib_crsr = nullptr;
+  }
 }
 
 /*************************************************************/ /**
@@ -2004,7 +1901,7 @@ ib_err_t innodb_cb_cursor_lock(
       err = ib_cb_cursor_lock(ib_crsr, IB_LOCK_IS);
     }
   } else {
-    err = ib_cb_cursor_set_lock(ib_crsr, ib_lck_mode);
+    err = ib_cb_cursor_set_lock_mode(ib_crsr, ib_lck_mode);
   }
 
   return (err);
@@ -2017,7 +1914,7 @@ ib_tpl_t innodb_cb_read_tuple_create(
     /*========================*/
     ib_crsr_t ib_crsr) /*!< in: Cursor instance */
 {
-  return (ib_cb_read_tuple_create(ib_crsr));
+  return (ib_cb_clust_read_tuple_create(ib_crsr));
 }
 
 /*****************************************************************/ /**
@@ -2082,13 +1979,13 @@ ib_err_t innodb_cb_open_table(
     ib_trx_t ib_trx,    /*!< in: transaction */
     ib_crsr_t *ib_crsr) /*!< in: cursor to be used */
 {
-  return (ib_cb_open_table(name, ib_trx, ib_crsr));
+  return (ib_cb_cursor_open_table(name, ib_trx, ib_crsr));
 }
 
 /*****************************************************************/ /**
  Get a column name from the tuple.
  @return name of the column */
-char *innodb_cb_col_get_name(
+const char *innodb_cb_col_get_name(
     /*===================*/
     ib_crsr_t ib_crsr, /*!< in: InnoDB cursor instance */
     ib_ulint_t i)      /*!< in: column index in tuple */
@@ -2116,5 +2013,5 @@ ib_err_t innodb_cb_cursor_open_index_using_name(
 int innodb_cb_get_cfg()
 /*===============*/
 {
-  return (ib_cb_get_cfg());
+  return (ib_cb_cfg_get_cfg());
 }

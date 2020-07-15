@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2019, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
 
 This program is free software; you can redistribute it and/or modify it under
@@ -60,7 +60,7 @@ void dict_index_add_col(dict_index_t *index, const dict_table_t *table,
     ha_innobase::commit_inplace_alter_table(commit=true)
     will evict and reload the table definition, and
     v_col->v_indexes will not be NULL for the new table. */
-    if (v_col->v_indexes != NULL) {
+    if (v_col->v_indexes != nullptr) {
       /* Register the index with the virtual column index
       list */
       struct dict_v_idx_t new_idx = {index, index->n_def};
@@ -113,9 +113,9 @@ void dict_index_add_col(dict_index_t *index, const dict_table_t *table,
     field->fixed_len = 0;
   }
 #if DICT_MAX_FIXED_COL_LEN != 768
-    /* The comparison limit above must be constant.  If it were
-    changed, the disk format of some fixed-length columns would
-    change, which would be a disaster. */
+  /* The comparison limit above must be constant.  If it were
+  changed, the disk format of some fixed-length columns would
+  change, which would be a disaster. */
 #error "DICT_MAX_FIXED_COL_LEN != 768"
 #endif
 

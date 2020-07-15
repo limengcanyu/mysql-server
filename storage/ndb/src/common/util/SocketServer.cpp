@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -34,6 +34,12 @@
 #include <NdbTick.h>
 #include "ndb_socket.h"
 #include <OwnProcessInfo.hpp>
+
+#if 0
+#define DEBUG_FPRINTF(arglist) do { fprintf arglist ; } while (0)
+#else
+#define DEBUG_FPRINTF(a)
+#endif
 
 SocketServer::SocketServer(unsigned maxSessions) :
   m_sessions(10),
@@ -162,6 +168,9 @@ SocketServer::setup(SocketServer::Service * service,
     DBUG_RETURN(false);
   }
 
+  DEBUG_FPRINTF((stderr, "Listening on port: %u\n",
+                (Uint32)*port));
+
   ServiceInstance i;
   i.m_socket = sock;
   i.m_service = service;
@@ -172,7 +181,6 @@ SocketServer::setup(SocketServer::Service * service,
 
   DBUG_RETURN(true);
 }
-
 
 bool
 SocketServer::doAccept()
@@ -190,14 +198,14 @@ SocketServer::doAccept()
   const int ret = m_services_poller.poll(accept_timeout_ms);
   if (ret < 0)
   {
-    // Error occured, indicate error to caller by returning false
+    // Error occurred, indicate error to caller by returning false
     m_services.unlock();
     return false;
   }
 
   if (ret == 0)
   {
-    // Timeout occured
+    // Timeout occurred
     m_services.unlock();
     return true;
   }
@@ -286,12 +294,14 @@ SocketServer::doRun(){
 
     if(m_sessions.size() >= m_maxSessions){
       // Don't accept more connections yet
+      DEBUG_FPRINTF((stderr, "Too many connections\n"));
       NdbSleep_MilliSleep(200);
       continue;
     }
 
     if (!doAccept()){
       // accept failed, step back
+      DEBUG_FPRINTF((stderr, "Accept failed\n"));
       NdbSleep_MilliSleep(200);
     }
   }
@@ -412,7 +422,10 @@ sessionThread_C(void* _sc){
   if(!si->m_stop)
     si->runSession();
   else
+  {
     ndb_socket_close(si->m_socket);
+    ndb_socket_invalidate(&si->m_socket);
+  }
 
   // Mark the thread as stopped to allow the
   // session resources to be released

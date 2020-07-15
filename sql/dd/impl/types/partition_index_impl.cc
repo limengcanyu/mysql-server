@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -60,25 +60,21 @@ class Partition;
 class Sdi_rcontext;
 class Sdi_wcontext;
 
-static const std::set<String_type> default_valid_se_private_data_keys = {
-    // InnoDB keys:
-    "id", "root", "space_id", "table_id", "trx_id"};
-
 ///////////////////////////////////////////////////////////////////////////
 // Partition_index_impl implementation.
 ///////////////////////////////////////////////////////////////////////////
 
 Partition_index_impl::Partition_index_impl()
     : m_options(),
-      m_se_private_data(default_valid_se_private_data_keys),
-      m_partition(NULL),
-      m_index(NULL),
+      m_se_private_data(),
+      m_partition(nullptr),
+      m_index(nullptr),
       m_tablespace_id(INVALID_OBJECT_ID) {}
 
 Partition_index_impl::Partition_index_impl(Partition_impl *partition,
                                            Index *index)
     : m_options(),
-      m_se_private_data(default_valid_se_private_data_keys),
+      m_se_private_data(),
       m_partition(partition),
       m_index(index),
       m_tablespace_id(INVALID_OBJECT_ID) {}
@@ -148,9 +144,9 @@ bool Partition_index_impl::store_attributes(Raw_record *r) {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-static_assert(
-    Index_partitions::FIELD_TABLESPACE_ID == 4,
-    "Index_partitions definition has changed, review (de)ser memfuns!");
+static_assert(Index_partitions::NUMBER_OF_FIELDS == 5,
+              "Index_partitions definition has changed, check if serialize() "
+              "and deserialize() need to be updated!");
 void Partition_index_impl::serialize(Sdi_wcontext *wctx, Sdi_writer *w) const {
   w->StartObject();
   write_properties(w, m_options, STRING_WITH_LEN("options"));

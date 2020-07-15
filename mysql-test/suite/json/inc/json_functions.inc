@@ -1982,7 +1982,8 @@ JSON_UNQUOTE(CAST(j AS CHAR)),
 JSON_QUOTE(CAST(j AS CHAR)),
 JSON_PRETTY(j),
 JSON_STORAGE_FREE(j),
-JSON_STORAGE_SIZE(j)
+JSON_STORAGE_SIZE(j),
+JSON_SCHEMA_VALID('{"type":"object"}', j)
 FROM T_WITH_NULLS
 ORDER BY i;
 eval $query;
@@ -2409,6 +2410,7 @@ insert into t_ooa values
 ( 1, '{ "a": "foot", "b": "fool", "c": "food" }', 'all' ),
 ( 1, '{ "a": "foot", "b": "fool", "c": "food" }', null );
 
+--sorted_result
 select id, doc, one_or_all, json_search( doc, one_or_all, 'foo%' ) from t_ooa order by id;
 select id, doc, json_search( doc, 'one', 'foo%' ) from t_ooa order by id;
 select id, doc, json_search( doc, 'all', 'foo%' ) from t_ooa order by id;
@@ -2455,6 +2457,7 @@ insert into tt(i, j)
 insert into tt(i, si)
   select count(*), json_extract('{"key17": {"a": {"b": "c"}}, "key88": 100}',
                                '$.key88');
+--sorted_result
 select * from tt order by i;
 
 # This exercises Item_copy_json::val_real
@@ -2484,7 +2487,10 @@ GROUP BY j, i WITH ROLLUP;
 UPDATE tt SET j = CAST(CAST('2015-06-19' AS DATE) AS JSON) WHERE j IS NOT NULL;
 SELECT CAST(j AS DATE), COUNT(*) FROM tt GROUP BY j, i WITH ROLLUP;
 
-# Exercise an error path through Item_copy_json::val_str
+# Exercise an error path through Item_copy_json::val_str.
+# Note that most functions would return NULL here, but Field_json::val_str()
+# sets length to zero on error, so it becomes the empty string instead.
+# This is consistent with non-ROLLUP, which we also test for comparison.
 DELETE FROM tt;
 INSERT INTO tt(j) VALUES (JSON_ARRAY(REPEAT('abc', 100)));
 UPDATE tt SET j = JSON_ARRAY(j,j,j,j);
@@ -2493,6 +2499,7 @@ SET GLOBAL max_allowed_packet = 1024;
 CONNECT (con1,localhost,root,,);
 CONNECTION con1;
 SELECT REPEAT(j, 2), COUNT(*) FROM tt GROUP BY j, i WITH ROLLUP;
+SELECT REPEAT(j, 2), COUNT(*) FROM tt GROUP BY j, i;
 CONNECTION default;
 DISCONNECT con1;
 SET GLOBAL max_allowed_packet = default;
@@ -3041,6 +3048,7 @@ DROP TABLE t;
 --echo # JSON should work with INSERT .. ON DUPLICATE KEY UPDATE
 --echo #
 CREATE TABLE t(id INT PRIMARY KEY, j JSON);
+--disable_ps_protocol # Different number of warnings until WL#6570.
 INSERT INTO t VALUES (1, '[1]')
 ON DUPLICATE KEY UPDATE j = JSON_OBJECT("a", VALUES(j));
 SELECT * FROM t;
@@ -3049,6 +3057,7 @@ ON DUPLICATE KEY UPDATE j = JSON_OBJECT("ab", VALUES(j));
 SELECT * FROM t;
 INSERT INTO t VALUES (1, '[1,2,3]')
 ON DUPLICATE KEY UPDATE j = JSON_OBJECT("abc", VALUES(j));
+--enable_ps_protocol
 SELECT * FROM t;
 DROP TABLE t;
 
@@ -4027,6 +4036,110 @@ SELECT JSON_MERGE_PATCH('{}');
 SELECT JSON_MERGE_PATCH('{', '[1,2,3]');
 --error ER_INVALID_JSON_TEXT_IN_PARAM
 SELECT JSON_MERGE_PATCH('{"a":"b"}', '[1,');
+
+--echo #
+--echo # Bug#28947381: MAX TREATING NUMBERS AS STRINGS WHEN USED
+--echo #               IN GROUP BY AND JSON_UNQUOTE
+--echo #
+
+CREATE TABLE t(j JSON);
+INSERT INTO t VALUES
+('{"group": 1, "value": 20}'),
+('{"group": 1, "value": 100}'),
+(NULL),
+('{"group": 2, "value": "abc"}'),
+('{"group": 3, "value": "xyz"}'),
+('{"group": 2, "value": "def"}'),
+('{"group": 3, "value": "xyzw"}'),
+('{"group": 1, "value": 3}'),
+('{"group": 1}');
+--sorted_result
+SELECT j->>'$.group' AS group_name,
+       MIN(j->'$.value') AS min_json,
+       MAX(j->'$.value') AS max_json,
+       MIN(j->>'$.value') AS min_string,
+       MAX(j->>'$.value') AS max_string
+FROM t GROUP BY j->>'$.group';
+DROP TABLE t;
+
+--echo #
+--echo # WL#8199: Add JSON support to IN/GREATEST/LEAST 
+--echo #
+SELECT CAST(1 AS JSON) IN(CAST(1 AS JSON), CAST(2 AS JSON), CAST(3 AS JSON));
+SELECT CAST(4 AS JSON) IN(CAST(1 AS JSON), CAST(2 AS JSON), CAST(3 AS JSON));
+
+SELECT CAST(1 AS JSON) IN(CAST(1 AS JSON), CAST(2 AS JSON), NULL);
+SELECT CAST(4 AS JSON) IN(CAST(1 AS JSON), CAST(2 AS JSON), NULL);
+
+SELECT CAST('{"a":1, "b":2}' AS JSON) IN(
+  CAST(1 AS JSON),
+  CAST('{"a":1, "b":2}' AS JSON),
+  CAST('[1,2,3]' AS JSON));
+SELECT CAST('[1,2,3]' AS JSON) IN(
+  CAST(1 AS JSON),
+  CAST('{"a":1, "b":2}' AS JSON),
+  CAST('[1,2,3]' AS JSON));
+SELECT CAST('{"a":1, "b":2}' AS JSON) IN(
+  NULL,
+  CAST('{"a":1, "b":2}' AS JSON),
+  CAST('[1,2,3]' AS JSON));
+SELECT CAST('{"a":1, "b":2}' AS JSON) IN(
+  CAST(1 AS JSON),
+  CAST('{"a":1, "b":20}' AS JSON),
+  CAST('[1,2,3]' AS JSON));
+SELECT CAST('{"a":1, "b":2}' AS JSON) IN(
+  NULL,
+  CAST('{"a":1, "b":20}' AS JSON),
+  CAST('[1,2,3]' AS JSON));
+SELECT CAST('{"b":2, "a":2}' AS JSON) IN(CAST(@a_var AS JSON), CAST(NULL AS JSON));
+
+
+--echo #
+--echo # BUG#28179109: JSON COLUMN WITH STRING VALUE GOT INCORRECT RESULT
+--echo # BUG#28182471: JSON COLUMN WITH INTEGER VALUE GOT INCORRECT RESULT
+--echo #
+CREATE TABLE t1 (id INT, jdoc JSON);
+
+INSERT INTO t1 VALUES(1, '{"key1": "111", "key2": "222"}');
+INSERT INTO t1 VALUES(2, '{"key1": "333", "key2": "444"}');
+SELECT *, JSON_EXTRACT(jdoc,'$.key1') from t1 ORDER BY id;
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('"111"');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') = ('"111"');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('"111"', '"333"')
+  ORDER BY id;
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('111');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') = ('111');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('111', '333')
+  ORDER BY id;
+
+SELECT * FROM t1 WHERE '111' IN (JSON_EXTRACT(jdoc,'$.key1'), '333');
+
+INSERT INTO t1 VALUES(3, '{"key1": 1, "key2": 11}');
+INSERT INTO t1 VALUES(4, '{"key1": 2, "key2": 22}');
+
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('1');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') = ('1');
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN ('1', '2')
+  ORDER BY id;
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN (1);
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') = (1);
+SELECT * FROM t1 WHERE JSON_EXTRACT(jdoc,'$.key1') IN (1, 2)
+  ORDER BY id;
+
+SELECT * FROM t1 WHERE 1 IN (JSON_EXTRACT(jdoc,'$.key1'), 2);
+
+SELECT (5, CAST(1 AS JSON)) IN ((1, CAST(5 AS JSON)),(5, CAST(1 AS JSON)));
+SELECT (5, 1) IN ((1, CAST(5 AS JSON)),(5, CAST(1 AS JSON)));
+
+DROP TABLE t1;
+
+--echo #
+--echo # Bug#30753642: ASSERTION `FALSE' FAILED. IN ITEM_JSON::VAL_STR
+--echo #
+CREATE TABLE t(a DATETIME);
+INSERT INTO t VALUES ('2019-01-13 00:00:00');
+SELECT 1 IN (SELECT 1 FROM t WHERE JSON_OBJECT('a', 'b') = a);
+DROP TABLE t;
 
 # Local Variables:
 # mode: sql

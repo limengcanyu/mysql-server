@@ -8,6 +8,9 @@ org_id int(11) default null,
 unique key contacts$c_id (c_id),
 key contacts$org_id (org_id)
 );
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 insert into t1 values
 (2,null),(120,null),(141,null),(218,7), (128,1),
 (151,2),(234,2),(236,2),(243,2),(255,2),(259,2),(232,3),(235,3),(238,3),
@@ -31,6 +34,19 @@ unique key t2$slai_id (slai_id),
 key t2$owner_id (owner_id),
 key t2$sla_id (sla_id)
 );
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 insert into t2(slai_id, owner_tbl, owner_id, sla_id) values
 (1,3,1,1), (3,3,10,2), (4,3,3,6), (5,3,2,5), (6,3,8,3), (7,3,9,7),
 (8,3,6,8), (9,3,4,9), (10,3,5,10), (11,3,11,11), (12,3,7,12);
@@ -163,6 +179,9 @@ a6 timestamp NOT NULL DEFAULT '2000-01-01 01:01:01',
 a7 tinyblob,
 INDEX idx (a6,a7(239),a5)
 ) charset latin1 ENGINE=InnoDB;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 EXPLAIN SELECT a4 FROM t1 WHERE
 a6=NULL AND
 a4='UNcT5pIde4I6c2SheTo4gt92OV1jgJCVkXmzyf325R1DwLURkbYHwhydANIZMbKTgdcR5xS';
@@ -196,7 +215,7 @@ min(7)
 explain select min(7) from t2i join t1i;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t2i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
-1	SIMPLE	t1i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (Block Nested Loop)
+1	SIMPLE	t1i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
 Warnings:
 Note	1003	/* select#1 */ select min(7) AS `min(7)` from `test`.`t2i` join `test`.`t1i`
 select min(7) from t2i join t1i;
@@ -214,7 +233,7 @@ max(7)
 explain select max(7) from t2i join t1i;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t2i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
-1	SIMPLE	t1i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (Block Nested Loop)
+1	SIMPLE	t1i	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Using join buffer (hash join)
 Warnings:
 Note	1003	/* select#1 */ select max(7) AS `max(7)` from `test`.`t2i` join `test`.`t1i`
 select max(7) from t2i join t1i;
@@ -355,6 +374,9 @@ drop table t1;
 create table t1 (f1 int, f2 char(1), primary key(f1,f2)) stats_persistent=0;
 insert into t1 values ( 1,"e"),(2,"a"),( 3,"c"),(4,"d");
 alter table t1 drop primary key, add primary key (f2, f1);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 explain select distinct f1 a, f1 b from t1;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	8	NULL	4	100.00	Using index; Using temporary
@@ -368,7 +390,12 @@ Note	1003	/* select#1 */ select distinct `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f
 drop table t1;
 CREATE TABLE t1 (id int(11) NOT NULL PRIMARY KEY, name varchar(20),
 INDEX (name));
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 CREATE TABLE t2 (id int(11) NOT NULL PRIMARY KEY, fkey int(11));
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 ALTER TABLE t2 ADD FOREIGN KEY (fkey) REFERENCES t2(id);
 INSERT INTO t1 VALUES (1,'A1'),(2,'A2'),(3,'B');
 INSERT INTO t2 VALUES (1,1),(2,2),(3,2),(4,3),(5,3);
@@ -397,14 +424,20 @@ age tinyint(3) unsigned NOT NULL,
 PRIMARY KEY (id),
 INDEX (name,dept)
 ) ENGINE=InnoDB STATS_PERSISTENT=0;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 INSERT INTO t1(id, dept, age, name) VALUES
 (3987, 'cs1', 10, 'rs1'), (3988, 'cs2', 20, 'rs1'), (3995, 'cs3', 10, 'rs2'),
 (3996, 'cs4', 20, 'rs2'), (4003, 'cs5', 10, 'rs3'), (4004, 'cs6', 20, 'rs3'),
 (4011, 'cs7', 10, 'rs4'), (4012, 'cs8', 20, 'rs4'), (4019, 'cs9', 10, 'rs5'),
 (4020, 'cs10', 20, 'rs5'),(4027, 'cs11', 10, 'rs6'),(4028, 'cs12', 20, 'rs6');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+# Masking (#) number in "rows" column of the following EXPLAIN output, as it may vary (bug#47746).
 EXPLAIN SELECT DISTINCT t1.name, t1.dept FROM t1 WHERE t1.name='rs5';
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	SIMPLE	t1	NULL	ref	name	name	82	const	2	100.00	Using index
+1	SIMPLE	t1	NULL	ref	name	name	82	const	#	100.00	Using index
 Warnings:
 Note	1003	/* select#1 */ select distinct `test`.`t1`.`name` AS `name`,`test`.`t1`.`dept` AS `dept` from `test`.`t1` where (`test`.`t1`.`name` = 'rs5')
 SELECT DISTINCT t1.name, t1.dept FROM t1 WHERE t1.name='rs5';
@@ -412,6 +445,9 @@ name	dept
 rs5	cs10
 rs5	cs9
 DELETE FROM t1;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 # Masking (#) number in "rows" column of the following EXPLAIN output, as it may vary (bug#47746).
 EXPLAIN SELECT DISTINCT t1.name, t1.dept FROM t1 WHERE t1.name='rs5';
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
@@ -497,12 +533,16 @@ insert into t1 (id, c) values
 (NULL, 'a'),
 (NULL, 'a')
 on duplicate key update id = values(id), counter = counter + 1;
+Warnings:
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
 select * from t1;
 id	c	counter
 2	a	2
 insert into t1 (id, c) values
 (NULL, 'b')
 on duplicate key update id = values(id), counter = counter + 1;
+Warnings:
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
 select * from t1;
 id	c	counter
 2	a	2
@@ -514,12 +554,18 @@ id	c	counter
 1	a	1
 insert into t1 (id, c) values (NULL, 'b'), (NULL, 'b')
 on duplicate key update id = values(id), c = values(c), counter = counter + 1;
+Warnings:
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
 select * from t1;
 id	c	counter
 1	a	1
 3	b	2
 insert into t1 (id, c) values (NULL, 'a')
 on duplicate key update id = values(id), c = values(c), counter = counter + 1;
+Warnings:
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
+Warning	1287	'VALUES function' is deprecated and will be removed in a future release. Please use an alias (INSERT INTO ... VALUES (...) AS alias) and replace VALUES(col) in the ON DUPLICATE KEY UPDATE clause with alias.col instead
 select * from t1;
 id	c	counter
 3	b	2
@@ -589,7 +635,7 @@ alter table t1 comment '123';
 show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `a` int(11) DEFAULT NULL
+  `a` int DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='123'
 drop table t1;
 CREATE TABLE t1 (a CHAR(2), KEY (a)) ENGINE = InnoDB DEFAULT CHARSET=UTF8;
@@ -708,12 +754,12 @@ DROP TABLE t1,t2;
 CREATE TABLE t1 (a int, b int);
 insert into t1 values (1,1),(1,2);
 CREATE TABLE t2 (primary key (a)) select * from t1;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't2.PRIMARY'
 drop table if exists t2;
 Warnings:
 Note	1051	Unknown table 'test.t2'
 CREATE TEMPORARY TABLE t2 (primary key (a)) select * from t1;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't2.PRIMARY'
 drop table if exists t2;
 Warnings:
 Note	1051	Unknown table 'test.t2'
@@ -732,7 +778,7 @@ a	b
 100	100
 TRUNCATE table t2;
 INSERT INTO t2 select * from t1;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't2.PRIMARY'
 SELECT * from t2;
 a	b
 drop table t2;
@@ -761,7 +807,7 @@ a	b
 100	100
 TRUNCATE table t2;
 INSERT INTO t2 select * from t1;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't2.PRIMARY'
 SELECT * from t2;
 a	b
 drop table t1,t2;
@@ -1479,7 +1525,7 @@ EXPLAIN SELECT * FROM t1 WHERE id=191 OR id IS NULL ORDER BY d;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	ALL	idx	NULL	NULL	NULL	10	90.00	Using where; Using filesort
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`type` AS `type`,`test`.`t1`.`d` AS `d` from `test`.`t1` where ((`test`.`t1`.`id` = 191) or isnull(`test`.`t1`.`id`)) order by `test`.`t1`.`d`
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t1`.`type` AS `type`,`test`.`t1`.`d` AS `d` from `test`.`t1` where ((`test`.`t1`.`id` = 191) or (`test`.`t1`.`id` is null)) order by `test`.`t1`.`d`
 SELECT * FROM t1 WHERE id=191 OR id IS NULL ORDER BY d;
 id	type	d
 191	member	1
@@ -1550,8 +1596,8 @@ CREATE TABLE t1 (f1 INTEGER PRIMARY KEY COMMENT 'My ID#', f2 INTEGER DEFAULT NUL
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `f1` int(11) NOT NULL COMMENT 'My ID#',
-  `f2` int(11) DEFAULT NULL,
+  `f1` int NOT NULL COMMENT 'My ID#',
+  `f2` int DEFAULT NULL,
   `f3` char(10) DEFAULT 'My ID#',
   PRIMARY KEY (`f1`),
   KEY `f2_ref` (`f2`),
@@ -1570,7 +1616,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	PRIMARY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	no matching row in const table
 2	SUBQUERY	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Not optimized, outer query is empty
 Warnings:
-Note	1003	/* select#1 */ select NULL AS `b` from `test`.`t1` where (not(<in_optimizer>(NULL,<exists>(/* select#2 */ select `test`.`t1`.`b` from `test`.`t1` join `test`.`t2` where ((<cache>(NULL) = `test`.`t1`.`b`) or isnull(`test`.`t1`.`b`)) having <is_not_null_test>(`test`.`t1`.`b`))))) group by NULL
+Note	1003	/* select#1 */ select NULL AS `b` from `test`.`t1` where <in_optimizer>(NULL,<exists>(/* select#2 */ select `test`.`t1`.`b` from `test`.`t1` join `test`.`t2` where ((<cache>(NULL) = `test`.`t1`.`b`) or (`test`.`t1`.`b` is null)) having <is_not_null_test>(`test`.`t1`.`b`)) is false) group by NULL
 DROP TABLE t1,t2;
 SET sql_mode=default;
 End of 5.0 tests
@@ -1581,6 +1627,10 @@ CREATE TABLE `t2` (
 PRIMARY KEY  (`k`),
 UNIQUE KEY `idx_1` (`a`)
 );
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 insert into t2 ( a ) values ( 6 ) on duplicate key update c =
 ifnull( c,
 0 ) + 1;
@@ -1615,14 +1665,14 @@ k	a	c
 2	7	NULL
 insert ignore into t2 values (null,6,1),(10,8,1);
 Warnings:
-Warning	1062	Duplicate entry '6' for key 'idx_1'
+Warning	1062	Duplicate entry '6' for key 't2.idx_1'
 select last_insert_id();
 last_insert_id()
 0
 insert ignore into t2 values (null,6,1),(null,8,1),(null,15,1),(null,20,1);
 Warnings:
-Warning	1062	Duplicate entry '6' for key 'idx_1'
-Warning	1062	Duplicate entry '8' for key 'idx_1'
+Warning	1062	Duplicate entry '6' for key 't2.idx_1'
+Warning	1062	Duplicate entry '8' for key 't2.idx_1'
 select last_insert_id();
 last_insert_id()
 11
@@ -1829,8 +1879,8 @@ FOREIGN KEY (c) REFERENCES t1 (a) ON UPDATE NO ACTION) engine=innodb;
 SHOW CREATE TABLE t2;
 Table	Create Table
 t2	CREATE TABLE `t2` (
-  `c` int(11) NOT NULL,
-  `d` int(11) NOT NULL,
+  `c` int NOT NULL,
+  `d` int NOT NULL,
   PRIMARY KEY (`c`,`d`),
   CONSTRAINT `c1` FOREIGN KEY (`c`) REFERENCES `t1` (`a`),
   CONSTRAINT `c2` FOREIGN KEY (`c`) REFERENCES `t1` (`a`),
@@ -1945,7 +1995,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	5	100.00	NULL
 1	SIMPLE	t2	NULL	ref	a	a	4	test.t1.a	1	100.00	Using index condition
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t2`.`filler` AS `filler` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`a` = `test`.`t1`.`a`) and (`test`.`t2`.`b` + 1))
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t2`.`filler` AS `filler` from `test`.`t1` join `test`.`t2` where ((`test`.`t2`.`a` = `test`.`t1`.`a`) and (0 <> (`test`.`t2`.`b` + 1)))
 select * from t1, t2 where t2.a=t1.a and t2.b + 1;
 a	a	b	filler
 0	0	1	filler
@@ -1995,6 +2045,9 @@ create table t2 (a int, b int, pk int, key(a,b), primary key(pk)) engine=innodb;
 insert into t2 select @a:=A.a+10*(B.a + 10*C.a),@a, @a from t1 A, t1 B, t1 C;
 Warnings:
 Warning	1287	Setting user variables within expressions is deprecated and will be removed in a future release. Consider alternatives: 'SET variable=expression, ...', or 'SELECT expression(s) INTO variables(s)'.
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
 # this must use key 'a', not PRIMARY:
 explain select a from t2 where a=b;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
@@ -2503,6 +2556,9 @@ c3 int NOT NULL,
 KEY (c1,c2),
 KEY (c3)
 ) ENGINE=InnoDB;
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
 explain SELECT * FROM t2 WHERE c1 = 99999999 AND c3 > 1 ORDER BY c3;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t2	NULL	ref	c1,c3	c1	4	const	1	100.00	Using where; Using filesort
@@ -2554,6 +2610,9 @@ c DATETIME NOT NULL,
 KEY (c)
 ) ENGINE=InnoDB;
 INSERT INTO t1 VALUES('TEST', 'TEST', '2009-10-09 00:00:00');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 SELECT * FROM t1 WHERE a = 'TEST' AND
 c >= '2009-10-09 00:00:00' AND c <= '2009-10-09 00:00:00';
 a	b	c
@@ -2633,7 +2692,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	SIMPLE	t1	NULL	index	PRIMARY	PRIMARY	4	NULL	3	100.00	NULL
 1	SIMPLE	t2	NULL	ref	f1	f1	4	test.t1.f1	1	100.00	Using index
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`f1` = `test`.`t1`.`f1`)) where 1 group by `test`.`t1`.`f1`
+Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2` from `test`.`t1` left join `test`.`t2` on((`test`.`t2`.`f1` = `test`.`t1`.`f1`)) where true group by `test`.`t1`.`f1`
 drop table t1,t2;
 #
 #
@@ -2729,6 +2788,12 @@ INSERT INTO t1 VALUES (105);
 INSERT INTO t1 VALUES (106);
 INSERT INTO t1 VALUES (107);
 INSERT INTO t2 VALUES (107),(75),(1000);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
 SELECT t1.id,t2.id FROM t2 LEFT JOIN t1 ON t1.id>=74 AND t1.id<=0
 WHERE t2.id=75 AND t1.id IS NULL;
 id	id
@@ -2739,7 +2804,7 @@ id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered
 1	SIMPLE	t1	NULL	const	PRIMARY	NULL	NULL	NULL	1	100.00	Impossible ON condition
 1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	3	33.33	Using where
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t2`.`id` AS `id` from `test`.`t2` left join `test`.`t1` on(((`test`.`t1`.`id` >= 74) and (`test`.`t1`.`id` <= 0))) where ((`test`.`t2`.`id` = 75) and isnull(`test`.`t1`.`id`))
+Note	1003	/* select#1 */ select `test`.`t1`.`id` AS `id`,`test`.`t2`.`id` AS `id` from `test`.`t2` left join `test`.`t1` on(((`test`.`t1`.`id` >= 74) and (`test`.`t1`.`id` <= 0))) where ((`test`.`t2`.`id` = 75) and (`test`.`t1`.`id` is null))
 DROP TABLE t1,t2;
 #
 # Bug#38999 valgrind warnings for update statement in function compare_record()
@@ -2775,6 +2840,11 @@ PRIMARY KEY (f1),
 KEY idx1 (f2,f5,f4),
 KEY idx2 (f2,f4)
 ) ENGINE=InnoDB;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 LOAD DATA INFILE '../../std_data/intersect-bug50389.tsv' INTO TABLE t1;
 ANALYZE TABLE t1;
 SELECT * FROM t1 WHERE f1 IN
@@ -2815,6 +2885,11 @@ PRIMARY KEY (f1),
 UNIQUE KEY (f2, f3),
 KEY (f4)
 ) ENGINE=InnoDB STATS_PERSISTENT=0;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 INSERT INTO t1 VALUES
 (1,1,991,1), (2,1,992,1), (3,1,993,1), (4,1,994,1), (5,1,995,1),
 (6,1,996,1), (7,1,997,1), (8,1,998,1), (10,1,999,1), (11,1,9910,1),
@@ -2822,6 +2897,9 @@ INSERT INTO t1 VALUES
 (21,1,9916,1), (22,1,9917,1), (23,1,9918,1), (24,1,9919,1), (25,1,9920,1),
 (26,1,9921,1), (27,1,9922,1);
 FLUSH TABLES;
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 SELECT * FROM t1 WHERE f2 = 1 AND f4 = TRUE
 ORDER BY f1 DESC LIMIT 5;
 f1	f2	f3	f4
@@ -2835,7 +2913,7 @@ ORDER BY f1 DESC LIMIT 5;
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 1	SIMPLE	t1	NULL	range	f2,f4	f4	1	NULL	22	100.00	Using index condition; Using where; Backward index scan
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2`,`test`.`t1`.`f3` AS `f3`,`test`.`t1`.`f4` AS `f4` from `test`.`t1` where ((`test`.`t1`.`f4` = TRUE) and (`test`.`t1`.`f2` = 1)) order by `test`.`t1`.`f1` desc limit 5
+Note	1003	/* select#1 */ select `test`.`t1`.`f1` AS `f1`,`test`.`t1`.`f2` AS `f2`,`test`.`t1`.`f3` AS `f3`,`test`.`t1`.`f4` AS `f4` from `test`.`t1` where ((`test`.`t1`.`f4` = true) and (`test`.`t1`.`f2` = 1)) order by `test`.`t1`.`f1` desc limit 5
 DROP TABLE t1;
 #
 # Bug#54117 crash in thr_multi_unlock, temporary table
@@ -2851,6 +2929,9 @@ DROP TABLE t1;
 CREATE TABLE t1 (a INT , b INT, c INT, d INT,
 KEY (b), PRIMARY KEY (a,b)) ENGINE=INNODB STATS_PERSISTENT=0;
 INSERT INTO t1 VALUES (1,1,1,1), (2,2,2,2), (3,3,3,3);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 EXPLAIN SELECT COUNT(*) FROM t1;
 id	1
 select_type	SIMPLE
@@ -2870,6 +2951,9 @@ Code	1003
 Message	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1`
 DROP INDEX b ON t1;
 CREATE INDEX b ON t1(a,b);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 EXPLAIN SELECT COUNT(*) FROM t1;
 id	1
 select_type	SIMPLE
@@ -2889,6 +2973,9 @@ Code	1003
 Message	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1`
 DROP INDEX b ON t1;
 CREATE INDEX b ON t1(a,b,c);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 EXPLAIN SELECT COUNT(*) FROM t1;
 id	1
 select_type	SIMPLE
@@ -2908,6 +2995,9 @@ Code	1003
 Message	/* select#1 */ select count(0) AS `COUNT(*)` from `test`.`t1`
 DROP INDEX b ON t1;
 CREATE INDEX b ON t1(a,b,c,d);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 EXPLAIN SELECT COUNT(*) FROM t1;
 id	1
 select_type	SIMPLE
@@ -2950,7 +3040,7 @@ constraint x foreign key (FK) references t1 (PK)) engine=InnoDB;
 show create table t2;
 Table	Create Table
 t2	CREATE TABLE `t2` (
-  `fk` int(11) DEFAULT NULL,
+  `fk` int DEFAULT NULL,
   KEY `x` (`fk`),
   CONSTRAINT `x` FOREIGN KEY (`fk`) REFERENCES `t1` (`pk`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
@@ -3037,14 +3127,21 @@ CREATE TABLE t1 (a tinyblob) ENGINE=InnoDB;
 CREATE TABLE t2 (a int PRIMARY KEY,  b tinyblob) ENGINE=InnoDB;
 INSERT INTO t1 VALUES ('1'), (NULL);
 INSERT INTO t2 VALUES (1, '1');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	OK
 EXPLAIN
 SELECT t2.b FROM t1,t2 WHERE t1.a IN (SELECT 1 FROM t2);
 id	select_type	table	partitions	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	Start temporary
-1	SIMPLE	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index; Using join buffer (Block Nested Loop)
-1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where; End temporary; Using join buffer (Block Nested Loop)
+1	SIMPLE	t2	NULL	ALL	NULL	NULL	NULL	NULL	1	100.00	NULL
+1	SIMPLE	<subquery2>	NULL	ALL	NULL	NULL	NULL	NULL	NULL	100.00	Using join buffer (hash join)
+1	SIMPLE	t1	NULL	ALL	NULL	NULL	NULL	NULL	2	50.00	Using where; Using join buffer (hash join)
+2	MATERIALIZED	t2	NULL	index	NULL	PRIMARY	4	NULL	1	100.00	Using index
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t2`.`b` AS `b` from `test`.`t1` semi join (`test`.`t2`) join `test`.`t2` where (`test`.`t1`.`a` = 1)
+Note	1003	/* select#1 */ select `test`.`t2`.`b` AS `b` from `test`.`t1` join `test`.`t2` semi join (`test`.`t2`) where (`test`.`t1`.`a` = `<subquery2>`.`1`)
 SELECT t2.b FROM t1,t2 WHERE t1.a IN (SELECT 1 FROM t2);
 b
 1
@@ -3060,10 +3157,15 @@ v2 varchar(20) DEFAULT NULL,
 KEY i (i),
 KEY v (v1,i)
 ) ENGINE=innodb;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 INSERT INTO t1 VALUES (1,'f','no');
 INSERT INTO t1 VALUES (2,'u','yes-u');
 INSERT INTO t1 VALUES (2,'h','yes-h');
 INSERT INTO t1 VALUES (3,'d','no');
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	OK
 
 SELECT v2
 FROM t1
@@ -3124,8 +3226,8 @@ UNIQUE KEY (b(8) desc, a asc, d)) ENGINE = InnoDB;
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `a` int(11) NOT NULL,
-  `d` int(11) NOT NULL,
+  `a` int NOT NULL,
+  `d` int NOT NULL,
   `b` text NOT NULL,
   `c` text,
   UNIQUE KEY `b` (`b`(8) DESC,`a`,`d`)

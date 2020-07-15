@@ -1,18 +1,11 @@
-//>>built
-define("dojox/charting/plot2d/Scatter", ["dojo/_base/lang", "dojo/_base/array", "dojo/_base/declare", "./Base", "./common", 
-	"dojox/lang/functional", "dojox/lang/functional/reversed", "dojox/lang/utils", "dojox/gfx/fx", "dojox/gfx/gradutils"],
-	function(lang, arr, declare, Base, dc, df, dfr, du, fx, gradutils){
-/*=====
-var Base = dojox.charting.plot2d.Base;
-=====*/
-	var purgeGroup = dfr.lambda("item.purgeGroup()");
+define("dojox/charting/plot2d/Scatter", ["dojo/_base/lang", "dojo/_base/array", "dojo/_base/declare", "dojo/has", "./CartesianBase", "./_PlotEvents", "./common",
+	"dojox/lang/functional", "dojox/lang/utils", "dojox/gfx/fx", "dojox/gfx/gradutils"],
+	function(lang, arr, declare, has, CartesianBase, _PlotEvents, dc, df, du, fx, gradutils){
 
-	return declare("dojox.charting.plot2d.Scatter", Base, {
-		//	summary:
+	return declare("dojox.charting.plot2d.Scatter", [CartesianBase, _PlotEvents], {
+		// summary:
 		//		A plot object representing a typical scatter chart.
 		defaultParams: {
-			hAxis: "x",		// use a horizontal axis named "x"
-			vAxis: "y",		// use a vertical axis named "y"
 			shadows: null,	// draw shadows
 			animate: null	// animate chart to place
 		},
@@ -23,48 +16,47 @@ var Base = dojox.charting.plot2d.Base;
 			markerShadow:		{},
 			markerFill:			{},
 			markerFont:			"",
-			markerFontColor:	""
+			markerFontColor:	"",
+			styleFunc:			null
 		},
 
 		constructor: function(chart, kwArgs){
-			//	summary:
+			// summary:
 			//		Create the scatter plot.
-			//	chart: dojox.charting.Chart
+			// chart: dojox/charting/Chart
 			//		The chart this plot belongs to.
-			//	kwArgs: dojox.charting.plot2d.__DefaultCtorArgs?
+			// kwArgs: dojox.charting.plot2d.__DefaultCtorArgs?
 			//		An optional keyword arguments object to help define this plot's parameters.
-			this.opt = lang.clone(this.defaultParams);
-            du.updateWithObject(this.opt, kwArgs);
-            du.updateWithPattern(this.opt, kwArgs, this.optionalParams);
-			this.series = [];
-			this.hAxis = this.opt.hAxis;
-			this.vAxis = this.opt.vAxis;
+			this.opt = lang.clone(lang.mixin(this.opt, this.defaultParams));
+			du.updateWithObject(this.opt, kwArgs);
+			du.updateWithPattern(this.opt, kwArgs, this.optionalParams);
 			this.animate = this.opt.animate;
 		},
 
 		render: function(dim, offsets){
-			//	summary:
+			// summary:
 			//		Run the calculations for any axes for this plot.
-			//	dim: Object
+			// dim: Object
 			//		An object in the form of { width, height }
-			//	offsets: Object
+			// offsets: Object
 			//		An object of the form { l, r, t, b}.
-			//	returns: dojox.charting.plot2d.Scatter
+			// returns: dojox/charting/plot2d/Scatter
 			//		A reference to this plot for functional chaining.
 			if(this.zoom && !this.isDataDirty()){
 				return this.performZoom(dim, offsets);
 			}
 			this.resetEvents();
 			this.dirty = this.isDirty();
+			var s;
 			if(this.dirty){
-				arr.forEach(this.series, purgeGroup);
+				arr.forEach(this.series, dc.purgeGroup);
 				this._eventSeries = {};
 				this.cleanGroup();
-				var s = this.group;
+				s = this.getGroup();
 				df.forEachRev(this.series, function(item){ item.cleanGroup(s); });
 			}
 			var t = this.chart.theme, events = this.events();
-			for(var i = this.series.length - 1; i >= 0; --i){
+			for(var i = 0; i < this.series.length; i++){
 				var run = this.series[i];
 				if(!this.dirty && !run.dirty){
 					t.skip();
@@ -78,9 +70,16 @@ var Base = dojox.charting.plot2d.Base;
 					continue;
 				}
 
-				var theme = t.next("marker", [this.opt, run]), s = run.group, lpoly,
+				var theme = t.next("marker", [this.opt, run]), lpoly,
 					ht = this._hScaler.scaler.getTransformerFromModel(this._hScaler),
 					vt = this._vScaler.scaler.getTransformerFromModel(this._vScaler);
+				if(run.hidden){
+					run.dyn.marker = theme.symbol;
+					run.dyn.markerFill = theme.marker.fill;
+					run.dyn.markerStroke = theme.marker.stroke;
+					continue;
+				}
+				s = run.group;
 				if(typeof run.data[0] == "number"){
 					lpoly = arr.map(run.data, function(v, i){
 						return {
@@ -102,10 +101,17 @@ var Base = dojox.charting.plot2d.Base;
 					outlineMarkers = new Array(lpoly.length);
 
 				arr.forEach(lpoly, function(c, i){
-					var finalTheme = typeof run.data[i] == "number" ?
-							t.post(theme, "marker") :
-							t.addMixin(theme, "marker", run.data[i], true),
-						path = "M" + c.x + " " + c.y + " " + finalTheme.symbol;
+					var value = run.data[i], finalTheme;
+					if(this.opt.styleFunc || typeof value != "number"){
+						var tMixin = typeof value != "number" ? [value] : [];
+						if(this.opt.styleFunc){
+							tMixin.push(this.opt.styleFunc(value));
+						}
+						finalTheme = t.addMixin(theme, "marker", tMixin, true);
+					}else{
+						finalTheme = t.post(theme, "marker");
+					}
+					var path = "M" + c.x + " " + c.y + " " + finalTheme.symbol;
 					if(finalTheme.marker.shadow){
 						shadowMarkers[i] = s.createPath("M" + (c.x + finalTheme.marker.shadow.dx) + " " +
 							(c.y + finalTheme.marker.shadow.dy) + " " + finalTheme.symbol).
@@ -116,7 +122,7 @@ var Base = dojox.charting.plot2d.Base;
 					}
 					if(finalTheme.marker.outline){
 						var outline = dc.makeStroke(finalTheme.marker.outline);
-						outline.width = 2 * outline.width + finalTheme.marker.stroke.width;
+						outline.width = 2 * outline.width + (finalTheme.marker.stroke && finalTheme.marker.stroke.width || 0);
 						outlineMarkers[i] = s.createPath(path).setStroke(outline);
 						if(this.animate){
 							this._animateScatter(outlineMarkers[i], dim.height - offsets.b);
@@ -133,13 +139,18 @@ var Base = dojox.charting.plot2d.Base;
 					}else{
 						frontMarkers[i] = s.createPath(path).setStroke(stroke).setFill(fill);
 					}
+					if(this.opt.labels){
+						var markerBox = frontMarkers[i].getBoundingBox();
+						this.createLabel(s, value, markerBox, finalTheme);
+					}
 					if(this.animate){
 						this._animateScatter(frontMarkers[i], dim.height - offsets.b);
 					}
 				}, this);
 				if(frontMarkers.length){
-					run.dyn.stroke = frontMarkers[frontMarkers.length - 1].getStroke();
-					run.dyn.fill   = frontMarkers[frontMarkers.length - 1].getFill();
+					run.dyn.marker = theme.symbol;
+					run.dyn.markerStroke = frontMarkers[frontMarkers.length - 1].getStroke();
+					run.dyn.markerFill   = frontMarkers[frontMarkers.length - 1].getFill();
 				}
 
 				if(events){
@@ -172,7 +183,12 @@ var Base = dojox.charting.plot2d.Base;
 				run.dirty = false;
 			}
 			this.dirty = false;
-			return this;	//	dojox.charting.plot2d.Scatter
+			// chart mirroring starts
+			if(has("dojo-bidi")){
+				this._checkOrientation(this.group, dim, offsets);
+			}
+			// chart mirroring ends
+			return this;	//	dojox/charting/plot2d/Scatter
 		},
 		_animateScatter: function(shape, offset){
 			fx.animateTransform(lang.delegate({

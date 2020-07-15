@@ -1,7 +1,7 @@
 //>>built
 define("dojox/widget/Standby",["dojo/_base/kernel","dojo/_base/declare","dojo/_base/array","dojo/_base/event","dojo/_base/sniff","dojo/dom","dojo/dom-attr","dojo/dom-construct","dojo/dom-geometry","dojo/dom-style","dojo/window","dojo/_base/window","dojo/_base/fx","dojo/fx","dijit/_Widget","dijit/_TemplatedMixin","dijit/registry"],function(_1,_2,_3,_4,_5,_6,_7,_8,_9,_a,_b,_c,_d,fx,_e,_f,_10){
 _1.experimental("dojox.widget.Standby");
-return _2("dojox.widget.Standby",[_e,_f],{templateString:"<div>"+"<div style=\"display: none; opacity: 0; z-index: 9999; "+"position: absolute; cursor:wait;\" dojoAttachPoint=\"_underlayNode\"></div>"+"<img src=\"${image}\" style=\"opacity: 0; display: none; z-index: -10000; "+"position: absolute; top: 0px; left: 0px; cursor:wait;\" "+"dojoAttachPoint=\"_imageNode\">"+"<div style=\"opacity: 0; display: none; z-index: -10000; position: absolute; "+"top: 0px;\" dojoAttachPoint=\"_textNode\"></div>"+"</div>",_underlayNode:null,_imageNode:null,_textNode:null,_centerNode:null,image:require.toUrl("dojox/widget/Standby/images/loading.gif").toString(),imageText:"Please Wait...",text:"Please wait...",centerIndicator:"image",_displayed:false,_resizeCheck:null,target:"",color:"#C0C0C0",duration:500,_started:false,_parent:null,zIndex:"auto",startup:function(_11){
+return _2("dojox.widget.Standby",[_e,_f],{image:require.toUrl("dojox/widget/Standby/images/loading.gif").toString(),imageText:"Please Wait...",text:"Please wait...",centerIndicator:"image",target:"",color:"#C0C0C0",duration:500,zIndex:"auto",opacity:0.75,templateString:"<div>"+"<div style=\"display: none; opacity: 0; z-index: 9999; "+"position: absolute; cursor:wait;\" dojoAttachPoint=\"_underlayNode\"></div>"+"<img src=\"${image}\" style=\"opacity: 0; display: none; z-index: -10000; "+"position: absolute; top: 0px; left: 0px; cursor:wait;\" "+"dojoAttachPoint=\"_imageNode\">"+"<div style=\"opacity: 0; display: none; z-index: -10000; position: absolute; "+"top: 0px;\" dojoAttachPoint=\"_textNode\"></div>"+"</div>",_underlayNode:null,_imageNode:null,_textNode:null,_centerNode:null,_displayed:false,_resizeCheck:null,_started:false,_parent:null,startup:function(_11){
 if(!this._started){
 if(typeof this.target==="string"){
 var w=_10.byId(this.target);
@@ -43,16 +43,23 @@ this._fadeIn();
 }
 },hide:function(){
 if(this._displayed){
+try{
 if(this._anim){
 this._anim.stop();
 delete this._anim;
 }
 this._size();
+}
+catch(e){
+console.error(e);
+}
+finally{
 this._fadeOut();
 this._displayed=false;
 if(this._resizeCheck!==null){
 clearInterval(this._resizeCheck);
 this._resizeCheck=null;
+}
 }
 }
 },isVisible:function(){
@@ -110,10 +117,12 @@ var _17=zi;
 var _18=zi;
 if(this.zIndex==="auto"){
 if(zi!="auto"){
-_17=parseInt(_17,10)+1;
-_18=parseInt(_18,10)+2;
+_17=parseInt(_17,10);
+_18=parseInt(_18,10);
 }else{
-var _19=_14.parentNode;
+var _19=_14;
+if(_19&&_19!==_c.body()&&_19!==_c.doc){
+_19=_14.parentNode;
 var _1a=-100000;
 while(_19&&_19!==_c.body()){
 zi=_a.get(_19,"zIndex");
@@ -124,15 +133,16 @@ var _1b=parseInt(zi,10);
 if(_1a<_1b){
 _1a=_1b;
 _17=_1b+1;
-_18=_1b+2;
+_18=_1b+1;
 }
 _19=_19.parentNode;
 }
 }
 }
+}
 }else{
-_17=parseInt(this.zIndex,10)+1;
-_18=parseInt(this.zIndex,10)+2;
+_17=parseInt(this.zIndex,10);
+_18=parseInt(this.zIndex,10);
 }
 _a.set(this._centerNode,"zIndex",_18);
 _a.set(this._underlayNode,"zIndex",_17);
@@ -247,7 +257,7 @@ _a.set(this._underlayNode,s,_a.get(this.target,s));
 },this);
 },_fadeIn:function(){
 var _2d=this;
-var _2e=_d.animateProperty({duration:_2d.duration,node:_2d._underlayNode,properties:{opacity:{start:0,end:0.75}}});
+var _2e=_d.animateProperty({duration:_2d.duration,node:_2d._underlayNode,properties:{opacity:{start:0,end:_2d.opacity}}});
 var _2f=_d.animateProperty({duration:_2d.duration,node:_2d._centerNode,properties:{opacity:{start:0,end:1}},onEnd:function(){
 _2d.onShow();
 delete _2d._anim;
@@ -256,7 +266,7 @@ this._anim=fx.combine([_2e,_2f]);
 this._anim.play();
 },_fadeOut:function(){
 var _30=this;
-var _31=_d.animateProperty({duration:_30.duration,node:_30._underlayNode,properties:{opacity:{start:0.75,end:0}},onEnd:function(){
+var _31=_d.animateProperty({duration:_30.duration,node:_30._underlayNode,properties:{opacity:{start:_30.opacity,end:0}},onEnd:function(){
 _a.set(this.node,{"display":"none","zIndex":"-1000"});
 }});
 var _32=_d.animateProperty({duration:_30.duration,node:_30._centerNode,properties:{opacity:{start:1,end:0}},onEnd:function(){
@@ -304,44 +314,51 @@ _a.set(this._textNode,"display","none");
 this._centerNode=this._textNode;
 _a.set(this._imageNode,"display","none");
 }
+},_setTargetAttr:function(_37){
+if(typeof _37==="string"){
+var w=_10.byId(_37);
+this._set("target",w?w.domNode:_6.byId(_37));
+}else{
+this._set("target",_37);
+}
 },_disableOverflow:function(){
 if(this.target===_c.body()||this.target===_c.doc){
 this._overflowDisabled=true;
-var _37=_c.body();
-if(_37.style&&_37.style.overflow){
-this._oldOverflow=_a.set(_37,"overflow");
+var _38=_c.body();
+if(_38.style&&_38.style.overflow){
+this._oldOverflow=_a.get(_38,"overflow");
 }else{
 this._oldOverflow="";
 }
 if(_5("ie")&&!_5("quirks")){
-if(_37.parentNode&&_37.parentNode.style&&_37.parentNode.style.overflow){
-this._oldBodyParentOverflow=_37.parentNode.style.overflow;
+if(_38.parentNode&&_38.parentNode.style&&_38.parentNode.style.overflow){
+this._oldBodyParentOverflow=_38.parentNode.style.overflow;
 }else{
 try{
-this._oldBodyParentOverflow=_a.set(_37.parentNode,"overflow");
+this._oldBodyParentOverflow=_a.get(_38.parentNode,"overflow");
 }
 catch(e){
 this._oldBodyParentOverflow="scroll";
 }
 }
-_a.set(_37.parentNode,"overflow","hidden");
+_a.set(_38.parentNode,"overflow","hidden");
 }
-_a.set(_37,"overflow","hidden");
+_a.set(_38,"overflow","hidden");
 }
 },_enableOverflow:function(){
 if(this._overflowDisabled){
 delete this._overflowDisabled;
-var _38=_c.body();
+var _39=_c.body();
 if(_5("ie")&&!_5("quirks")){
-_38.parentNode.style.overflow=this._oldBodyParentOverflow;
+_39.parentNode.style.overflow=this._oldBodyParentOverflow;
 delete this._oldBodyParentOverflow;
 }
-_a.set(_38,"overflow",this._oldOverflow);
+_a.set(_39,"overflow",this._oldOverflow);
 if(_5("webkit")){
 var div=_8.create("div",{style:{height:"2px"}});
-_38.appendChild(div);
+_39.appendChild(div);
 setTimeout(function(){
-_38.removeChild(div);
+_39.removeChild(div);
 },0);
 }
 delete this._oldOverflow;

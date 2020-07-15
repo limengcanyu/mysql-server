@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License, version 2.0,
@@ -25,10 +25,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
+#include <cstdint>
 #include <memory>
 
-#include "my_inttypes.h"
 #include "plugin/x/src/callback_command_delegate.h"
+#include "unittest/gunit/mysys_util.h"
 
 namespace ngs {
 
@@ -49,15 +50,15 @@ const longlong EXPECTED_VALUE_INTEGER = 1;
 const longlong EXPECTED_VALUE_LONGLONG = 2;
 const longlong EXPECTED_IS_LONGLONG_UNSIGNED = true;
 const longlong EXPECTED_IS_LONGLONG_UNSIGNED_DEFAULT = false;
-const decimal_t EXPECTED_VALUE_DECIMAL = {0, 1, 2, false, NULL};
+const decimal_t EXPECTED_VALUE_DECIMAL = {0, 1, 2, false, nullptr};
 const double EXPECTED_VALUE_DOUBLE = 20.0;
-const MYSQL_TIME EXPECTED_VALUE_DATATIME = {
-    2017, 12, 20, 20, 30, 00, 0, 0, MYSQL_TIMESTAMP_DATETIME};
+const MysqlTime EXPECTED_VALUE_DATATIME(2017, 12, 20, 20, 30, 00, 0, false,
+                                        MYSQL_TIMESTAMP_DATETIME);
 const char *EXPECTED_VALUE_STRING = "TEST STRING";
 
 }  // namespace
 
-using namespace ::testing;
+using namespace ::testing;  // NOLINT(build/namespaces)
 
 class Mock_callback_commands {
  public:
@@ -110,7 +111,7 @@ class Callback_command_delegate_testsuite : public Test {
 
     // Processing of data should be always successful
     // it doesn't depend on result of start_row !
-    ASSERT_EQ(expected_result, m_sut->start_row());
+    ASSERT_EQ(expected_result, static_cast<bool>(m_sut->start_row()));
     ASSERT_EQ(expect_success, m_sut->get_null());
     ASSERT_EQ(expect_success, m_sut->get_integer(EXPECTED_VALUE_INTEGER));
     ASSERT_EQ(expect_success,
@@ -123,8 +124,8 @@ class Callback_command_delegate_testsuite : public Test {
     ASSERT_EQ(expect_success, m_sut->get_datetime(&EXPECTED_VALUE_DATATIME, 0));
     ASSERT_EQ(expect_success,
               m_sut->get_string(EXPECTED_VALUE_STRING,
-                                strlen(EXPECTED_VALUE_STRING), NULL));
-    ASSERT_EQ(expected_result, m_sut->end_row());
+                                strlen(EXPECTED_VALUE_STRING), nullptr));
+    ASSERT_EQ(expected_result, static_cast<bool>(m_sut->end_row()));
   }
 
   void assert_sut_status_should_be_empty() {
@@ -133,8 +134,8 @@ class Callback_command_delegate_testsuite : public Test {
   }
 
   void assert_sut_handle_ok_and_its_status() {
-    const uint expected_status = 1;
-    const uint expected_wrn_count = 2;
+    const uint32_t expected_status = 1;
+    const uint32_t expected_wrn_count = 2;
     const ulonglong expected_affected_rows = 3;
     const ulonglong expected_last_inserted_id = 4;
     const std::string expected_message = "Test message";
@@ -165,11 +166,12 @@ class Callback_command_delegate_testsuite : public Test {
 
     ASSERT_EQ(EXPECTED_VALUE_INTEGER, row_data.fields[1]->value.v_long);
     ASSERT_EQ(EXPECTED_IS_LONGLONG_UNSIGNED_DEFAULT,
-              row_data.fields[1]->is_unsigned);
+              static_cast<longlong>(row_data.fields[1]->is_unsigned));
     ASSERT_FALSE(row_data.fields[1]->is_string);
 
     ASSERT_EQ(EXPECTED_VALUE_LONGLONG, row_data.fields[2]->value.v_long);
-    ASSERT_EQ(EXPECTED_IS_LONGLONG_UNSIGNED, row_data.fields[2]->is_unsigned);
+    ASSERT_EQ(EXPECTED_IS_LONGLONG_UNSIGNED,
+              static_cast<longlong>(row_data.fields[2]->is_unsigned));
     ASSERT_FALSE(row_data.fields[2]->is_string);
 
     ASSERT_THAT(row_data.fields[3]->value.v_decimal,
@@ -220,7 +222,7 @@ TEST_F(Callback_command_delegate_testsuite,
 TEST_F(Callback_command_delegate_testsuite,
        process_data_verify_that_callbacks_are_called_but_container_is_missing) {
   const bool expect_failure = true;
-  Callback_command_delegate::Row_data *expected_container = NULL;
+  Callback_command_delegate::Row_data *expected_container = nullptr;
 
   create_sut_with_callback_mock();
 

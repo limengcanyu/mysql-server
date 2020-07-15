@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -212,7 +212,7 @@ struct System_variables {
   ulong lock_wait_timeout;
   ulong max_allowed_packet;
   ulong max_error_count;
-  ulong max_length_for_sort_data;
+  ulong max_length_for_sort_data;  ///< Unused.
   ulong max_points_in_geometry;
   ulong max_sort_length;
   ulong max_insert_delayed_threads;
@@ -246,6 +246,9 @@ struct System_variables {
   ulong rbr_exec_mode_options;  // see enum_rbr_exec_mode
   bool binlog_direct_non_trans_update;
   ulong binlog_row_image;  // see enum_binlog_row_image
+  bool binlog_trx_compression;
+  ulong binlog_trx_compression_type;  // see enum_binlog_trx_compression
+  uint binlog_trx_compression_level_zstd;
   ulonglong binlog_row_value_options;
   bool sql_log_bin;
   // see enum_transaction_write_set_hashing_algorithm
@@ -383,6 +386,26 @@ struct System_variables {
     default.
   */
   bool default_table_encryption;
+
+  /**
+    @sa Sys_var_print_identified_with_as_hex
+  */
+  bool print_identified_with_as_hex;
+
+  /**
+    @sa Sys_var_show_create_table_skip_secondary_engine
+  */
+  bool show_create_table_skip_secondary_engine;
+
+  /**
+    @sa Sys_var_generated_random_password_length
+  */
+  uint32_t generated_random_password_length;
+
+  /**
+    @sa Sys_var_require_row_format
+  */
+  bool require_row_format;
 };
 
 /**

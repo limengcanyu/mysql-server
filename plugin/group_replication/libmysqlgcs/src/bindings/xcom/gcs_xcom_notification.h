@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -472,6 +472,8 @@ class Global_view_notification : public Parameterized_notification<false> {
     @param message_id Messaged Id.
     @param xcom_nodes Set of nodes that participated in the consensus
                        to deliver the message.
+    @param event_horizon the XCom configuration's event horizon
+    @param max_synode XCom max synode
   */
 
   explicit Global_view_notification(xcom_global_view_functor *functor,
@@ -546,13 +548,14 @@ class Local_view_notification : public Parameterized_notification<false> {
 
     @param functor Pointer to a function that contains that actual
                     core of the execution.
-    @param message_id Messaged Id.
+    @param config_id Configuration ID to which this view pertains to
     @param xcom_nodes Set of nodes that were defined when the notification
                        happened.
+    @param max_synode XCom max synode
   */
 
   explicit Local_view_notification(xcom_local_view_functor *functor,
-                                   synode_no message_id,
+                                   synode_no config_id,
                                    Gcs_xcom_nodes *xcom_nodes,
                                    synode_no max_synode);
 
@@ -575,9 +578,9 @@ class Local_view_notification : public Parameterized_notification<false> {
   xcom_local_view_functor *m_functor;
 
   /*
-    Message Id.
+    Configuration ID.
   */
-  synode_no m_message_id;
+  synode_no m_config_id;
 
   /*
     Set of nodes that were defined when the notification happened.
@@ -702,7 +705,8 @@ class Protocol_change_notification : public Parameterized_notification<false> {
 
     @param functor Pointer to a function that contains that actual
                     core of the execution.
-    @param control_if Reference to Communication Interface.
+    @param protocol_changer communication protocol change logic
+    @param tag tag reference to the lock
   */
 
   explicit Protocol_change_notification(

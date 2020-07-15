@@ -1,6 +1,6 @@
 /***********************************************************************
 
-Copyright (c) 1995, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1995, 2019, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2009, Percona Inc.
 
 Portions of this file contain modifications contributed and copyrighted
@@ -35,8 +35,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 /** NOTE: The functions in this file should only use functions from
 other files in library. The code in this file is used to make a library for
 external tools. */
-
-#include "my_compiler.h"
 
 /** @file os/file.h
  The interface to the operating system file io
@@ -95,11 +93,34 @@ struct Compression {
       case NONE:
       case ZLIB:
       case LZ4:
-
+        break;
       default:
         ut_error;
     }
 #endif /* UNIV_DEBUG */
+  }
+
+  /** @return string representation. */
+  std::string to_string() const {
+    std::ostringstream os;
+
+    os << "type: ";
+    switch (m_type) {
+      case NONE:
+        os << "NONE";
+        break;
+      case ZLIB:
+        os << "ZLIB";
+        break;
+      case LZ4:
+        os << "LZ4";
+        break;
+      default:
+        os << "<UNKNOWN>";
+        break;
+    }
+
+    return (os.str());
   }
 
   /** Check the page header type field.
@@ -145,14 +166,14 @@ struct Compression {
   /** Decompress the page data contents. Page type must be
   FIL_PAGE_COMPRESSED, if not then the source contents are
   left unchanged and DB_SUCCESS is returned.
-  @param[in]	dblwr_recover	true of double write recovery
+  @param[in]	dblwr_read	true if double write recovery
                                   in progress
   @param[in,out]	src		Data read from disk, decompressed
                                   data will be copied to this page
   @param[in,out]	dst		Scratch area to use for decompression
   @param[in]	dst_len		Size of the scratch area in bytes
   @return DB_SUCCESS or error code */
-  static dberr_t deserialize(bool dblwr_recover, byte *src, byte *dst,
+  static dberr_t deserialize(bool dblwr_read, byte *src, byte *dst,
                              ulint dst_len) MY_ATTRIBUTE((warn_unused_result));
 
   /** Compression type */

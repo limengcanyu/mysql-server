@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2010, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2010, 2020, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2012, Facebook Inc.
 
 This program is free software; you can redistribute it and/or modify it under
@@ -119,6 +119,21 @@ static monitor_info_t innodb_counter_info[] = {
     {"lock_deadlocks", "lock", "Number of deadlocks", MONITOR_DEFAULT_ON,
      MONITOR_DEFAULT_START, MONITOR_DEADLOCK},
 
+    {"lock_deadlock_false_positives", "lock",
+     "Number of times a heuristic found a spurious candidate deadlock cycle in "
+     "the wait-for graph",
+     MONITOR_DEFAULT_ON, MONITOR_DEFAULT_START,
+     MONITOR_DEADLOCK_FALSE_POSITIVES},
+
+    {"lock_deadlock_rounds", "lock",
+     "Number of times a wait-for graph was scanned in search for deadlocks",
+     MONITOR_DEFAULT_ON, MONITOR_DEFAULT_START, MONITOR_DEADLOCK_ROUNDS},
+
+    {"lock_threads_waiting", "lock",
+     "Number of query threads sleeping waiting for a lock",
+     static_cast<monitor_type_t>(MONITOR_DEFAULT_ON | MONITOR_DISPLAY_CURRENT),
+     MONITOR_DEFAULT_START, MONITOR_LOCK_THREADS_WAITING},
+
     {"lock_timeouts", "lock", "Number of lock timeouts", MONITOR_DEFAULT_ON,
      MONITOR_DEFAULT_START, MONITOR_TIMEOUT},
 
@@ -132,6 +147,14 @@ static monitor_info_t innodb_counter_info[] = {
 
     {"lock_rec_lock_requests", "lock", "Number of record locks requested",
      MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_NUM_RECLOCK_REQ},
+
+    {"lock_rec_release_attempts", "lock",
+     "Number of times we attempted to release record locks", MONITOR_DEFAULT_ON,
+     MONITOR_DEFAULT_START, MONITOR_RECLOCK_RELEASE_ATTEMPTS},
+
+    {"lock_rec_grant_attempts", "lock",
+     "Number of times we attempted to grant locks for a record",
+     MONITOR_DEFAULT_ON, MONITOR_DEFAULT_START, MONITOR_RECLOCK_GRANT_ATTEMPTS},
 
     {"lock_rec_lock_created", "lock", "Number of record locks created",
      MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_RECLOCK_CREATED},
@@ -184,6 +207,11 @@ static monitor_info_t innodb_counter_info[] = {
      static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DISPLAY_CURRENT |
                                  MONITOR_DEFAULT_ON),
      MONITOR_DEFAULT_START, MONITOR_OVLD_LOCK_AVG_WAIT_TIME},
+
+    {"lock_schedule_refreshes", "lock",
+     "Number of times the wait-for graph was analyzed to update schedule "
+     "weights of transactions",
+     MONITOR_DEFAULT_ON, MONITOR_DEFAULT_START, MONITOR_SCHEDULE_REFRESHES},
 
     /* ========== Counters for Buffer Manager and I/O ========== */
     {"module_buffer", "buffer", "Buffer Manager Module", MONITOR_MODULE,
@@ -337,8 +365,13 @@ static monitor_info_t innodb_counter_info[] = {
      "Number of pages requested for flushing.", MONITOR_NONE,
      MONITOR_DEFAULT_START, MONITOR_FLUSH_N_TO_FLUSH_REQUESTED},
 
+    {"buffer_flush_n_to_flush_by_dirty_page", "buffer",
+     "Number of pages targeted by dirty page percentage for flushing.",
+     MONITOR_NONE, MONITOR_DEFAULT_START,
+     MONITOR_FLUSH_N_TO_FLUSH_BY_DIRTY_PAGE},
+
     {"buffer_flush_n_to_flush_by_age", "buffer",
-     "Number of pages target by LSN Age for flushing.", MONITOR_NONE,
+     "Number of pages targeted by LSN Age for flushing.", MONITOR_NONE,
      MONITOR_DEFAULT_START, MONITOR_FLUSH_N_TO_FLUSH_BY_AGE},
 
     {"buffer_flush_adaptive_avg_time_slot", "buffer",
@@ -373,7 +406,7 @@ static monitor_info_t innodb_counter_info[] = {
      MONITOR_DEFAULT_START, MONITOR_FLUSH_AVG_TIME},
 
     {"buffer_flush_adaptive_avg_pass", "buffer",
-     "Numner of adaptive flushes passed during the recent Avg period.",
+     "Number of adaptive flushes passed during the recent Avg period.",
      MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_FLUSH_ADAPTIVE_AVG_PASS},
 
     {"buffer_LRU_batch_flush_avg_pass", "buffer",
@@ -807,32 +840,10 @@ static monitor_info_t innodb_counter_info[] = {
      "Number of times undo truncation was initiated", MONITOR_NONE,
      MONITOR_DEFAULT_START, MONITOR_UNDO_TRUNCATE_COUNT},
 
-    {"undo_truncate_sweep_count", "undo",
-     "Number of times undo truncation invalidates old pages from the buffer "
-     "pool",
-     MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_UNDO_TRUNCATE_SWEEP_COUNT},
-
-    {"undo_truncate_sweep_usec", "undo",
-     "Time (in microseconds) spent during undo truncation invalidating old "
-     "pages from the buffer pool",
-     MONITOR_NONE, MONITOR_DEFAULT_START,
-     MONITOR_UNDO_TRUNCATE_SWEEP_MICROSECOND},
-
     {"undo_truncate_start_logging_count", "undo",
      "Number of times during undo truncation a log file was started",
      MONITOR_NONE, MONITOR_DEFAULT_START,
      MONITOR_UNDO_TRUNCATE_START_LOGGING_COUNT},
-
-    {"undo_truncate_flush_count", "undo",
-     "Number of times undo truncation flushed new pages from the buffer pool "
-     "to disk",
-     MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_UNDO_TRUNCATE_FLUSH_COUNT},
-
-    {"undo_truncate_flush_usec", "undo",
-     "Time (in microseconds) spent during undo truncation flushing new pages "
-     "from the buffer pool to disk",
-     MONITOR_NONE, MONITOR_DEFAULT_START,
-     MONITOR_UNDO_TRUNCATE_FLUSH_MICROSECOND},
 
     {"undo_truncate_done_logging_count", "undo",
      "Number of times during undo truncation a log file was deleted",
@@ -977,13 +988,12 @@ static monitor_info_t innodb_counter_info[] = {
      MONITOR_NONE, MONITOR_DEFAULT_START,
      MONITOR_LOG_WRITE_TO_FILE_REQUESTS_INTERVAL},
 
-    MONITOR_WAIT_STATS(
-        "log_on_write_", "log",
-        "Waits in user threads on log_writer+log_write_notifier",
-        /* Note: requests to flush log up to lsn are not counted here!
-        This counter is used only, when fsync is not required afterwards
-        (when we rely on FS cache). */
-        MONITOR_LOG_ON_WRITE_),
+    MONITOR_WAIT_STATS("log_on_write_", "log",
+                       "Waits in user threads on log_writer+log_write_notifier",
+                       /* Note: requests to flush log up to lsn are not counted
+                       here! This counter is used only, when fsync is not
+                       required afterwards (when we rely on FS cache). */
+                       MONITOR_LOG_ON_WRITE_),
 
     MONITOR_WAIT_STATS(
         "log_on_flush_", "log",
@@ -1282,6 +1292,34 @@ static monitor_info_t innodb_counter_info[] = {
      static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DEFAULT_ON),
      MONITOR_DEFAULT_START, MONITOR_OLVD_ROW_UPDTATED},
 
+    {"dml_system_reads", "dml", "Number of system rows read",
+     static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DEFAULT_ON),
+     MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_READ},
+
+    {"dml_system_inserts", "dml", "Number of system rows inserted",
+     static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DEFAULT_ON),
+     MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_INSERTED},
+
+    {"dml_system_deletes", "dml", "Number of system rows deleted",
+     static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DEFAULT_ON),
+     MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_DELETED},
+
+    {"dml_system_updates", "dml", "Number of system rows updated",
+     static_cast<monitor_type_t>(MONITOR_EXISTING | MONITOR_DEFAULT_ON),
+     MONITOR_DEFAULT_START, MONITOR_OLVD_SYSTEM_ROW_UPDATED},
+
+    /* ========== Counters for sampling operations ========== */
+    {"module_sampling", "sampling", "Statistics for sampling", MONITOR_MODULE,
+     MONITOR_DEFAULT_START, MONITOR_MODULE_SAMPLING_STATS},
+
+    {"sampled_pages_read", "sampling", "Number of sampled pages read",
+     static_cast<monitor_type_t>(MONITOR_EXISTING), MONITOR_DEFAULT_START,
+     MONITOR_SAMPLED_PAGES_READ},
+
+    {"sampled_pages_skipped", "sampling", "Number of sampled pages skipped",
+     static_cast<monitor_type_t>(MONITOR_EXISTING), MONITOR_DEFAULT_START,
+     MONITOR_SAMPLED_PAGES_SKIPPED},
+
     /* ========== Counters for DDL operations ========== */
     {"module_ddl", "ddl", "Statistics for DDLs", MONITOR_MODULE,
      MONITOR_DEFAULT_START, MONITOR_MODULE_DDL_STATS},
@@ -1369,6 +1407,22 @@ static monitor_info_t innodb_counter_info[] = {
      MONITOR_DEFAULT_START,
      MONITOR_PAGE_TRACK_CHECKPOINT_PARTIAL_FLUSH_REQUEST},
 
+    /* ========== Double write ========== */
+    {"module_dblwr", "dblwr", "Counters related to double writes", MONITOR_NONE,
+     MONITOR_DEFAULT_START, MONITOR_MODULE_DBLWR},
+
+    {"dblwr_async_requests", "dblwr", "Total async requests", MONITOR_NONE,
+     MONITOR_DEFAULT_START, MONITOR_DBLWR_ASYNC_REQUESTS},
+
+    {"dblwr_sync_requests", "dblwr", "Total sync enqueue requests",
+     MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_DBLWR_SYNC_REQUESTS},
+
+    {"dblwr_flush_requests", "dblwr", "Total flush requests", MONITOR_NONE,
+     MONITOR_DEFAULT_START, MONITOR_DBLWR_FLUSH_REQUESTS},
+
+    {"dblwr_flush_wait_events", "dblwr", "Total flush wait events",
+     MONITOR_NONE, MONITOR_DEFAULT_START, MONITOR_DBLWR_FLUSH_WAIT_EVENTS},
+
     /* ========== To turn on/off reset all counters ========== */
     {"all", "All Counters", "Turn on/off and reset all counters",
      MONITOR_MODULE, MONITOR_DEFAULT_START, MONITOR_ALL_COUNTER},
@@ -1391,7 +1445,8 @@ monitor_info_t *srv_mon_get_info(
 {
   ut_a(monitor_id < NUM_MONITOR);
 
-  return ((monitor_id < NUM_MONITOR) ? &innodb_counter_info[monitor_id] : NULL);
+  return ((monitor_id < NUM_MONITOR) ? &innodb_counter_info[monitor_id]
+                                     : nullptr);
 }
 
 /** Get monitor's name by its monitor id (indexing into the
@@ -1406,7 +1461,7 @@ const char *srv_mon_get_name(
 
   return ((monitor_id < NUM_MONITOR)
               ? innodb_counter_info[monitor_id].monitor_name
-              : NULL);
+              : nullptr);
 }
 
 /** Turn on/off, reset monitor counters in a module. If module_id
@@ -1522,7 +1577,7 @@ static ulint srv_mon_get_rseg_size(void) {
   /* Rollback segments used in the temporary tablespace */
   trx_sys->tmp_rsegs.s_lock();
   for (const auto tmp_rseg : trx_sys->tmp_rsegs) {
-    value += tmp_rseg->curr_size;
+    value += tmp_rseg->get_curr_size();
   }
   trx_sys->tmp_rsegs.s_unlock();
 
@@ -1533,7 +1588,7 @@ static ulint srv_mon_get_rseg_size(void) {
         break;
       }
 
-      value += rseg->curr_size;
+      value += rseg->get_curr_size();
     }
   }
   undo::spaces->s_unlock();
@@ -1581,7 +1636,7 @@ void srv_mon_process_existing_counter(
     read requests */
     case MONITOR_OVLD_BUF_POOL_READ_REQUESTS:
       buf_get_total_stat(&stat);
-      value = stat.n_page_gets;
+      value = Counter::total(stat.m_n_page_gets);
       break;
 
     /* innodb_buffer_pool_write_requests, the number of
@@ -1804,6 +1859,34 @@ void srv_mon_process_existing_counter(
       value = srv_stats.n_rows_updated;
       break;
 
+    /* innodb_system_rows_read */
+    case MONITOR_OLVD_SYSTEM_ROW_READ:
+      value = srv_stats.n_system_rows_read;
+      break;
+
+    /* innodb_system_rows_inserted */
+    case MONITOR_OLVD_SYSTEM_ROW_INSERTED:
+      value = srv_stats.n_system_rows_inserted;
+      break;
+
+    /* innodb_system_rows_deleted */
+    case MONITOR_OLVD_SYSTEM_ROW_DELETED:
+      value = srv_stats.n_system_rows_deleted;
+      break;
+
+    /* innodb_system_rows_updated */
+    case MONITOR_OLVD_SYSTEM_ROW_UPDATED:
+      value = srv_stats.n_system_rows_updated;
+      break;
+
+    case MONITOR_SAMPLED_PAGES_READ:
+      value = srv_stats.n_sampled_pages_read;
+      break;
+
+    case MONITOR_SAMPLED_PAGES_SKIPPED:
+      value = srv_stats.n_sampled_pages_skipped;
+      break;
+
     /* innodb_row_lock_current_waits */
     case MONITOR_OVLD_ROW_LOCK_CURRENT_WAIT:
       value = srv_stats.n_lock_wait_current_count;
@@ -1911,7 +1994,7 @@ void srv_mon_process_existing_counter(
       break;
 
     case MONITOR_OVLD_LSN_CHECKPOINT:
-      value = (mon_type_t)log_sys->last_checkpoint_lsn;
+      value = (mon_type_t)log_sys->last_checkpoint_lsn.load();
       break;
 
     case MONITOR_OVLD_LSN_CHECKPOINT_AGE:
@@ -1968,7 +2051,7 @@ void srv_mon_process_existing_counter(
         if (monitor_info->monitor_type & MONITOR_DISPLAY_CURRENT) {
           MONITOR_SET(monitor_id, value);
         } else {
-          /* Most status counters are montonically
+          /* Most status counters are monotonically
           increasing, no need to update their
           minimum values. Only do so
           if "update_min" set to TRUE */
@@ -2031,7 +2114,7 @@ void srv_mon_reset(monitor_id_t monitor) /*!< in: monitor id */
   MONITOR_MAX_VALUE(monitor) = MAX_RESERVED;
   MONITOR_MIN_VALUE(monitor) = MIN_RESERVED;
 
-  MONITOR_FIELD((monitor), mon_reset_time) = time(NULL);
+  MONITOR_FIELD((monitor), mon_reset_time) = time(nullptr);
 
   if (monitor_was_on) {
     MONITOR_ON(monitor);

@@ -1,18 +1,55 @@
-//>>built
-define("dojo/dom-prop", ["exports", "./_base/kernel", "./_base/sniff", "./_base/lang", "./dom", "./dom-style", "./dom-construct", "./_base/connect"],
+define("dojo/dom-prop", ["exports", "./_base/kernel", "./sniff", "./_base/lang", "./dom", "./dom-style", "./dom-construct", "./_base/connect"],
 		function(exports, dojo, has, lang, dom, style, ctr, conn){
 	// module:
 	//		dojo/dom-prop
 	// summary:
 	//		This module defines the core dojo DOM properties API.
-	//      Indirectly depends on dojo.empty() and dojo.toDom().
+
+	// TODOC: summary not showing up in output, see https://github.com/csnover/js-doc-parse/issues/42
 
 	// =============================
 	// Element properties Functions
 	// =============================
 
-	/*=====
-	prop.get = function(node, name){
+	// helper to connect events
+	var _evtHdlrMap = {}, _ctr = 1, _attrId = dojo._scopeName + "attrid";
+	has.add('dom-textContent', function (global, doc, element) { return 'textContent' in element; });
+
+	exports.names = {
+		// properties renamed to avoid clashes with reserved words
+		"class": "className",
+		"for": "htmlFor",
+		// properties written as camelCase
+		tabindex: "tabIndex",
+		readonly: "readOnly",
+		colspan: "colSpan",
+		frameborder: "frameBorder",
+		rowspan: "rowSpan",
+		textcontent: "textContent",
+		valuetype: "valueType"
+	};
+	
+	function getText(/*DOMNode*/node){
+		// summary:
+		//		recursion method for get('textContent') to use. Gets text value for a node.
+		// description:
+		//		Juse uses nodedValue so things like <br/> tags do not end up in
+		//		the text as any sort of line return.
+		var text = "", ch = node.childNodes;
+		for(var i = 0, n; n = ch[i]; i++){
+			//Skip comments.
+			if(n.nodeType != 8){
+				if(n.nodeType == 1){
+					text += getText(n);
+				}else{
+					text += n.nodeValue;
+				}
+			}
+		}
+		return text;
+	}
+
+	exports.get = function getProp(/*DOMNode|String*/ node, /*String*/ name){
 		// summary:
 		//		Gets a property on an HTML element.
 		// description:
@@ -27,14 +64,23 @@ define("dojo/dom-prop", ["exports", "./_base/kernel", "./_base/sniff", "./_base/
 		//
 		// example:
 		//	|	// get the current value of the "foo" property on a node
-		//	|	dojo.getProp(dojo.byId("nodeId"), "foo");
-		//	|	// or we can just pass the id:
-		//	|	dojo.getProp("nodeId", "foo");
-	};
-	=====*/
+		//	|	require(["dojo/dom-prop", "dojo/dom"], function(domProp, dom){
+		//	|		domProp.get(dom.byId("nodeId"), "foo");
+		//	|		// or we can just pass the id:
+		//	|		domProp.get("nodeId", "foo");
+		//	|	});
 
-	/*=====
-	prop.set = function(node, name, value){
+		node = dom.byId(node);
+		var lc = name.toLowerCase(), propName = exports.names[lc] || name;
+		
+		if(propName == "textContent" && !has("dom-textContent")){
+			return getText(node);
+		}
+		
+		return node[propName];	// Anything
+	};
+
+	exports.set = function setProp(/*DOMNode|String*/ node, /*String|Object*/ name, /*String?*/ value){
 		// summary:
 		//		Sets a property on an HTML element.
 		// description:
@@ -61,76 +107,20 @@ define("dojo/dom-prop", ["exports", "./_base/kernel", "./_base/sniff", "./_base/
 		//
 		// example:
 		//	|	// use prop() to set the tab index
-		//	|	dojo.setProp("nodeId", "tabIndex", 3);
-		//	|
+		//	|	require(["dojo/dom-prop"], function(domProp){
+		//	|		domProp.set("nodeId", "tabIndex", 3);
+		//	|	});
 		//
 		// example:
 		//	Set multiple values at once, including event handlers:
-		//	|	dojo.setProp("formId", {
-		//	|		"foo": "bar",
-		//	|		"tabIndex": -1,
-		//	|		"method": "POST",
-		//	|		"onsubmit": function(e){
-		//	|			// stop submitting the form. Note that the IE behavior
-		//	|			// of returning true or false will have no effect here
-		//	|			// since our handler is connect()ed to the built-in
-		//	|			// onsubmit behavior and so we need to use
-		//	|			// dojo.stopEvent() to ensure that the submission
-		//	|			// doesn't proceed.
-		//	|			dojo.stopEvent(e);
-		//	|
-		//	|			// submit the form with Ajax
-		//	|			dojo.xhrPost({ form: "formId" });
-		//	|		}
+		//	|	require(["dojo/dom-prop"], function(domProp){
+		//	|		domProp.set("formId", {
+		//	|			"foo": "bar",
+		//	|			"tabIndex": -1,
+		//	|			"method": "POST",
+		//	|		});
 		//	|	});
-		//
-		// example:
-		//	Style is s special case: Only set with an object hash of styles
-		//	|	dojo.setProp("someNode",{
-		//	|		id:"bar",
-		//	|		style:{
-		//	|			width:"200px", height:"100px", color:"#000"
-		//	|		}
-		//	|	});
-		//
-		// example:
-		//	Again, only set style as an object hash of styles:
-		//	|	var obj = { color:"#fff", backgroundColor:"#000" };
-		//	|	dojo.setProp("someNode", "style", obj);
-		//	|
-		//	|	// though shorter to use `dojo.style()` in this case:
-		//	|	dojo.style("someNode", obj);
-	};
-	=====*/
 
-	// helper to connect events
-	var _evtHdlrMap = {}, _ctr = 0, _attrId = dojo._scopeName + "attrid";
-
-		// the next dictionary lists elements with read-only innerHTML on IE
-	var _roInnerHtml = {col: 1, colgroup: 1,
-			// frameset: 1, head: 1, html: 1, style: 1,
-			table: 1, tbody: 1, tfoot: 1, thead: 1, tr: 1, title: 1};
-	
-	exports.names = {
-		// properties renamed to avoid clashes with reserved words
-		"class": "className",
-		"for": "htmlFor",
-		// properties written as camelCase
-		tabindex: "tabIndex",
-		readonly: "readOnly",
-		colspan: "colSpan",
-		frameborder: "frameBorder",
-		rowspan: "rowSpan",
-		valuetype: "valueType"
-	};
-
-	exports.get = function getProp(/*DOMNode|String*/node, /*String*/name){
-		node = dom.byId(node);
-		var lc = name.toLowerCase(), propName = exports.names[lc] || name;
-		return node[propName];	// Anything
-	};
-
-	exports.set = function setProp(/*DOMNode|String*/node, /*String|Object*/name, /*String?*/value){
 		node = dom.byId(node);
 		var l = arguments.length;
 		if(l == 2 && typeof name != "string"){ // inline'd type check
@@ -143,18 +133,25 @@ define("dojo/dom-prop", ["exports", "./_base/kernel", "./_base/sniff", "./_base/
 		var lc = name.toLowerCase(), propName = exports.names[lc] || name;
 		if(propName == "style" && typeof value != "string"){ // inline'd type check
 			// special case: setting a style
-			style.style(node, value);
+			style.set(node, value);
 			return node; // DomNode
 		}
 		if(propName == "innerHTML"){
 			// special case: assigning HTML
-						if(has("ie") && node.tagName.toLowerCase() in _roInnerHtml){
+			// the hash lists elements with read-only innerHTML on IE
+			if(has("ie") && node.tagName.toLowerCase() in {col: 1, colgroup: 1,
+						table: 1, tbody: 1, tfoot: 1, thead: 1, tr: 1, title: 1}){
 				ctr.empty(node);
 				node.appendChild(ctr.toDom(value, node.ownerDocument));
 			}else{
-							node[propName] = value;
-						}
-						return node; // DomNode
+				node[propName] = value;
+			}
+			return node; // DomNode
+		}
+		if(propName == "textContent" && !has("dom-textContent")) {
+			ctr.empty(node);
+			node.appendChild(node.ownerDocument.createTextNode(value));
+			return node;
 		}
 		if(lang.isFunction(value)){
 			// special case: assigning an event handler

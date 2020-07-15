@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -86,6 +86,8 @@ public:
   int schedulerSpinTimer() const;
   void schedulerSpinTimer(int value);
 
+  Uint32 spinTimePerCall() const;
+
   Uint32 maxSendDelay() const;
 
   Uint32 schedulerResponsiveness() const
@@ -165,6 +167,7 @@ private:
   Uint32 _timeBetweenWatchDogCheck;
   Uint32 _schedulerExecutionTimer;
   Uint32 _schedulerSpinTimer;
+  Uint32 _spinTimePerCall;
   Uint32 _realtimeScheduler;
   Uint32 _maxSendDelay;
   Uint32 _schedulerResponsiveness;
@@ -179,7 +182,8 @@ private:
   ndb_mgm_configuration * m_ownConfig;
   const class ConfigValues* get_own_config_values();
   ndb_mgm_configuration * m_clusterConfig;
-  UtilBuffer m_clusterConfigPacked;
+  UtilBuffer m_clusterConfigPacked_v1;
+  UtilBuffer m_clusterConfigPacked_v2;
 
   ndb_mgm_configuration_iterator * m_clusterConfigIter;
   ndb_mgm_configuration_iterator * m_ownConfigIterator;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include <functional>  // std::function
 
 #include "lex_string.h"
 #include "my_dbug.h"
@@ -43,6 +44,7 @@
 #include "sql/sql_list.h"              // List
 #include "sql/thr_malloc.h"
 
+class Alter_info;
 class Create_field;
 class FOREIGN_KEY;
 class Value_generator;
@@ -57,19 +59,19 @@ enum enum_field_types : int;
 using Mysql::Nullable;
 
 /**
-  Class representing DROP COLUMN, DROP KEY, DROP FOREIGN KEY and DROP CHECK
-  CONSTRAINT clauses in ALTER TABLE statement.
+  Class representing DROP COLUMN, DROP KEY, DROP FOREIGN KEY, DROP CHECK
+  CONSTRAINT and DROP CONSTRAINT clauses in ALTER TABLE statement.
 */
 
 class Alter_drop {
  public:
-  enum drop_type { KEY, COLUMN, FOREIGN_KEY, CHECK_CONSTRAINT };
+  enum drop_type { KEY, COLUMN, FOREIGN_KEY, CHECK_CONSTRAINT, ANY_CONSTRAINT };
   const char *name;
   drop_type type;
 
   Alter_drop(drop_type par_type, const char *par_name)
       : name(par_name), type(par_type) {
-    DBUG_ASSERT(par_name != NULL);
+    DBUG_ASSERT(par_name != nullptr);
   }
 };
 
@@ -135,7 +137,7 @@ class Alter_index_visibility {
  public:
   Alter_index_visibility(const char *name, bool is_visible)
       : m_name(name), m_is_visible(is_visible) {
-    assert(name != NULL);
+    assert(name != nullptr);
   }
 
   const char *name() const { return m_name; }
@@ -163,22 +165,25 @@ class Alter_rename_key {
 };
 
 /**
-  Class which instances represents state(i.e ENFORCED | NOT ENFORCED) of
-  CHECK CONSTRAINT in ALTER TABLE statement.
+  Class representing ALTER CHECK and ALTER CONSTRAINT clauses in ALTER TABLE
+  statement.
 */
 
-class Alter_state {
+class Alter_constraint_enforcement {
  public:
-  enum class Type { CHECK_CONSTRAINT };
+  enum class Type { CHECK_CONSTRAINT, ANY_CONSTRAINT };
   const char *name;
   Type type;
-  bool state;
+  bool is_enforced;
 
-  Alter_state(Type par_type, const char *par_name, bool par_state)
-      : name(par_name), type(par_type), state(par_state) {
+  Alter_constraint_enforcement(Type par_type, const char *par_name,
+                               bool par_is_enforced)
+      : name(par_name), type(par_type), is_enforced(par_is_enforced) {
     DBUG_ASSERT(par_name != nullptr);
   }
 };
+
+using CreateFieldApplier = std::function<bool(Create_field *, Alter_info *)>;
 
 /**
   Data describing the table being created by CREATE TABLE or
@@ -309,6 +314,21 @@ class Alter_info {
 
     /// Set for check constraint suspend.
     SUSPEND_CHECK_CONSTRAINT = 1ULL << 35,
+
+    /// Set for DROP CONSTRAINT.
+    DROP_ANY_CONSTRAINT = 1ULL << 36,
+
+    /// Set for ALTER CONSTRAINT symbol ENFORCED.
+    ENFORCE_ANY_CONSTRAINT = 1ULL << 37,
+
+    /// Set for ALTER CONSTRAINT symbol NOT ENFORCED.
+    SUSPEND_ANY_CONSTRAINT = 1ULL << 38,
+
+    /// Set if ANY engine attribute is used (also in CREATE) Note that
+    /// this is NOT to be set for SECONDARY_ENGINE_ATTRIBUTE as this flag
+    /// controls if execution should check if SE supports engine
+    /// attributes.
+    ANY_ENGINE_ATTRIBUTE = 1ULL << 39
   };
 
   enum enum_enable_or_disable { LEAVE_AS_IS, ENABLE, DISABLE };
@@ -365,10 +385,7 @@ class Alter_info {
   };
 
   /**
-     Columns and keys to be dropped.
-     After mysql_prepare_alter_table() it contains only foreign keys and
-     virtual generated columns to be dropped. This information is necessary
-     for the storage engine to do in-place alter.
+     Columns, keys and constraints to be dropped.
   */
   Mem_root_array<const Alter_drop *> drop_list;
   // Columns for ALTER_COLUMN_CHANGE_DEFAULT.
@@ -382,14 +399,17 @@ class Alter_info {
   /// Indexes whose visibilities are to be changed.
   Mem_root_array<const Alter_index_visibility *> alter_index_visibility_list;
 
-  /// List of check constraints whose state is changed.
-  Mem_root_array<const Alter_state *> alter_state_list;
+  /// List of check constraints whose enforcement state is changed.
+  Mem_root_array<const Alter_constraint_enforcement *>
+      alter_constraint_enforcement_list;
 
   /// Check constraints specification for CREATE and ALTER TABLE operations.
   Sql_check_constraint_spec_list check_constraint_spec_list;
 
   // List of columns, used by both CREATE and ALTER TABLE.
   List<Create_field> create_list;
+  std::vector<CreateFieldApplier> cf_appliers;
+
   // Type of ALTER TABLE operation.
   ulonglong flags;
   // Enable or disable keys.
@@ -412,7 +432,11 @@ class Alter_info {
   /// ALTER TABLE [db.]table [ RENAME [TO|AS|=] [new_db.]new_table ]
   LEX_CSTRING new_db_name;
 
-  /// New table name in the "RENAME [TO] <table_name>" clause or NULL_STR
+  /// New table name in the
+  /// \code
+  /// RENAME [TO] <table_name>
+  /// \endcode
+  /// clause or NULL_STR
   LEX_CSTRING new_table_name;
 
   explicit Alter_info(MEM_ROOT *mem_root)
@@ -421,7 +445,7 @@ class Alter_info {
         key_list(mem_root),
         alter_rename_key_list(mem_root),
         alter_index_visibility_list(mem_root),
-        alter_state_list(mem_root),
+        alter_constraint_enforcement_list(mem_root),
         check_constraint_spec_list(mem_root),
         flags(0),
         keys_onoff(LEAVE_AS_IS),
@@ -452,13 +476,14 @@ class Alter_info {
   bool add_field(THD *thd, const LEX_STRING *field_name,
                  enum enum_field_types type, const char *length,
                  const char *decimal, uint type_modifier, Item *default_value,
-                 Item *on_update_value, LEX_STRING *comment, const char *change,
-                 List<String> *interval_list, const CHARSET_INFO *cs,
-                 bool has_explicit_collation, uint uint_geom_type,
-                 Value_generator *gcol_info, Value_generator *default_val_expr,
-                 const char *opt_after, Nullable<gis::srid_t> srid,
+                 Item *on_update_value, LEX_CSTRING *comment,
+                 const char *change, List<String> *interval_list,
+                 const CHARSET_INFO *cs, bool has_explicit_collation,
+                 uint uint_geom_type, Value_generator *gcol_info,
+                 Value_generator *default_val_expr, const char *opt_after,
+                 Nullable<gis::srid_t> srid,
                  Sql_check_constraint_spec_list *check_cons_list,
-                 dd::Column::enum_hidden_type hidden);
+                 dd::Column::enum_hidden_type hidden, bool is_array = false);
 
  private:
   Alter_info &operator=(const Alter_info &rhs);  // not implemented

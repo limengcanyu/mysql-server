@@ -3,6 +3,8 @@
 #Memory checks will be done by ASAN builds, valgrind timeout on this test.
 --source include/not_valgrind.inc
 
+--source include/mysql_upgrade_preparation.inc
+
 --echo #
 --echo # Upgrading of sys schema tests
 --echo #
@@ -31,9 +33,6 @@ DROP PROCEDURE sys.ps_setup_reload_saved;
 --source include/restart_mysqld.inc
 SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = 'sys' AND ROUTINE_TYPE = 'PROCEDURE';
 
---echo # Now drop functions and make sure re-install is done
-DROP FUNCTION sys.format_bytes;
-DROP FUNCTION sys.format_time;
 # Filter out ndb_binlog_index to mask differences due to running with or
 # without ndb.
 --let $restart_parameters = restart:--upgrade=FORCE

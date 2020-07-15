@@ -1,9 +1,9 @@
 //>>built
-define("dijit/place",["dojo/_base/array","dojo/dom-geometry","dojo/dom-style","dojo/_base/kernel","dojo/_base/window","dojo/window","."],function(_1,_2,_3,_4,_5,_6,_7){
+define("dijit/place",["dojo/_base/array","dojo/dom-geometry","dojo/dom-style","dojo/_base/kernel","dojo/_base/window","./Viewport","./main"],function(_1,_2,_3,_4,_5,_6,_7){
 function _8(_9,_a,_b,_c){
-var _d=_6.getBox();
+var _d=_6.getEffectiveBox(_9.ownerDocument);
 if(!_9.parentNode||String(_9.parentNode.tagName).toLowerCase()!="body"){
-_5.body().appendChild(_9);
+_5.body(_9.ownerDocument).appendChild(_9);
 }
 var _e=null;
 _1.some(_a,function(_f){
@@ -11,6 +11,8 @@ var _10=_f.corner;
 var pos=_f.pos;
 var _11=0;
 var _12={w:{"L":_d.l+_d.w-pos.x,"R":pos.x-_d.l,"M":_d.w}[_10.charAt(1)],h:{"T":_d.t+_d.h-pos.y,"B":pos.y-_d.t,"M":_d.h}[_10.charAt(0)]};
+var s=_9.style;
+s.left=s.right="auto";
 if(_b){
 var res=_b(_9,_f.aroundCorner,_10,_12,_c);
 _11=typeof res=="undefined"?0:res;
@@ -22,11 +24,11 @@ if(_13.display=="none"){
 _13.visibility="hidden";
 _13.display="";
 }
-var mb=_2.getMarginBox(_9);
+var bb=_2.position(_9);
 _13.display=_14;
 _13.visibility=_15;
-var _16={"L":pos.x,"R":pos.x-mb.w,"M":Math.max(_d.l,Math.min(_d.l+_d.w,pos.x+(mb.w>>1))-mb.w)}[_10.charAt(1)],_17={"T":pos.y,"B":pos.y-mb.h,"M":Math.max(_d.t,Math.min(_d.t+_d.h,pos.y+(mb.h>>1))-mb.h)}[_10.charAt(0)],_18=Math.max(_d.l,_16),_19=Math.max(_d.t,_17),_1a=Math.min(_d.l+_d.w,_16+mb.w),_1b=Math.min(_d.t+_d.h,_17+mb.h),_1c=_1a-_18,_1d=_1b-_19;
-_11+=(mb.w-_1c)+(mb.h-_1d);
+var _16={"L":pos.x,"R":pos.x-bb.w,"M":Math.max(_d.l,Math.min(_d.l+_d.w,pos.x+(bb.w>>1))-bb.w)}[_10.charAt(1)],_17={"T":pos.y,"B":pos.y-bb.h,"M":Math.max(_d.t,Math.min(_d.t+_d.h,pos.y+(bb.h>>1))-bb.h)}[_10.charAt(0)],_18=Math.max(_d.l,_16),_19=Math.max(_d.t,_17),_1a=Math.min(_d.l+_d.w,_16+bb.w),_1b=Math.min(_d.t+_d.h,_17+bb.h),_1c=_1a-_18,_1d=_1b-_19;
+_11+=(bb.w-_1c)+(bb.h-_1d);
 if(_e==null||_11<_e.overflow){
 _e={corner:_10,aroundCorner:_f.aroundCorner,x:_18,y:_19,w:_1c,h:_1d,overflow:_11,spaceAvailable:_12};
 }
@@ -35,77 +37,106 @@ return !_11;
 if(_e.overflow&&_b){
 _b(_9,_e.aroundCorner,_e.corner,_e.spaceAvailable,_c);
 }
-var l=_2.isBodyLtr(),s=_9.style;
-s.top=_e.y+"px";
-s[l?"left":"right"]=(l?_e.x:_d.w-_e.x-_e.w)+"px";
-s[l?"right":"left"]="auto";
+var top=_e.y,_1e=_e.x,_1f=_5.body(_9.ownerDocument);
+if(/relative|absolute/.test(_3.get(_1f,"position"))){
+top-=_3.get(_1f,"marginTop");
+_1e-=_3.get(_1f,"marginLeft");
+}
+var s=_9.style;
+s.top=top+"px";
+s.left=_1e+"px";
+s.right="auto";
 return _e;
 };
-return (_7.place={at:function(_1e,pos,_1f,_20){
-var _21=_1.map(_1f,function(_22){
-var c={corner:_22,pos:{x:pos.x,y:pos.y}};
-if(_20){
-c.pos.x+=_22.charAt(1)=="L"?_20.x:-_20.x;
-c.pos.y+=_22.charAt(0)=="T"?_20.y:-_20.y;
+var _20={"TL":"BR","TR":"BL","BL":"TR","BR":"TL"};
+var _21={at:function(_22,pos,_23,_24,_25){
+var _26=_1.map(_23,function(_27){
+var c={corner:_27,aroundCorner:_20[_27],pos:{x:pos.x,y:pos.y}};
+if(_24){
+c.pos.x+=_27.charAt(1)=="L"?_24.x:-_24.x;
+c.pos.y+=_27.charAt(0)=="T"?_24.y:-_24.y;
 }
 return c;
 });
-return _8(_1e,_21);
-},around:function(_23,_24,_25,_26,_27){
-var _28=(typeof _24=="string"||"offsetWidth" in _24)?_2.position(_24,true):_24;
-if(_24.parentNode){
-var _29=_24.parentNode;
-while(_29&&_29.nodeType==1&&_29.nodeName!="BODY"){
-var _2a=_2.position(_29,true);
-var _2b=_3.getComputedStyle(_29).overflow;
-if(_2b=="hidden"||_2b=="auto"||_2b=="scroll"){
-var _2c=Math.min(_28.y+_28.h,_2a.y+_2a.h);
-var _2d=Math.min(_28.x+_28.w,_2a.x+_2a.w);
-_28.x=Math.max(_28.x,_2a.x);
-_28.y=Math.max(_28.y,_2a.y);
-_28.h=_2c-_28.y;
-_28.w=_2d-_28.x;
+return _8(_22,_26,_25);
+},around:function(_28,_29,_2a,_2b,_2c){
+var _2d;
+if(typeof _29=="string"||"offsetWidth" in _29||"ownerSVGElement" in _29){
+_2d=_2.position(_29,true);
+if(/^(above|below)/.test(_2a[0])){
+var _2e=_2.getBorderExtents(_29),_2f=_29.firstChild?_2.getBorderExtents(_29.firstChild):{t:0,l:0,b:0,r:0},_30=_2.getBorderExtents(_28),_31=_28.firstChild?_2.getBorderExtents(_28.firstChild):{t:0,l:0,b:0,r:0};
+_2d.y+=Math.min(_2e.t+_2f.t,_30.t+_31.t);
+_2d.h-=Math.min(_2e.t+_2f.t,_30.t+_31.t)+Math.min(_2e.b+_2f.b,_30.b+_31.b);
 }
-_29=_29.parentNode;
+}else{
+_2d=_29;
+}
+if(_29.parentNode){
+var _32=_3.getComputedStyle(_29).position=="absolute";
+var _33=_29.parentNode;
+while(_33&&_33.nodeType==1&&_33.nodeName!="BODY"){
+var _34=_2.position(_33,true),pcs=_3.getComputedStyle(_33);
+if(/relative|absolute/.test(pcs.position)){
+_32=false;
+}
+if(!_32&&/hidden|auto|scroll/.test(pcs.overflow)){
+var _35=Math.min(_2d.y+_2d.h,_34.y+_34.h);
+var _36=Math.min(_2d.x+_2d.w,_34.x+_34.w);
+_2d.x=Math.max(_2d.x,_34.x);
+_2d.y=Math.max(_2d.y,_34.y);
+_2d.h=_35-_2d.y;
+_2d.w=_36-_2d.x;
+}
+if(pcs.position=="absolute"){
+_32=true;
+}
+_33=_33.parentNode;
 }
 }
-var x=_28.x,y=_28.y,_2e="w" in _28?_28.w:(_28.w=_28.width),_2f="h" in _28?_28.h:(_4.deprecated("place.around: dijit.place.__Rectangle: { x:"+x+", y:"+y+", height:"+_28.height+", width:"+_2e+" } has been deprecated.  Please use { x:"+x+", y:"+y+", h:"+_28.height+", w:"+_2e+" }","","2.0"),_28.h=_28.height);
-var _30=[];
-function _31(_32,_33){
-_30.push({aroundCorner:_32,corner:_33,pos:{x:{"L":x,"R":x+_2e,"M":x+(_2e>>1)}[_32.charAt(1)],y:{"T":y,"B":y+_2f,"M":y+(_2f>>1)}[_32.charAt(0)]}});
+var x=_2d.x,y=_2d.y,_37="w" in _2d?_2d.w:(_2d.w=_2d.width),_38="h" in _2d?_2d.h:(_4.deprecated("place.around: dijit/place.__Rectangle: { x:"+x+", y:"+y+", height:"+_2d.height+", width:"+_37+" } has been deprecated.  Please use { x:"+x+", y:"+y+", h:"+_2d.height+", w:"+_37+" }","","2.0"),_2d.h=_2d.height);
+var _39=[];
+function _3a(_3b,_3c){
+_39.push({aroundCorner:_3b,corner:_3c,pos:{x:{"L":x,"R":x+_37,"M":x+(_37>>1)}[_3b.charAt(1)],y:{"T":y,"B":y+_38,"M":y+(_38>>1)}[_3b.charAt(0)]}});
 };
-_1.forEach(_25,function(pos){
-var ltr=_26;
+_1.forEach(_2a,function(pos){
+var ltr=_2b;
 switch(pos){
 case "above-centered":
-_31("TM","BM");
+_3a("TM","BM");
 break;
 case "below-centered":
-_31("BM","TM");
+_3a("BM","TM");
+break;
+case "after-centered":
+ltr=!ltr;
+case "before-centered":
+_3a(ltr?"ML":"MR",ltr?"MR":"ML");
 break;
 case "after":
 ltr=!ltr;
 case "before":
-_31(ltr?"ML":"MR",ltr?"MR":"ML");
+_3a(ltr?"TL":"TR",ltr?"TR":"TL");
+_3a(ltr?"BL":"BR",ltr?"BR":"BL");
 break;
 case "below-alt":
 ltr=!ltr;
 case "below":
-_31(ltr?"BL":"BR",ltr?"TL":"TR");
-_31(ltr?"BR":"BL",ltr?"TR":"TL");
+_3a(ltr?"BL":"BR",ltr?"TL":"TR");
+_3a(ltr?"BR":"BL",ltr?"TR":"TL");
 break;
 case "above-alt":
 ltr=!ltr;
 case "above":
-_31(ltr?"TL":"TR",ltr?"BL":"BR");
-_31(ltr?"TR":"TL",ltr?"BR":"BL");
+_3a(ltr?"TL":"TR",ltr?"BL":"BR");
+_3a(ltr?"TR":"TL",ltr?"BR":"BL");
 break;
 default:
-_31(pos.aroundCorner,pos.corner);
+_3a(pos.aroundCorner,pos.corner);
 }
 });
-var _34=_8(_23,_30,_27,{w:_2e,h:_2f});
-_34.aroundNodePos=_28;
-return _34;
-}});
+var _3d=_8(_28,_39,_2c,{w:_37,h:_38});
+_3d.aroundNodePos=_2d;
+return _3d;
+}};
+return _7.place=_21;
 });

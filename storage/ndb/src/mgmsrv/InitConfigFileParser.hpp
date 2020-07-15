@@ -1,6 +1,5 @@
 /*
-   Copyright (C) 2003-2006, 2008 MySQL AB, 2009 Sun Microsystems, Inc.
-    Use is subject to license terms.
+   Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -74,7 +73,7 @@ public:
     ~Context();
 
     ContextSectionType  type; ///< Section type (e.g. default section,section)
-    char          fname[256]; ///< Section name occuring in init config file
+    char          fname[256]; ///< Section name occurring in init config file
     char          pname[256]; ///< Section name stored in properties object
     Uint32          m_lineno; ///< Current line no in config file
     Uint32   m_sectionLineno; ///< Where did current section start
@@ -104,32 +103,32 @@ public:
 private:
   /**
    *   Check if line only contains space/comments
-   *   @param   line: The line to check
+   *   @param   line The line to check
    *   @return  true if spaces/comments only, false otherwise
    */
   bool isEmptyLine(const char* line) const;
 
   /**
    *   Checks if line contains a section header
-   *   @param   line:  String to search
+   *   @param   line  String to search
    *   @return  section header if matching some section header, NULL otherwise
    */
   char* parseSectionHeader(const char* line) const;
 
   /**
    *   Checks if line contains a default header
-   *   @param   line:  String to search
+   *   @param   line  String to search
    *   @return  section header if matching some section header, NULL otherwise
    */
   char* parseDefaultSectionHeader(const char* line) const;
-  
+
   bool parseNameValuePair(Context&, const char* line);
   bool storeNameValuePair(Context&, const char* fname, const char* value);
-  
+
   bool storeSection(Context&);
 
-  const Properties* getSection(const char * name, const Properties* src); 
-  
+  const Properties* getSection(const char * name, const Properties* src);
+ 
   /**
    *   Information about parameters (min, max values etc)
    */

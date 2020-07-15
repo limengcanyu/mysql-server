@@ -12,6 +12,10 @@
 # [--let $use_gtids= 1]
 # [--let $rpl_master_log_pos= <master log pos list>]
 # [--let $rpl_master_log_file= <master log file list>]
+# [--let $rpl_privilege_checks_user= 1:'user'@'host',2:NULL]
+# [--let $rpl_privilege_checks_user_dont_create_user= 0]
+# [--let $rpl_privilege_checks_user_additional_grants= CREATE,INSERT,SELECT]
+# [--let $rpl_require_row_format= *:0,1:0,2:1]
 # --let $rpl_source_file= rpl_change_topology_helper.inc
 # --source include/rpl_for_each_connection.inc
 #
@@ -100,6 +104,51 @@ if (!$_rpl_change_topology_helper_skip)
       --let $_rpl_change_topology_helper_master_log_pos= `SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING('$rpl_master_log_pos', $_rpl_change_topology_helper_pos_index), ',', 1), ':', -1)`
       --let $_rpl_change_topology_helper_position= $_rpl_change_topology_helper_position MASTER_LOG_POS = $_rpl_change_topology_helper_master_log_pos,
     }
+  }
+
+  --let $rpl_instance_privilege_checks_user= NULL
+  if ($rpl_privilege_checks_user != ''){
+    --let $rpl_server_number= $rpl_slave
+    --source include/rpl_get_instance_priv_checks_user.inc
+  }
+
+  --let $_rpl_change_topology_helper_position= $_rpl_change_topology_helper_position PRIVILEGE_CHECKS_USER = $rpl_instance_privilege_checks_user,
+
+  # If PRIVILEGE_CHECKS_USER is not NULL configure the account
+  if (`SELECT "$rpl_instance_privilege_checks_user" != "NULL"`)
+  {
+    --source include/rpl_priv_checks_user_configuration.inc
+  }
+
+  # Get REQUIRE_ROW_FORMAT for current `$rpl_slave`
+  --let $_rpl_change_topology_helper_require_row_index= `SELECT LOCATE('$rpl_slave:', "$rpl_require_row_format")`
+  --let $_rpl_change_topology_helper_require_row = 0
+  if ($_rpl_change_topology_helper_require_row_index)
+  {
+    --let $_rpl_change_topology_helper_require_row= `SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING("$rpl_require_row_format", $_rpl_change_topology_helper_require_row_index), ',', 1), ':', -1)`
+  }
+  # Get REQUIRE_ROW_FORMAT for all slaves
+  if (`SELECT $_rpl_change_topology_helper_require_row_index = 0 AND "$_rpl_change_topology_require_row_all" != ""`)
+  {
+    --let $_rpl_change_topology_helper_require_row= $_rpl_change_topology_require_row_all
+  }
+  --let $_rpl_change_topology_helper_position= $_rpl_change_topology_helper_position REQUIRE_ROW_FORMAT = $_rpl_change_topology_helper_require_row,
+
+  # Get REQUIRE_TABLE_PRIMARY_KEY_CHECK for current `$rpl_slave`
+  --let $_rpl_change_topology_helper_require_table_primary_key_check_index= `SELECT LOCATE('$rpl_slave:', "$rpl_require_table_primary_key_check")`
+  --let $_rpl_change_topology_helper_require_table_primary_key_check = -1
+  if ($_rpl_change_topology_helper_require_table_primary_key_check_index)
+  {
+    --let $_rpl_change_topology_helper_require_table_primary_key_check= `SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING("$rpl_require_table_primary_key_check", $_rpl_change_topology_helper_require_table_primary_key_check_index), ',', 1), ':', -1)`
+  }
+  # Get _rpl_change_topology_helper_require_table_primary_key_check_index for all slaves
+  if (`SELECT $_rpl_change_topology_helper_require_table_primary_key_check_index = 0 AND "$_rpl_require_table_primary_key_check_all" != ""`)
+  {
+    --let $_rpl_change_topology_helper_require_table_primary_key_check= $_rpl_require_table_primary_key_check_all
+  }
+  # Set it if defined
+  if ($_rpl_change_topology_helper_require_table_primary_key_check != -1){
+    --let $_rpl_change_topology_helper_position= $_rpl_change_topology_helper_position REQUIRE_TABLE_PRIMARY_KEY_CHECK = $_rpl_change_topology_helper_require_table_primary_key_check,
   }
 
   --replace_regex /[0-9]{4}/####/

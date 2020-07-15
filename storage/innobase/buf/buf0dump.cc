@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2011, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2011, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -55,7 +55,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 enum status_severity { STATUS_VERBOSE, STATUS_INFO, STATUS_ERR };
 
-#define SHUTTING_DOWN() (srv_shutdown_state != SRV_SHUTDOWN_NONE)
+#define SHUTTING_DOWN() (srv_shutdown_state.load() >= SRV_SHUTDOWN_CLEANUP)
 
 /* Flags that tell the buffer pool dump/load thread which action should it
 take after being waked up. */
@@ -191,15 +191,8 @@ void buf_dump_generate_path(char *path, size_t path_size) {
   snprintf(buf, sizeof(buf), "%s%c%s", get_buf_dump_dir(), OS_PATH_SEPARATOR,
            srv_buf_dump_filename);
 
-  os_file_type_t type;
-  bool exists = false;
-  bool ret;
-
-  ret = os_file_status(buf, &exists, &type);
-
-  /* For realpath() to succeed the file must exist. */
-
-  if (ret && exists) {
+  /* Use this file if it exists. */
+  if (os_file_exists(buf)) {
     /* my_realpath() assumes the destination buffer is big enough
     to hold FN_REFLEN bytes. */
     ut_a(path_size >= FN_REFLEN);
@@ -246,7 +239,7 @@ static void buf_dump(ibool obey_shutdown) {
   buf_dump_status(STATUS_INFO, "Dumping buffer pool(s) to %s", full_filename);
 
   f = fopen(tmp_filename, "w");
-  if (f == NULL) {
+  if (f == nullptr) {
     buf_dump_status(STATUS_ERR, "Cannot open '%s' for writing: %s",
                     tmp_filename, strerror(errno));
     return;
@@ -287,7 +280,7 @@ static void buf_dump(ibool obey_shutdown) {
 
     dump = static_cast<buf_dump_t *>(ut_malloc_nokey(n_pages * sizeof(*dump)));
 
-    if (dump == NULL) {
+    if (dump == nullptr) {
       mutex_exit(&buf_pool->LRU_list_mutex);
       fclose(f);
       buf_dump_status(STATUS_ERR, "Cannot allocate " ULINTPF " bytes: %s",
@@ -297,7 +290,7 @@ static void buf_dump(ibool obey_shutdown) {
     }
 
     for (bpage = UT_LIST_GET_FIRST(buf_pool->LRU), j = 0;
-         bpage != NULL && j < n_pages;
+         bpage != nullptr && j < n_pages;
          bpage = UT_LIST_GET_NEXT(LRU, bpage), j++) {
       ut_a(buf_page_in_file(bpage));
 
@@ -377,14 +370,14 @@ normal client queries.
 @param[in]	n_io			number of IO ops done since buffer
                                         pool load has started */
 UNIV_INLINE
-void buf_load_throttle_if_needed(ulint *last_check_time,
+void buf_load_throttle_if_needed(ib_time_monotonic_ms_t *last_check_time,
                                  ulint *last_activity_count, ulint n_io) {
   if (n_io % srv_io_capacity < srv_io_capacity - 1) {
     return;
   }
 
   if (*last_check_time == 0 || *last_activity_count == 0) {
-    *last_check_time = ut_time_ms();
+    *last_check_time = ut_time_monotonic_ms();
     *last_activity_count = srv_get_activity_count();
     return;
   }
@@ -399,8 +392,8 @@ void buf_load_throttle_if_needed(ulint *last_check_time,
 
   /* There has been other activity, throttle. */
 
-  ulint now = ut_time_ms();
-  ulint elapsed_time = now - *last_check_time;
+  const auto now = ut_time_monotonic_ms();
+  const auto elapsed_time = now - *last_check_time;
 
   /* Notice that elapsed_time is not the time for the last
   srv_io_capacity IO operations performed by BP load. It is the
@@ -419,13 +412,13 @@ void buf_load_throttle_if_needed(ulint *last_check_time,
   The deficiency is that we could have slept at 3., but for this we
   would have to update last_check_time before the
   "cur_activity_count == *last_activity_count" check and calling
-  ut_time_ms() that often may turn out to be too expensive. */
+  ut_time_monotonic_ms() that often may turn out to be too expensive. */
 
   if (elapsed_time < 1000 /* 1 sec (1000 milli secs) */) {
     os_thread_sleep((1000 - elapsed_time) * 1000 /* micro secs */);
   }
 
-  *last_check_time = ut_time_ms();
+  *last_check_time = ut_time_monotonic_ms();
   *last_activity_count = srv_get_activity_count();
 }
 
@@ -454,7 +447,7 @@ static void buf_load() {
   buf_load_status(STATUS_INFO, "Loading buffer pool(s) from %s", full_filename);
 
   f = fopen(full_filename, "r");
-  if (f == NULL) {
+  if (f == nullptr) {
     buf_load_status(STATUS_ERR, "Cannot open '%s' for reading: %s",
                     full_filename, strerror(errno));
     return;
@@ -506,7 +499,7 @@ static void buf_load() {
     return;
   }
 
-  if (dump == NULL) {
+  if (dump == nullptr) {
     fclose(f);
     buf_load_status(STATUS_ERR, "Cannot allocate " ULINTPF " bytes: %s",
                     (ulint)(dump_n * sizeof(*dump)), strerror(errno));
@@ -569,7 +562,7 @@ static void buf_load() {
     std::sort(dump, dump + dump_n);
   }
 
-  ulint last_check_time = 0;
+  ib_time_monotonic_ms_t last_check_time = 0;
   ulint last_activity_cnt = 0;
 
   /* Avoid calling the expensive fil_space_acquire_silent() for each
@@ -592,20 +585,20 @@ static void buf_load() {
     const space_id_t this_space_id = BUF_DUMP_SPACE(dump[i]);
 
     if (this_space_id != cur_space_id) {
-      if (space != NULL) {
+      if (space != nullptr) {
         fil_space_release(space);
       }
 
       cur_space_id = this_space_id;
       space = fil_space_acquire_silent(cur_space_id);
 
-      if (space != NULL) {
+      if (space != nullptr) {
         const page_size_t cur_page_size(space->flags);
         page_size.copy_from(cur_page_size);
       }
     }
 
-    if (space == NULL) {
+    if (space == nullptr) {
       continue;
     }
 
@@ -629,7 +622,7 @@ static void buf_load() {
     }
 
     if (buf_load_abort_flag) {
-      if (space != NULL) {
+      if (space != nullptr) {
         fil_space_release(space);
       }
       buf_load_abort_flag = FALSE;
@@ -648,7 +641,7 @@ static void buf_load() {
     buf_load_throttle_if_needed(&last_check_time, &last_activity_cnt, i);
   }
 
-  if (space != NULL) {
+  if (space != nullptr) {
     fil_space_release(space);
   }
 
@@ -677,8 +670,6 @@ again. */
 void buf_dump_thread() {
   ut_ad(!srv_read_only_mode);
 
-  my_thread_init();
-
   buf_dump_status(STATUS_VERBOSE, "Dumping of buffer pool not started");
   buf_load_status(STATUS_VERBOSE, "Loading of buffer pool not started");
 
@@ -706,9 +697,4 @@ void buf_dump_thread() {
     buf_dump(FALSE /* ignore shutdown down flag,
 		keep going even if we are in a shutdown state */);
   }
-
-  my_thread_end();
-
-  std::atomic_thread_fence(std::memory_order_seq_cst);
-  srv_threads.m_buf_dump_thread_active = false;
 }

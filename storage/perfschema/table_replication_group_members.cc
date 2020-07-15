@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -129,7 +129,7 @@ Plugin_table table_replication_group_members::m_table_def(
     /* Definition */
     "  CHANNEL_NAME CHAR(64) not null,\n"
     "  MEMBER_ID CHAR(36) collate utf8mb4_bin not null,\n"
-    "  MEMBER_HOST CHAR(60) collate utf8mb4_bin not null,\n"
+    "  MEMBER_HOST CHAR(255) CHARACTER SET ASCII not null,\n"
     "  MEMBER_PORT INTEGER,\n"
     "  MEMBER_STATE CHAR(64) collate utf8mb4_bin not null,\n"
     "  MEMBER_ROLE CHAR(64) collate utf8mb4_bin not null,\n"
@@ -142,8 +142,8 @@ Plugin_table table_replication_group_members::m_table_def(
 PFS_engine_table_share table_replication_group_members::m_share = {
     &pfs_readonly_acl,
     &table_replication_group_members::create,
-    NULL, /* write_row */
-    NULL, /* delete_all_rows */
+    nullptr, /* write_row */
+    nullptr, /* delete_all_rows */
     table_replication_group_members::get_row_count,
     sizeof(pos_t), /* ref length */
     &m_table_lock,
@@ -198,7 +198,7 @@ int table_replication_group_members::rnd_pos(const void *pos) {
 }
 
 int table_replication_group_members::make_row(uint index) {
-  DBUG_ENTER("table_replication_group_members::make_row");
+  DBUG_TRACE;
   // Set default values.
   m_row.channel_name_length = 0;
   m_row.member_id_length = 0;
@@ -221,7 +221,7 @@ int table_replication_group_members::make_row(uint index) {
   } else {
   }
 
-  DBUG_RETURN(0);
+  return 0;
 }
 
 int table_replication_group_members::read_row_values(TABLE *table,
@@ -234,8 +234,8 @@ int table_replication_group_members::read_row_values(TABLE *table,
   buf[0] = 0;
 
   for (; (f = *fields); fields++) {
-    if (read_all || bitmap_is_set(table->read_set, f->field_index)) {
-      switch (f->field_index) {
+    if (read_all || bitmap_is_set(table->read_set, f->field_index())) {
+      switch (f->field_index()) {
         case 0: /** channel_name */
           set_field_char_utf8(f, m_row.channel_name, m_row.channel_name_length);
           break;

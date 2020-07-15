@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -44,6 +44,9 @@
 #include "ut0new.h"
 #include "ut0rnd.h"
 
+#include <mysql/components/minimal_chassis.h> /* minimal_chassis_init() */
+#include <mysql/components/service.h>         /* SERVICE_TYPE_NO_CONST */
+
 static std::map<std::string, std::vector<std::string>> log_sync_points = {
     {"log_buffer_exclussive_access",
      {"log_buffer_x_lock_enter_before_lock",
@@ -57,7 +60,7 @@ static std::map<std::string, std::vector<std::string>> log_sync_points = {
       "log_wait_for_space_in_buf_middle"}},
 
     {"log_buffer_reserve",
-     {"log_buffer_reserve_before_sn_limit_for_end",
+     {"log_buffer_reserve_before_buf_limit_sn",
       "log_buffer_reserve_before_confirmation"}},
 
     {"log_buffer_write",
@@ -71,11 +74,10 @@ static std::map<std::string, std::vector<std::string>> log_sync_points = {
       "log_advance_ready_for_write_before_update", "log_writer_write_begin",
       "log_writer_before_write_from_log_buffer",
       "log_writer_before_copy_to_write_ahead_buffer",
+      "log_writer_before_write_new_incomplete_block",
       "log_writer_before_write_ahead", "log_writer_after_checkpoint_check",
       "log_writer_after_archiver_check", "log_writer_before_lsn_update",
-      "log_writer_before_limits_update", "log_writer_write_end",
-      "log_update_limits_middle_1", "log_update_limits_middle_2",
-      "log_update_limits_middle_3"}},
+      "log_writer_before_buf_limit_update", "log_writer_write_end"}},
 
     {"log_closer",
      {"log_advance_dpa_before_reclaim", "log_advance_dpa_before_update"}},
@@ -146,6 +148,7 @@ static bool log_test_general_init() {
   srv_n_read_io_threads = 1;
   srv_n_write_io_threads = 1;
 
+  os_event_global_init();
   sync_check_init(srv_max_n_threads);
   recv_sys_var_init();
   os_thread_open();
@@ -177,6 +180,8 @@ static bool log_test_general_init() {
   ut_ad(fil_validate());
   return (true);
 }
+
+extern SERVICE_TYPE_NO_CONST(registry) * srv_registry;
 
 static bool log_test_init() {
   if (!log_test_general_init()) {
@@ -253,7 +258,11 @@ static bool log_test_init() {
 
   log_start(log, 1, lsn, lsn);
 
+  /* Below function will initialize the srv_registry variable which is
+  required for the mysql_plugin_registry_acquire() */
+  minimal_chassis_init(&srv_registry, NULL);
   log_start_background_threads(log);
+  minimal_chassis_deinit(srv_registry, NULL);
 
   srv_is_being_started = false;
   return (true);
@@ -263,6 +272,7 @@ static bool log_test_recovery() {
   srv_is_being_started = true;
   recv_sys_create();
 
+  /** DBLWR directory is the current directory. */
   recv_sys_init(4 * 1024 * 1024);
 
   const bool result = log_sys_init(srv_n_log_files, srv_log_file_size,
@@ -274,12 +284,6 @@ static bool log_test_recovery() {
 
   dberr_t err = recv_recovery_from_checkpoint_start(log, LOG_START_LSN);
 
-  extern bool recv_writer_thread_active;
-
-  while (!recv_writer_thread_active) {
-    os_thread_sleep(100);
-  }
-
   srv_is_being_started = false;
 
   if (err == DB_SUCCESS) {
@@ -290,7 +294,7 @@ static bool log_test_recovery() {
     srv_shutdown_state = SRV_SHUTDOWN_FLUSH_PHASE;
 
     /* XXX: Shouldn't this be guaranteed within log0recv.cc ? */
-    while (recv_writer_thread_active) {
+    while (srv_thread_is_active(srv_threads.m_recv_writer)) {
       os_thread_sleep(100 * 1000);
     }
   }
@@ -486,7 +490,6 @@ static void log_test_run() {
 
   run_threads(
       [max_dirty_page_age](size_t thread_no) {
-
         static_cast<void>(max_dirty_page_age);  // clang -Wunused-lambda-capture
         log_t &log = *log_sys;
 
@@ -522,7 +525,6 @@ static void log_test_run() {
             log_write_up_to(log, end_lsn, true);
           }
         }
-
       },
       LOG_TEST_N_THREADS);
 }
@@ -541,6 +543,8 @@ static void log_test_general_close() {
   os_thread_close();
 
   sync_check_close();
+
+  os_event_global_destroy();
 
   srv_shutdown_state = SRV_SHUTDOWN_NONE;
 

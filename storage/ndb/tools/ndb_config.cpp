@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2005, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -77,6 +77,7 @@
 #include "../src/mgmsrv/ConfigInfo.hpp"
 #include <NdbAutoPtr.hpp>
 #include <NdbTCP.h>
+#include <inttypes.h>
 
 #include "my_alloc.h"
 
@@ -177,7 +178,8 @@ struct Match
   BaseString m_value;
   Match() {}
   virtual int eval(const Iter&);
-  virtual ~Match() {}
+  virtual ~Match() = default;
+  Match(const Match&) = default;
 };
 
 struct HostMatch : public Match
@@ -466,7 +468,7 @@ print_diff(const Iter& iter)
           parse_str[len] = '\0';
           def_value = atoi(parse_str);
           memory_convert = memory_convert * def_value;
-          BaseString::snprintf(parse_str, 299, "%llu", memory_convert);
+          BaseString::snprintf(parse_str, 299, "%" PRIu64, memory_convert);
           if (!strcmp(str, parse_str))
           {
             continue;
@@ -617,14 +619,16 @@ parse_where(Vector<Match*>& where, int &argc, char**& argv)
   {
     m.m_key = CFG_TYPE_OF_SECTION;
     m.m_value.assfmt("%d", ndb_mgm_match_node_type(g_type));
-    where.push_back(new Match(m));
+    Match *tmp = new Match(m);
+    where.push_back(tmp);
   }
 
   if(g_nodeid)
   {
     m.m_key = CFG_NODE_ID;
     m.m_value.assfmt("%d", g_nodeid);
-    where.push_back(new Match(m));
+    Match *tmp = new Match(m);
+    where.push_back(tmp);
   }
   return 0;
 }

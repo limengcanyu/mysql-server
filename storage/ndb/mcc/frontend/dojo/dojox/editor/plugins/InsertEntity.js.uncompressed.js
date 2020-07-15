@@ -1,10 +1,9 @@
-//>>built
 define("dojox/editor/plugins/InsertEntity", [
 	"dojo",
 	"dijit",
 	"dojox",
-	"dijit/TooltipDialog",
 	"dijit/_editor/_Plugin",
+	"dijit/TooltipDialog",
 	"dijit/form/DropDownButton",
 	"dojo/_base/connect",
 	"dojo/_base/declare",
@@ -12,9 +11,9 @@ define("dojox/editor/plugins/InsertEntity", [
 	"dojox/html/entities",
 	"dojox/editor/plugins/EntityPalette",
 	"dojo/i18n!dojox/editor/plugins/nls/InsertEntity"
-], function(dojo, dijit, dojox) {
+], function(dojo, dijit, dojox, _Plugin) {
 
-dojo.declare("dojox.editor.plugins.InsertEntity",dijit._editor._Plugin,{
+var InsertEntity = dojo.declare("dojox.editor.plugins.InsertEntity", _Plugin,{
 	// summary:
 	//		This plugin allows the user to select from standard Symbols (HTML Entities)
 	//		to insert at the current cursor position.  It binds to the key pattern:
@@ -22,7 +21,8 @@ dojo.declare("dojox.editor.plugins.InsertEntity",dijit._editor._Plugin,{
 	//
 	// description:
 	//		The commands provided by this plugin are:
-	//		* insertEntity - inserts the selected HTML entity character
+	//
+	//		- insertEntity - inserts the selected HTML entity character
 
 	// iconClassPrefix: [const] String
 	//		The CSS class name for the button node is formed from `iconClassPrefix` and `command`
@@ -96,12 +96,12 @@ dojo.subscribe(dijit._scopeName + ".Editor.getPlugin",null,function(o){
 	if(o.plugin){ return; }
 	var name = o.args.name? o.args.name.toLowerCase() : "";
 	if(name === "insertentity"){
-		o.plugin = new dojox.editor.plugins.InsertEntity({
+		o.plugin = new InsertEntity({
 			showCode: ("showCode" in o.args)?o.args.showCode:false,
 			showEntityName: ("showEntityName" in o.args)?o.args.showEntityName:false
 		});
 	}
 });
 
-return dojox.editor.plugins.InsertEntity;
+return InsertEntity;
 });

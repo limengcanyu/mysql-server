@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -43,7 +43,7 @@ bool Properties::from_str(const String_type &number, T *value) {
   // Do the conversion to an 8 byte signed integer.
   int error_code;
   int64 tmp = 0;
-  tmp = my_strtoll10(number.c_str(), NULL, &error_code);
+  tmp = my_strtoll10(number.c_str(), nullptr, &error_code);
 
   // Check for conversion errors, including boundaries for 8 byte integers.
   if (error_code != 0 && error_code != -1) return true;
@@ -66,7 +66,7 @@ bool Properties::from_str(const String_type &number, T *value) {
 }
 
 bool Properties::from_str(const String_type &bool_str, bool *value) {
-  DBUG_ASSERT(value != NULL);
+  DBUG_ASSERT(value != nullptr);
 
   if (bool_str == "true") {
     *value = true;
@@ -151,6 +151,8 @@ template bool Properties::get<MYSQL_LEX_CSTRING>(const String_type &,
 
 template bool Properties::get<int>(const String_type &, int *) const;
 
+template bool Properties::get<long>(const String_type &, long *) const;
+
 template bool Properties::get<long long>(const String_type &,
                                          long long *) const;
 
@@ -158,6 +160,11 @@ template bool Properties::from_str<int>(const String_type &, int *);
 
 template bool Properties::from_str<unsigned int>(const String_type &,
                                                  unsigned int *);
+
+template bool Properties::from_str<long>(const String_type &, long *);
+
+template bool Properties::from_str<unsigned long>(const String_type &,
+                                                  unsigned long *);
 
 template bool Properties::from_str<long long>(const String_type &, long long *);
 
@@ -168,6 +175,8 @@ template String_type Properties::to_str<int>(int);
 
 template String_type Properties::to_str<Field::geometry_type>(
     Field::geometry_type);
+
+template String_type Properties::to_str<long>(long);
 
 template String_type Properties::to_str<long long>(long long);
 

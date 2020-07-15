@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2010, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -31,11 +31,15 @@
 #include <time.h>
 #include <atomic>
 
+#include <mysql/components/minimal_chassis.h>
+#include <mysql/components/services/dynamic_loader_scheme_file.h>
 #include "lex_string.h"
 #include "m_ctype.h"
 #include "my_command.h"
 #include "my_compiler.h"
+#include "my_compress.h"
 #include "my_getopt.h"
+#include "my_hostname.h"  // HOSTNAME_LENGTH
 #include "my_inttypes.h"
 #include "my_io.h"
 #include "my_psi_config.h"
@@ -207,7 +211,7 @@ extern bool opt_enable_shared_memory;
 extern mysql_rwlock_t LOCK_named_pipe_full_access_group;
 #endif
 extern bool opt_allow_suspicious_udfs;
-extern char *opt_secure_file_priv;
+extern const char *opt_secure_file_priv;
 extern bool opt_log_slow_admin_statements, opt_log_slow_slave_statements;
 extern bool sp_automatic_privileges, opt_noacl;
 extern bool opt_old_style_user_limits, trust_function_creators;
@@ -216,11 +220,11 @@ extern bool check_proxy_users, mysql_native_password_proxy_users,
 #ifdef _WIN32
 extern const char *shared_memory_base_name;
 #endif
-extern char *mysqld_unix_port;
+extern const char *mysqld_unix_port;
 extern char *default_tz_name;
 extern Time_zone *default_tz;
-extern char *default_storage_engine;
-extern char *default_tmp_storage_engine;
+extern const char *default_storage_engine;
+extern const char *default_tmp_storage_engine;
 extern ulonglong temptable_max_ram;
 extern bool temptable_use_mmap;
 extern bool using_udf_functions;
@@ -253,7 +257,7 @@ extern char *opt_general_logname, *opt_slow_logname, *opt_bin_logname,
 extern char *mysql_home_ptr, *pidfile_name_ptr;
 extern char *default_auth_plugin;
 extern uint default_password_lifetime;
-extern volatile bool password_require_current;
+extern bool password_require_current;
 /*
   @warning : The real value is in @ref partial_revokes. The @ref
   opt_partial_revokes is just a tool to trick the Sys_var class into
@@ -271,9 +275,9 @@ extern char *my_bind_addr_str;
 extern char *my_admin_bind_addr_str;
 extern uint mysqld_admin_port;
 extern bool listen_admin_interface_in_separate_thread;
-extern char glob_hostname[FN_REFLEN];
+extern char glob_hostname[HOSTNAME_LENGTH + 1];
 extern char system_time_zone[30], *opt_init_file;
-extern char *opt_tc_log_file;
+extern const char *opt_tc_log_file;
 extern char server_uuid[UUID_LENGTH + 1];
 extern const char *server_uuid_ptr;
 extern const double log_10[309];
@@ -302,6 +306,8 @@ extern bool log_bin_use_v1_row_events;
 extern ulong what_to_log, flush_time;
 extern ulong max_prepared_stmt_count, prepared_stmt_count;
 extern ulong open_files_limit;
+extern bool clone_startup;
+extern bool clone_recovery_error;
 extern ulong binlog_cache_size, binlog_stmt_cache_size;
 extern ulonglong max_binlog_cache_size, max_binlog_stmt_cache_size;
 extern int32 opt_binlog_max_flush_queue_time;
@@ -361,6 +367,7 @@ extern ulong connection_errors_internal;
 extern ulong connection_errors_peer_addr;
 extern char *opt_log_error_suppression_list;
 extern char *opt_log_error_services;
+extern char *opt_protocol_compression_algorithms;
 /** The size of the host_cache. */
 extern uint host_cache_size;
 extern ulong log_error_verbosity;
@@ -438,6 +445,7 @@ extern PSI_mutex_key key_mutex_slave_worker_hash;
 extern PSI_rwlock_key key_rwlock_LOCK_logger;
 extern PSI_rwlock_key key_rwlock_channel_map_lock;
 extern PSI_rwlock_key key_rwlock_channel_lock;
+extern PSI_rwlock_key key_rwlock_gtid_mode_lock;
 extern PSI_rwlock_key key_rwlock_receiver_sid_lock;
 extern PSI_rwlock_key key_rwlock_rpl_filter_lock;
 extern PSI_rwlock_key key_rwlock_channel_to_filter_lock;
@@ -498,6 +506,7 @@ extern PSI_file_key key_file_relaylog_cache;
 extern PSI_file_key key_file_relaylog_index;
 extern PSI_file_key key_file_relaylog_index_cache;
 extern PSI_file_key key_file_sdi;
+extern PSI_file_key key_file_hash_join;
 
 extern PSI_socket_key key_socket_tcpip;
 extern PSI_socket_key key_socket_unix;
@@ -522,7 +531,6 @@ extern PSI_stage_info stage_compressing_gtid_table;
 extern PSI_stage_info stage_connecting_to_master;
 extern PSI_stage_info stage_converting_heap_to_ondisk;
 extern PSI_stage_info stage_copy_to_tmp_table;
-extern PSI_stage_info stage_creating_sort_index;
 extern PSI_stage_info stage_creating_table;
 extern PSI_stage_info stage_creating_tmp_table;
 extern PSI_stage_info stage_deleting_from_main_table;
@@ -552,14 +560,12 @@ extern PSI_stage_info stage_query_end;
 extern PSI_stage_info stage_queueing_master_event_to_the_relay_log;
 extern PSI_stage_info stage_reading_event_from_the_relay_log;
 extern PSI_stage_info stage_registering_slave_on_master;
-extern PSI_stage_info stage_removing_duplicates;
 extern PSI_stage_info stage_removing_tmp_table;
 extern PSI_stage_info stage_rename;
 extern PSI_stage_info stage_rename_result_table;
 extern PSI_stage_info stage_requesting_binlog_dump;
 extern PSI_stage_info stage_searching_rows_for_update;
 extern PSI_stage_info stage_sending_binlog_event_to_slave;
-extern PSI_stage_info stage_sending_data;
 extern PSI_stage_info stage_setup;
 extern PSI_stage_info stage_slave_has_read_all_relay_log;
 extern PSI_stage_info stage_slave_waiting_event_from_coordinator;
@@ -571,9 +577,6 @@ extern PSI_stage_info stage_slave_waiting_workers_to_exit;
 extern PSI_stage_info stage_rpl_apply_row_evt_write;
 extern PSI_stage_info stage_rpl_apply_row_evt_update;
 extern PSI_stage_info stage_rpl_apply_row_evt_delete;
-extern PSI_stage_info stage_sorting_for_group;
-extern PSI_stage_info stage_sorting_for_order;
-extern PSI_stage_info stage_sorting_result;
 extern PSI_stage_info stage_sql_thd_waiting_until_delay;
 extern PSI_stage_info stage_statistics;
 extern PSI_stage_info stage_system_lock;
@@ -600,6 +603,8 @@ extern PSI_stage_info stage_suspending;
 extern PSI_stage_info stage_starting;
 extern PSI_stage_info stage_waiting_for_no_channel_reference;
 extern PSI_stage_info stage_hook_begin_trans;
+extern PSI_stage_info stage_binlog_transaction_compress;
+extern PSI_stage_info stage_binlog_transaction_decompress;
 #ifdef HAVE_PSI_STATEMENT_INTERFACE
 /**
   Statement instrumentation keys (sql).
@@ -619,9 +624,7 @@ extern PSI_statement_info com_statement_info[(uint)COM_END + 1];
 extern PSI_statement_info stmt_info_rpl;
 #endif /* HAVE_PSI_STATEMENT_INTERFACE */
 
-#ifdef HAVE_OPENSSL
 extern struct st_VioSSLFd *ssl_acceptor_fd;
-#endif /* HAVE_OPENSSL */
 
 extern bool opt_large_pages;
 extern uint opt_large_page_size;
@@ -674,6 +677,7 @@ extern mysql_mutex_t LOCK_compress_gtid_table;
 extern mysql_mutex_t LOCK_keyring_operations;
 extern mysql_mutex_t LOCK_collect_instance_log;
 extern mysql_mutex_t LOCK_tls_ctx_options;
+extern mysql_mutex_t LOCK_admin_tls_ctx_options;
 extern mysql_mutex_t LOCK_rotate_binlog_master_key;
 
 extern mysql_cond_t COND_server_started;
@@ -757,6 +761,11 @@ bool mysqld_partial_revokes();
 */
 void set_mysqld_partial_revokes(bool value);
 
+/**
+  Set m_opt_tracking_mode with a user given value associated with sysvar.
+*/
+void set_mysqld_opt_tracking_mode();
+
 #ifdef _WIN32
 
 bool is_windows_service();
@@ -768,4 +777,14 @@ bool update_named_pipe_full_access_group(const char *new_group_name);
 extern LEX_STRING opt_mandatory_roles;
 extern bool opt_mandatory_roles_cache;
 extern bool opt_always_activate_granted_roles;
+
+extern mysql_component_t mysql_component_mysql_server;
+extern mysql_component_t mysql_component_performance_schema;
+/* This variable is a registry handler, defined in mysql_server component and
+   used as a output parameter for minimal chassis. */
+extern SERVICE_TYPE_NO_CONST(registry) * srv_registry;
+/* These global variables which are defined and used in
+   mysql_server component */
+extern SERVICE_TYPE(dynamic_loader_scheme_file) * scheme_file_srv;
+extern SERVICE_TYPE(dynamic_loader) * dynamic_loader_srv;
 #endif /* MYSQLD_INCLUDED */

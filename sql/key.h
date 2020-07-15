@@ -1,4 +1,4 @@
-/* Copyright (c) 2006, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2006, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -150,8 +150,8 @@ class KEY {
 
   /**
     Array of AVG(number of records with the same field value) for 1st ... Nth
-    key part. 0 means 'not known'. For internally created temporary tables this
-    member is NULL.
+    key part. 0 means 'not known'. For internally created temporary tables,
+    this member can be nullptr.
   */
   ulong *rec_per_key;
 
@@ -161,6 +161,11 @@ class KEY {
     @retval false if this isn't a functional index.
   */
   bool is_functional_index() const;
+
+  // Can't use in-class initialization as long as we memset-initialize
+  // the struct
+  LEX_CSTRING engine_attribute;
+  LEX_CSTRING secondary_engine_attribute;
 
  private:
   /**
@@ -174,8 +179,8 @@ class KEY {
 
   /**
     Array of AVG(number of records with the same field value) for 1st ... Nth
-    key part. For internally created temporary tables this member is
-    NULL. This is the same information as stored in the above
+    key part. For internally created temporary tables, this member can be
+    nullptr. This is the same information as stored in the above
     rec_per_key array but using float values instead of integer
     values. If the storage engine has supplied values in this array,
     these will be used. Otherwise the value in rec_per_key will be
@@ -254,7 +259,7 @@ class KEY {
     DBUG_ASSERT(key_part_no < actual_key_parts);
     DBUG_ASSERT(rec_per_key_est == REC_PER_KEY_UNKNOWN ||
                 rec_per_key_est >= 1.0);
-    DBUG_ASSERT(rec_per_key_float != NULL);
+    DBUG_ASSERT(rec_per_key_float != nullptr);
 
     rec_per_key_float[key_part_no] = rec_per_key_est;
   }
@@ -267,7 +272,7 @@ class KEY {
   */
 
   bool supports_records_per_key() const {
-    if (rec_per_key_float != NULL && rec_per_key != NULL) return true;
+    if (rec_per_key_float != nullptr && rec_per_key != nullptr) return true;
 
     return false;
   }
@@ -328,11 +333,11 @@ class KEY {
 
 int find_ref_key(KEY *key, uint key_count, uchar *record, Field *field,
                  uint *key_length, uint *keypart);
-void key_copy(uchar *to_key, uchar *from_record, KEY *key_info,
+void key_copy(uchar *to_key, const uchar *from_record, const KEY *key_info,
               uint key_length);
-void key_restore(uchar *to_record, uchar *from_key, KEY *key_info,
+void key_restore(uchar *to_record, const uchar *from_key, const KEY *key_info,
                  uint key_length);
-bool key_cmp_if_same(TABLE *form, const uchar *key, uint index,
+bool key_cmp_if_same(const TABLE *table, const uchar *key, uint index,
                      uint key_length);
 void key_unpack(String *to, TABLE *table, KEY *key);
 void field_unpack(String *to, Field *field, uint max_length, bool prefix_key);

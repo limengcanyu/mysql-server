@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
 
 Portions of this file contain modifications contributed and copyrighted by
 Google, Inc. Those modifications are gratefully acknowledged and are described
@@ -48,6 +48,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include <mutex>
 #include <string>
 
+#include "my_compiler.h"
 #include "os0event.h"
 #include "os0file.h"
 #include "sync0sharded_rw.h"
@@ -102,9 +103,12 @@ enum log_header_format_t {
   it had to point the beginning of a group of log records). */
   LOG_HEADER_FORMAT_8_0_3 = 3,
 
+  /** Expand ulint compressed form. */
+  LOG_HEADER_FORMAT_8_0_19 = 4,
+
   /** The redo log format identifier
   corresponding to the current format version. */
-  LOG_HEADER_FORMAT_CURRENT = LOG_HEADER_FORMAT_8_0_3
+  LOG_HEADER_FORMAT_CURRENT = LOG_HEADER_FORMAT_8_0_19
 };
 
 /** The state of a log group */
@@ -130,34 +134,36 @@ struct Log_handle {
 
 /** Redo log - single data structure with state of the redo log system.
 In future, one could consider splitting this to multiple data structures. */
-struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
-/**************************************************/ /**
+struct alignas(ut::INNODB_CACHE_LINE_SIZE) log_t {
+  /**************************************************/ /**
 
- @name Users writing to log buffer
+   @name Users writing to log buffer
 
- *******************************************************/
+   *******************************************************/
 
-/** @{ */
+  /** @{ */
 
 #ifndef UNIV_HOTBACKUP
   /** Sharded rw-lock which can be used to freeze redo log lsn.
   When user thread reserves space in log, s-lock is acquired.
   Log archiver (Clone plugin) acquires x-lock. */
-  Sharded_rw_lock sn_lock;
+  mutable Sharded_rw_lock sn_lock;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
-
-      /** Current sn value. Used to reserve space in the redo log,
-      and used to acquire an exclusive access to the log buffer.
-      Represents number of data bytes that have ever been reserved.
-      Bytes of headers and footers of log blocks are not included.
-      Protected by: sn_lock.
-      @see @ref subsect_redo_log_sn */
-      atomic_sn_t sn;
+  /** Current sn value. Used to reserve space in the redo log,
+  and used to acquire an exclusive access to the log buffer.
+  Represents number of data bytes that have ever been reserved.
+  Bytes of headers and footers of log blocks are not included.
+  Protected by: sn_lock. */
+  MY_COMPILER_DIAGNOSTIC_PUSH()
+  MY_COMPILER_CLANG_WORKAROUND_REF_DOCBUG()
+  /**
+  @see @ref subsect_redo_log_sn */
+  MY_COMPILER_DIAGNOSTIC_PUSH()
+  alignas(ut::INNODB_CACHE_LINE_SIZE) atomic_sn_t sn;
 
   /** Padding after the _sn to avoid false sharing issues for
   constants below (due to changes of sn). */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** Pointer to the log buffer, aligned up to OS_FILE_LOG_BLOCK_SIZE.
       The alignment is to ensure that buffer parts specified for file IO write
@@ -166,19 +172,27 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       Protected by: sn_lock. */
       aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> buf;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  /** Size of the log buffer expressed in number of data bytes,
+  that is excluding bytes for headers and footers of log blocks. */
+  atomic_sn_t buf_size_sn;
+
+  /** Size of the log buffer expressed in number of total bytes,
+  that is including bytes for headers and footers of log blocks. */
+  size_t buf_size;
+
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** The recent written buffer.
       Protected by: sn_lock or writer_mutex. */
       Link_buf<lsn_t> recent_written;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** The recent closed buffer.
       Protected by: sn_lock or closer_mutex. */
       Link_buf<lsn_t> recent_closed;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -195,32 +209,18 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       log buffer. Threads, which are limited need to wait, and possibly they
       hold latches of dirty pages making a deadlock possible.
       Protected by: writer_mutex (writes). */
-      atomic_sn_t sn_limit_for_end;
+      atomic_sn_t buf_limit_sn;
 
-  /** Maximum sn up to which there is free space in both the log buffer
-  and the log files for any possible mtr. This is limitation for the
-  beginning of any write to the log buffer. Threads check this limitation
-  when they are outside mini transactions and hold no latches. The formula
-  used to calculate the limitation takes into account maximum size of mtr
-  and thread concurrency to include proper margins and avoid issue with
-  race condition (in which all threads check the limitation and then all
-  proceed with their mini transactions).
+  /** Up to this lsn, data has been written to disk (fsync not required).
   Protected by: writer_mutex (writes). */
-  atomic_sn_t sn_limit_for_start;
+  MY_COMPILER_DIAGNOSTIC_PUSH()
+  MY_COMPILER_CLANG_WORKAROUND_REF_DOCBUG()
+  /*
+  @see @ref subsect_redo_log_write_lsn */
+  MY_COMPILER_DIAGNOSTIC_POP()
+  alignas(ut::INNODB_CACHE_LINE_SIZE) atomic_lsn_t write_lsn;
 
-  /** Margin used in calculation of @see sn_limit_for_start. */
-  atomic_sn_t concurrency_margin;
-
-  atomic_sn_t dict_persist_margin;
-
-  alignas(INNOBASE_CACHE_LINE_SIZE)
-
-      /** Up to this lsn, data has been written to disk (fsync not required).
-      Protected by: writer_mutex (writes).
-      @see @ref subsect_redo_log_write_lsn */
-      atomic_lsn_t write_lsn;
-
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** Unaligned pointer to array with events, which are used for
       notifications sent from the log write notifier thread to user threads.
@@ -236,17 +236,17 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   size_t write_events_size;
 
   /** Approx. number of requests to write/flush redo since startup. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
       std::atomic<uint64_t> write_to_file_requests_total;
 
   /** How often redo write/flush is requested in average.
   Measures in microseconds. Log threads do not spin when
   the write/flush requests are not frequent. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
       std::atomic<uint64_t> write_to_file_requests_interval;
 
   /** This padding is probably not needed, left for convenience. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -273,13 +273,13 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   size_t flush_events_size;
 
   /** Padding before the frequently updated flushed_to_disk_lsn. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** Up to this lsn data has been flushed to disk (fsynced). */
       atomic_lsn_t flushed_to_disk_lsn;
 
   /** Padding after the frequently updated flushed_to_disk_lsn. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -302,15 +302,15 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   double flush_avg_time;
 
   /** Mutex which can be used to pause log flusher thread. */
-  ib_mutex_t flusher_mutex;
+  mutable ib_mutex_t flusher_mutex;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       os_event_t flusher_event;
 
   /** Padding to avoid any dependency between the log flusher
   and the log writer threads. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -335,6 +335,9 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   /** Up to this file offset in the log files, the write-ahead
   has been done or is not required (for any other reason). */
   uint64_t write_ahead_end_offset;
+
+  /** Aligned buffers for file headers. */
+  aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> *file_header_bufs;
 #endif /* !UNIV_HOTBACKUP */
 
   /** Some lsn value within the current log file. */
@@ -352,6 +355,9 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   /** Size of each single log file (expressed in bytes, including
   file header). */
   uint64_t file_size;
+
+  /** Number of log files. */
+  uint32_t n_files;
 
   /** Total capacity of all the log files (file_size * n_files),
   including headers of the log files. */
@@ -384,15 +390,15 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
 
 #ifndef UNIV_HOTBACKUP
   /** Mutex which can be used to pause log writer thread. */
-  ib_mutex_t writer_mutex;
+  mutable ib_mutex_t writer_mutex;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       os_event_t writer_event;
 
   /** Padding after section for the log writer thread, to avoid any
   dependency between the log writer and the log closer threads. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -408,11 +414,11 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       os_event_t closer_event;
 
   /** Mutex which can be used to pause log closer thread. */
-  ib_mutex_t closer_mutex;
+  mutable ib_mutex_t closer_mutex;
 
   /** Padding after the log closer thread and before the memory used
   for communication between the log flusher and notifier threads. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -431,10 +437,10 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       os_event_t flush_notifier_event;
 
   /** Mutex which can be used to pause log flush notifier thread. */
-  ib_mutex_t flush_notifier_mutex;
+  mutable ib_mutex_t flush_notifier_mutex;
 
   /** Padding. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -447,16 +453,16 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       /** @{ */
 
       /** Mutex which can be used to pause log write notifier thread. */
-      ib_mutex_t write_notifier_mutex;
+      mutable ib_mutex_t write_notifier_mutex;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** Event used by the log writer thread to notify the log write
       notifier thread, that it should proceed with notifying user threads
       waiting for the advanced write_lsn (because it has been advanced). */
       os_event_t write_notifier_event;
 
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
@@ -471,55 +477,6 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       /** Used for stopping the log background threads. */
       std::atomic_bool should_stop_threads;
 
-  /** True iff the log closer thread is alive. */
-  std::atomic_bool closer_thread_alive;
-
-  /** True iff the log checkpointer thread is alive. */
-  std::atomic_bool checkpointer_thread_alive;
-
-  /** True iff the log writer thread is alive. */
-  std::atomic_bool writer_thread_alive;
-
-  /** True iff the log flusher thread is alive. */
-  std::atomic_bool flusher_thread_alive;
-
-  /** True iff the log write notifier thread is alive. */
-  std::atomic_bool write_notifier_thread_alive;
-
-  /** True iff the log flush notifier thread is alive. */
-  std::atomic_bool flush_notifier_thread_alive;
-
-  /** Size of the log buffer expressed in number of data bytes,
-  that is excluding bytes for headers and footers of log blocks. */
-  atomic_sn_t buf_size_sn;
-
-  /** Size of the log buffer expressed in number of total bytes,
-  that is including bytes for headers and footers of log blocks. */
-  size_t buf_size;
-
-  /** Capacity of the log files available for log_free_check(). */
-  lsn_t lsn_capacity_for_free_check;
-
-  /** Lsn from which recovery has been started. */
-  lsn_t recovered_lsn;
-#endif /* !UNIV_HOTBACKUP */
-
-  /** Number of log files. */
-  uint32_t n_files;
-
-#ifndef UNIV_HOTBACKUP
-  /** Format of the redo log: e.g., LOG_HEADER_FORMAT_CURRENT. */
-  uint32_t format;
-
-  /** Corruption status. */
-  log_state_t state;
-
-  /** Aligned buffers for file headers. */
-  aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> *file_header_bufs;
-
-  /** Used only in recovery: recovery scan succeeded up to this lsn. */
-  lsn_t scanned_lsn;
-
   /** Number of total I/O operations performed when we printed
   the statistics last time. */
   mutable uint64_t n_log_ios_old;
@@ -527,20 +484,139 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   /** Wall time when we printed the statistics last time. */
   mutable time_t last_printout_time;
 
-  //#ifdef UNIV_DEBUG
+  /** @} */
+
+  /**************************************************/ /**
+
+   @name Recovery
+
+   *******************************************************/
+
+  /** @{ */
+
+  /** Lsn from which recovery has been started. */
+  lsn_t recovered_lsn;
+
+  /** Format of the redo log: e.g., LOG_HEADER_FORMAT_CURRENT. */
+  uint32_t format;
+
+  /** Corruption status. */
+  log_state_t state;
+
+  /** Used only in recovery: recovery scan succeeded up to this lsn. */
+  lsn_t scanned_lsn;
+
+#ifdef UNIV_DEBUG
+
   /** When this is set, writing to the redo log should be disabled.
   We check for this in functions that write to the redo log. */
   bool disable_redo_writes;
-  //#endif /* UNIV_DEBUG */
 
-  /** Padding before memory used for checkpoints logic. */
-  alignas(INNOBASE_CACHE_LINE_SIZE)
+  /** DEBUG only - if we copied or initialized the first block in buffer,
+  this is set to lsn for which we did that. We later ensure that we start
+  the redo log at the same lsn. Else it is zero and we would crash when
+  trying to start redo then. */
+  lsn_t first_block_is_correct_for_lsn;
+
+#endif /* UNIV_DEBUG */
+
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
 
       /** @} */
 
       /**************************************************/ /**
 
-       @name Fields involved in checkpoints
+       @name Fields protected by the log_limits mutex.
+             Related to free space in the redo log.
+
+       *******************************************************/
+
+      /** @{ */
+
+      /** Mutex which protects fields: available_for_checkpoint_lsn,
+      requested_checkpoint_lsn. It also synchronizes updates of:
+      free_check_limit_sn, concurrency_margin and dict_persist_margin.
+      It also protects the srv_checkpoint_disabled (together with the
+      checkpointer_mutex). */
+      mutable ib_mutex_t limits_mutex;
+
+  /** A new checkpoint could be written for this lsn value.
+  Up to this lsn value, all dirty pages have been added to flush
+  lists and flushed. Updated in the log checkpointer thread by
+  taking minimum oldest_modification out of the last dirty pages
+  from each flush list. However it will not be bigger than the
+  current value of log.buf_dirty_pages_added_up_to_lsn.
+  Read by: user threads when requesting fuzzy checkpoint
+  Read by: log_print() (printing status of redo)
+  Updated by: log_checkpointer
+  Protected by: limits_mutex. */
+  MY_COMPILER_DIAGNOSTIC_PUSH()
+  MY_COMPILER_CLANG_WORKAROUND_REF_DOCBUG()
+  /**
+  @see @ref subsect_redo_log_available_for_checkpoint_lsn */
+  MY_COMPILER_DIAGNOSTIC_POP()
+  lsn_t available_for_checkpoint_lsn;
+
+  /** When this is larger than the latest checkpoint, the log checkpointer
+  thread will be forced to write a new checkpoint (unless the new latest
+  checkpoint lsn would still be smaller than this value).
+  Read by: log_checkpointer
+  Updated by: user threads (log_free_check() or for sharp checkpoint)
+  Protected by: limits_mutex. */
+  lsn_t requested_checkpoint_lsn;
+
+  /** Maximum lsn allowed for checkpoint by dict_persist or zero.
+  This will be set by dict_persist_to_dd_table_buffer(), which should
+  be always called before really making a checkpoint.
+  If non-zero, up to this lsn value, dynamic metadata changes have been
+  written back to mysql.innodb_dynamic_metadata under dict_persist->mutex
+  protection. All dynamic metadata changes after this lsn have to
+  be kept in redo logs, but not discarded. If zero, just ignore it.
+  Updated by: DD (when persisting dynamic meta data)
+  Updated by: log_checkpointer (reset when checkpoint is written)
+  Protected by: limits_mutex. */
+  lsn_t dict_max_allowed_checkpoint_lsn;
+
+  /** If should perform checkpoints every innodb_log_checkpoint_every ms.
+  Disabled during startup / shutdown. Enabled in srv_start_threads.
+  Updated by: starting thread (srv_start_threads)
+  Read by: log_checkpointer */
+  bool periodical_checkpoints_enabled;
+
+  /** Maximum sn up to which there is free space in the redo log.
+  Threads check this limit and compare to current log.sn, when they
+  are outside mini transactions and hold no latches. The formula used
+  to compute the limitation takes into account maximum size of mtr and
+  thread concurrency to include proper margins and avoid issues with
+  race condition (in which all threads check the limitation and then
+  all proceed with their mini transactions). Also extra margin is
+  there for dd table buffer cache (dict_persist_margin).
+  Read by: user threads (log_free_check())
+  Updated by: log_checkpointer (after update of checkpoint_lsn)
+  Updated by: log_writer (after increasing concurrency_margin)
+  Updated by: DD (after update of dict_persist_margin)
+  Protected by (updates only): limits_mutex. */
+  atomic_sn_t free_check_limit_sn;
+
+  /** Margin used in calculation of @see free_check_limit_sn.
+  Read by: page_cleaners, log_checkpointer
+  Updated by: log_writer
+  Protected by (updates only): limits_mutex. */
+  atomic_sn_t concurrency_margin;
+
+  /** Margin used in calculation of @see free_check_limit_sn.
+  Read by: page_cleaners, log_checkpointer
+  Updated by: DD
+  Protected by (updates only): limits_mutex. */
+  atomic_sn_t dict_persist_margin;
+
+  alignas(ut::INNODB_CACHE_LINE_SIZE)
+
+      /** @} */
+
+      /**************************************************/ /**
+
+       @name Log checkpointer thread
 
        *******************************************************/
 
@@ -549,8 +625,53 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
       /** Event used by the log checkpointer thread to wait for requests. */
       os_event_t checkpointer_event;
 
-  /** Mutex which can be used to pause log checkpointer thread. */
-  ib_mutex_t checkpointer_mutex;
+  /** Mutex which can be used to pause log checkpointer thread.
+  This is used by log_position_lock() together with log_buffer_x_lock(),
+  to pause any changes to current_lsn or last_checkpoint_lsn. */
+  mutable ib_mutex_t checkpointer_mutex;
+
+  /** Latest checkpoint lsn.
+  Read by: user threads, log_print (no protection)
+  Read by: log_writer (under writer_mutex)
+  Updated by: log_checkpointer (under both mutexes)
+  Protected by (updates only): checkpointer_mutex + writer_mutex. */
+  MY_COMPILER_DIAGNOSTIC_PUSH()
+  MY_COMPILER_CLANG_WORKAROUND_REF_DOCBUG()
+  /**
+  @see @ref subsect_redo_log_last_checkpoint_lsn */
+  MY_COMPILER_DIAGNOSTIC_POP()
+  atomic_lsn_t last_checkpoint_lsn;
+
+  /** Next checkpoint number.
+  Read by: log_get_last_block (no protection)
+  Read by: log_writer (under writer_mutex)
+  Updated by: log_checkpointer (under both mutexes)
+  Protected by: checkpoint_mutex + writer_mutex. */
+  std::atomic<checkpoint_no_t> next_checkpoint_no;
+
+  /** Latest checkpoint wall time.
+  Used by (private): log_checkpointer. */
+  Log_clock_point last_checkpoint_time;
+
+  /** Aligned buffer used for writing a checkpoint header. It is aligned
+  similarly to log.buf.
+  Used by (private): log_checkpointer, recovery code */
+  aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> checkpoint_buf;
+
+  /** @} */
+
+  /**************************************************/ /**
+
+   @name Fields considered constant, updated when log system
+         is initialized (log_sys_init()) and not assigned to
+         particular log thread.
+
+   *******************************************************/
+
+  /** @{ */
+
+  /** Capacity of the log files available for log_free_check(). */
+  lsn_t lsn_capacity_for_free_check;
 
   /** Capacity of log files excluding headers of the log files.
   If the checkpoint age exceeds this, it is a serious error,
@@ -565,59 +686,22 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   a synchronous flush of dirty pages. */
   lsn_t max_modified_age_sync;
 
-  /** When checkpoint age exceeds this value, we force writing next
-  checkpoint (requesting the log checkpointer thread to do it). */
+  /** When checkpoint age exceeds this value, we write checkpoints
+  if lag between oldest_lsn and checkpoint_lsn exceeds max_checkpoint_lag. */
   lsn_t max_checkpoint_age_async;
 
-  /** If should perform checkpoints every innodb_log_checkpoint_every ms.
-  Disabled during startup / shutdown. */
-  bool periodical_checkpoints_enabled;
+  /** @} */
 
-  /** A new checkpoint could be written for this lsn value.
-  Up to this lsn value, all dirty pages have been added to flush
-  lists and flushed. Updated in the log checkpointer thread by
-  taking minimum oldest_modification out of the last dirty pages
-  from each flush list. However it will not be bigger than the
-  current value of log.buf_dirty_pages_added_up_to_lsn.
-  Protected by: checkpointer_mutex.
-  @see @ref subsect_redo_log_available_for_checkpoint_lsn */
-  lsn_t available_for_checkpoint_lsn;
+  /** true if redo logging is disabled. Read and write with writer_mutex  */
+  bool m_disable;
 
-  /** Maximum lsn allowed for checkpoint by dict_persist or zero.
-  This will be set by dict_persist_to_dd_table_buffer(), which should
-  be always called before really making a checkpoint.
-  If non-zero, up to this lsn value, dynamic metadata changes have been
-  written back to mysql.innodb_dynamic_metadata under dict_persist->mutex
-  protection. All dynamic metadata changes after this lsn have to
-  be kept in redo logs, but not discarded. If zero, just ignore it. */
-  lsn_t dict_max_allowed_checkpoint_lsn;
+  /** true, if server is not recoverable. Read and write with writer_mutex */
+  bool m_crash_unsafe;
 
-  /** When this is larger than the latest checkpoint, the log checkpointer
-  thread will be forced to write a new checkpoint (unless the new latest
-  checkpoint lsn would still be smaller than this value).
-  Protected by: checkpointer_mutex. */
-  lsn_t requested_checkpoint_lsn;
-
-  /** Latest checkpoint wall time.
-  Protected by: checkpointer_mutex. */
-  Log_clock_point last_checkpoint_time;
-
-  /** Latest checkpoint lsn.
-  Protected by: checkpointer_mutex (writes).
-  @see @ref subsect_redo_log_last_checkpoint_lsn */
-  atomic_lsn_t last_checkpoint_lsn;
-
-  /** Next checkpoint number.
-  Protected by: checkpoint_mutex. */
-  std::atomic<checkpoint_no_t> next_checkpoint_no;
-
-  /** Aligned buffer used for writing a checkpoint header. It is aligned
-  similarly to log.buf.
-  Protected by: checkpointer_mutex. */
-  aligned_array_pointer<byte, OS_FILE_LOG_BLOCK_SIZE> checkpoint_buf;
+  /** start LSN of first redo log file. */
+  lsn_t m_first_file_lsn;
 
 #endif /* !UNIV_HOTBACKUP */
-       /** @} */
 };
 
 #endif /* !log0types_h */

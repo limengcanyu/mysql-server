@@ -1,7 +1,7 @@
 #ifndef HISTOGRAMS_HISTOGRAM_INCLUDED
 #define HISTOGRAMS_HISTOGRAM_INCLUDED
 
-/* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -48,10 +48,9 @@
 #include <utility>  // std::pair
 
 #include "lex_string.h"  // LEX_CSTRING
-#include "m_ctype.h"
-#include "my_base.h"  // ha_rows
+#include "my_base.h"     // ha_rows
 #include "sql/histograms/value_map_type.h"
-#include "sql/memroot_allocator.h"    // Memroot_allocator
+#include "sql/mem_root_allocator.h"   // Mem_root_allocator
 #include "sql/stateless_allocator.h"  // Stateless_allocator
 
 class Item;
@@ -68,6 +67,7 @@ struct Histogram_comparator;
 template <class T>
 class Value_map;
 }  // namespace histograms
+struct CHARSET_INFO;
 struct MEM_ROOT;
 struct TABLE_LIST;
 
@@ -98,7 +98,7 @@ template <class T>
 using Histogram_key_allocator = Stateless_allocator<T, Histogram_psi_key_alloc>;
 
 template <class T>
-using value_map_allocator = Memroot_allocator<std::pair<const T, ha_rows>>;
+using value_map_allocator = Mem_root_allocator<std::pair<const T, ha_rows>>;
 
 template <typename T>
 using value_map_type =
@@ -458,8 +458,8 @@ class Histogram {
     @param[out] selectivity the calculated selectivity if a usable histogram was
                             found
 
-    @retval true if an error occured (the Item provided was not a constant value
-            or similar).
+    @retval true if an error occurred (the Item provided was not a constant
+    value or similar).
     @return false if success
   */
   bool get_selectivity(Item **items, size_t item_count, enum_operator op,

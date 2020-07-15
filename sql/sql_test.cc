@@ -1,4 +1,4 @@
-/* Copyright (c) 2000, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2000, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -75,26 +75,27 @@
 
 const char *lock_descriptions[TL_WRITE_ONLY + 1] = {
     /* TL_UNLOCK                  */ "No lock",
-    /* TL_READ_DEFAULT            */ NULL,
+    /* TL_READ_DEFAULT            */ nullptr,
     /* TL_READ                    */ "Low priority read lock",
     /* TL_READ_WITH_SHARED_LOCKS  */ "Shared read lock",
     /* TL_READ_HIGH_PRIORITY      */ "High priority read lock",
     /* TL_READ_NO_INSERT          */ "Read lock without concurrent inserts",
     /* TL_WRITE_ALLOW_WRITE       */ "Write lock that allows other writers",
-    /* TL_WRITE_CONCURRENT_DEFAULT*/ NULL,
+    /* TL_WRITE_CONCURRENT_DEFAULT*/ nullptr,
     /* TL_WRITE_CONCURRENT_INSERT */ "Concurrent insert lock",
-    /* TL_WRITE_DEFAULT           */ NULL,
+    /* TL_WRITE_DEFAULT           */ nullptr,
     /* TL_WRITE_LOW_PRIORITY      */ "Low priority write lock",
     /* TL_WRITE                   */ "High priority write lock",
     /* TL_WRITE_ONLY              */ "Highest priority write lock"};
 
 #ifndef DBUG_OFF
 
-void print_where(Item *cond, const char *info, enum_query_type query_type) {
+void print_where(const THD *thd, const Item *cond, const char *info,
+                 enum_query_type query_type) {
   char buff[256];
   String str(buff, sizeof(buff), system_charset_info);
   str.length(0);
-  if (cond) cond->print(current_thd, &str, query_type);
+  if (cond) cond->print(thd, &str, query_type);
   str.append('\0');
 
   DBUG_LOCK_FILE;
@@ -103,24 +104,10 @@ void print_where(Item *cond, const char *info, enum_query_type query_type) {
   (void)fputc('\n', DBUG_FILE);
   DBUG_UNLOCK_FILE;
 }
-/* This is for debugging purposes */
-
-static void print_cached_tables(void) {
-  /* purecov: begin tested */
-  table_cache_manager.lock_all_and_tdc();
-
-  table_cache_manager.print_tables();
-
-  printf("\nCurrent refresh version: %ld\n", refresh_version);
-  fflush(stdout);
-  table_cache_manager.unlock_all_and_tdc();
-  /* purecov: end */
-  return;
-}
 
 void TEST_join(JOIN *join) {
   uint i, ref;
-  DBUG_ENTER("TEST_join");
+  DBUG_TRACE;
   DBUG_ASSERT(!join->join_tab);
   /*
     Assemble results of all the calls to full_name() first,
@@ -165,7 +152,6 @@ void TEST_join(JOIN *join) {
     }
   }
   DBUG_UNLOCK_FILE;
-  DBUG_VOID_RETURN;
 }
 
 #endif /* !DBUG_OFF */
@@ -179,7 +165,7 @@ void print_keyuse_array(Opt_trace_context *trace,
   for (uint i = 0; i < keyuse_array->size(); i++) {
     const Key_use &keyuse = keyuse_array->at(i);
     // those are too obscure for opt trace
-    DBUG_PRINT("opt", ("Key_use: optimize= %d used_tables=0x%llx "
+    DBUG_PRINT("opt", ("Key_use: optimize= %d used_tables=0x%" PRIx64 " "
                        "ref_table_rows= %lu keypart_map= %0lx",
                        keyuse.optimize, keyuse.used_tables,
                        (ulong)keyuse.ref_table_rows, keyuse.keypart_map));
@@ -233,7 +219,7 @@ void print_plan(JOIN *join, uint idx, double record_count, double read_time,
   JOIN_TAB **plan_nodes;
   TABLE *table;
 
-  if (info == 0) info = "";
+  if (info == nullptr) info = "";
 
   DBUG_LOCK_FILE;
   if (join->best_read == DBL_MAX) {
@@ -288,8 +274,6 @@ void print_plan(JOIN *join, uint idx, double record_count, double read_time,
 
 #endif /* !DBUG_OFF */
 
-static int print_key_cache_status(const char *name, KEY_CACHE *key_cache);
-
 struct TABLE_LOCK_INFO {
   my_thread_id thread_id;
   char table_name[FN_REFLEN];
@@ -311,176 +295,12 @@ static inline int dl_compare(const TABLE_LOCK_INFO *a,
   return 1;
 }
 
-class DL_commpare : public std::binary_function<const TABLE_LOCK_INFO &,
-                                                const TABLE_LOCK_INFO &, bool> {
+class DL_commpare {
  public:
   bool operator()(const TABLE_LOCK_INFO &a, const TABLE_LOCK_INFO &b) {
     return dl_compare(&a, &b) < 0;
   }
 };
-
-static void push_locks_into_array(Saved_locks_array *ar, THR_LOCK_DATA *data,
-                                  bool wait, const char *text) {
-  if (data) {
-    TABLE *table = (TABLE *)data->debug_print_param;
-    if (table && table->s->tmp_table == NO_TMP_TABLE) {
-      TABLE_LOCK_INFO table_lock_info;
-      table_lock_info.thread_id = table->in_use->thread_id();
-      memcpy(table_lock_info.table_name, table->s->table_cache_key.str,
-             table->s->table_cache_key.length);
-      table_lock_info.table_name[strlen(table_lock_info.table_name)] = '.';
-      table_lock_info.waiting = wait;
-      table_lock_info.lock_text = text;
-      // lock_type is also obtainable from THR_LOCK_DATA
-      table_lock_info.type = table->reginfo.lock_type;
-      ar->push_back(table_lock_info);
-    }
-  }
-}
-
-/*
-  Regarding MERGE tables:
-
-  For now, the best option is to use the common TABLE *pointer for all
-  cases;  The drawback is that for MERGE tables we will see many locks
-  for the merge tables even if some of them are for individual tables.
-
-  The way to solve this is to add to 'THR_LOCK' structure a pointer to
-  the filename and use this when printing the data.
-  (We can for now ignore this and just print the same name for all merge
-  table parts;  Please add the above as a comment to the display_lock
-  function so that we can easily add this if we ever need this.
-*/
-
-static void display_table_locks(void) {
-  LIST *list;
-  Saved_locks_array saved_table_locks(key_memory_locked_thread_list);
-  saved_table_locks.reserve(table_cache_manager.cached_tables() + 20);
-
-  mysql_mutex_lock(&THR_LOCK_lock);
-  for (list = thr_lock_thread_list; list; list = list_rest(list)) {
-    THR_LOCK *lock = (THR_LOCK *)list->data;
-
-    mysql_mutex_lock(&lock->mutex);
-    push_locks_into_array(&saved_table_locks, lock->write.data, false,
-                          "Locked - write");
-    push_locks_into_array(&saved_table_locks, lock->write_wait.data, true,
-                          "Waiting - write");
-    push_locks_into_array(&saved_table_locks, lock->read.data, false,
-                          "Locked - read");
-    push_locks_into_array(&saved_table_locks, lock->read_wait.data, true,
-                          "Waiting - read");
-    mysql_mutex_unlock(&lock->mutex);
-  }
-  mysql_mutex_unlock(&THR_LOCK_lock);
-
-  if (saved_table_locks.empty()) return;
-
-  saved_table_locks.shrink_to_fit();
-
-  std::sort(saved_table_locks.begin(), saved_table_locks.end(), DL_commpare());
-
-  puts(
-      "\nThread database.table_name          Locked/Waiting        "
-      "Lock_type\n");
-
-  Saved_locks_array::iterator it;
-  for (it = saved_table_locks.begin(); it != saved_table_locks.end(); ++it) {
-    printf("%-8u%-28.28s%-22s%s\n", it->thread_id, it->table_name,
-           it->lock_text, lock_descriptions[(int)it->type]);
-  }
-  puts("\n\n");
-}
-
-static int print_key_cache_status(const char *name, KEY_CACHE *key_cache) {
-  char llbuff1[22];
-  char llbuff2[22];
-  char llbuff3[22];
-  char llbuff4[22];
-
-  if (!key_cache->key_cache_inited) {
-    printf("%s: Not in use\n", name);
-  } else {
-    printf(
-        "%s\n\
-Buffer_size:    %10lu\n\
-Block_size:     %10lu\n\
-Division_limit: %10lu\n\
-Age_limit:      %10lu\n\
-blocks used:    %10lu\n\
-not flushed:    %10lu\n\
-w_requests:     %10s\n\
-writes:         %10s\n\
-r_requests:     %10s\n\
-reads:          %10s\n\n",
-        name, (ulong)key_cache->param_buff_size,
-        (ulong)key_cache->param_block_size,
-        (ulong)key_cache->param_division_limit,
-        (ulong)key_cache->param_age_threshold, key_cache->blocks_used,
-        key_cache->global_blocks_changed,
-        llstr(key_cache->global_cache_w_requests, llbuff1),
-        llstr(key_cache->global_cache_write, llbuff2),
-        llstr(key_cache->global_cache_r_requests, llbuff3),
-        llstr(key_cache->global_cache_read, llbuff4));
-  }
-  return 0;
-}
-
-void mysql_print_status() {
-  char current_dir[FN_REFLEN];
-  System_status_var current_global_status_var;
-
-  printf("\nStatus information:\n\n");
-  (void)my_getwd(current_dir, sizeof(current_dir), MYF(0));
-  printf("Current dir: %s\n", current_dir);
-  printf("Running threads: %u  Stack size: %ld\n",
-         Global_THD_manager::get_instance()->get_thd_count(),
-         (long)my_thread_stack_size);
-  thr_print_locks();  // Write some debug info
-#ifndef DBUG_OFF
-  print_cached_tables();
-#endif
-  /* Print key cache status */
-  puts("\nKey caches:");
-  process_key_caches(print_key_cache_status);
-  mysql_mutex_lock(&LOCK_status);
-  calc_sum_of_all_status(&current_global_status_var);
-  printf(
-      "\nhandler status:\n\
-read_key:   %10llu\n\
-read_next:  %10llu\n\
-read_rnd    %10llu\n\
-read_first: %10llu\n\
-write:      %10llu\n\
-delete      %10llu\n\
-update:     %10llu\n",
-      current_global_status_var.ha_read_key_count,
-      current_global_status_var.ha_read_next_count,
-      current_global_status_var.ha_read_rnd_count,
-      current_global_status_var.ha_read_first_count,
-      current_global_status_var.ha_write_count,
-      current_global_status_var.ha_delete_count,
-      current_global_status_var.ha_update_count);
-  mysql_mutex_unlock(&LOCK_status);
-  printf(
-      "\nTable status:\n\
-Opened tables: %10lu\n\
-Open tables:   %10lu\n\
-Open files:    %10lu\n\
-Open streams:  %10lu\n",
-      (ulong)current_global_status_var.opened_tables,
-      (ulong)table_cache_manager.cached_tables(), my_file_opened,
-      my_stream_opened);
-  display_table_locks();
-#ifdef HAVE_MALLOC_INFO
-  printf("\nMemory status:\n");
-  malloc_info(0, stdout);
-#endif
-
-  Events::dump_internal_status();
-  puts("");
-  fflush(stdout);
-}
 
 #ifndef DBUG_OFF
 #ifdef EXTRA_DEBUG_DUMP_TABLE_LISTS
@@ -524,7 +344,7 @@ class Unique_fifo_queue {
 class Dbug_table_list_dumper {
   FILE *out;
   Unique_fifo_queue<TABLE_LIST> tables_fifo;
-  Unique_fifo_queue<List<TABLE_LIST>> tbl_lists;
+  Unique_fifo_queue<mem_root_deque<TABLE_LIST *>> tbl_lists;
 
  public:
   void dump_one_struct(TABLE_LIST *tbl);
@@ -589,7 +409,7 @@ void Dbug_table_list_dumper::dump_one_struct(TABLE_LIST *tbl) {
 
 int Dbug_table_list_dumper::dump_graph(SELECT_LEX *select_lex,
                                        TABLE_LIST *first_leaf) {
-  DBUG_ENTER("Dbug_table_list_dumper::dump_graph");
+  DBUG_TRACE;
   char filename[500];
   int no = 0;
   do {
@@ -604,7 +424,7 @@ int Dbug_table_list_dumper::dump_graph(SELECT_LEX *select_lex,
   /* Ok, found an unoccupied name, create the file */
   if (!(out = fopen(filename, "wt"))) {
     DBUG_PRINT("tree_dump", ("Failed to create output file"));
-    DBUG_RETURN(1);
+    return 1;
   }
 
   DBUG_PRINT("tree_dump", ("dumping tree to %s", filename));
@@ -621,7 +441,7 @@ int Dbug_table_list_dumper::dump_graph(SELECT_LEX *select_lex,
     dump_one_struct(tbl);
   }
 
-  List<TABLE_LIST> *plist;
+  mem_root_deque<TABLE_LIST *> *plist;
   tbl_lists.push_back(&select_lex->top_join_list);
   while (tbl_lists.pop_first(&plist)) {
     fprintf(out, "\"%p\" [\n", plist);
@@ -646,7 +466,7 @@ int Dbug_table_list_dumper::dump_graph(SELECT_LEX *select_lex,
     //    fprintf(out, "%s", current_thd->query);
     fclose(out);
   }
-  DBUG_RETURN(0);
+  return 0;
 }
 
 #endif

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -178,9 +178,8 @@ class Gcs_operations {
   /**
     Checks if the view modification is a injected one.
 
-    @return
-      @retval true  if the current view modification is a injected one
-      @retval false otherwise
+    @retval true  if the current view modification is a injected one
+    @retval false otherwise
    */
   bool is_injected_view_modification();
 
@@ -266,7 +265,7 @@ class Gcs_operations {
     request to an underlying GCS. The final result can be polled via @c
     get_write_concurrency.
 
-    @param write_concurrency The desired "write concurrency" value.
+    @param new_write_concurrency The desired "write concurrency" value.
 
     @retval GCS_OK if successful
     @retval GCS_NOK if unsuccessful
@@ -286,7 +285,7 @@ class Gcs_operations {
    The method is non-blocking. It returns a future on which the caller can
    wait for the action to finish.
 
-   @param new_version The desired GCS protocol version
+   @param gcs_protocol The desired GCS protocol version
 
    @retval {true, future} If successful
    @retval {false, _} If unsuccessful because @c new_version is unsupported
@@ -304,7 +303,7 @@ class Gcs_operations {
   /**
     Requests GCS to change the maximum size of the XCom cache.
 
-    @param size The new maximum size of the XCom cache.
+    @param new_size The new maximum size of the XCom cache.
 
     @retval GCS_OK if request successfully scheduled
     @retval GCS_NOK if GCS is unable to schedule the request

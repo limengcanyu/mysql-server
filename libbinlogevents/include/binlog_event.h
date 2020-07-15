@@ -26,7 +26,7 @@
 
   @file binlog_event.h
 
-  @brief Contains the classes representing events occuring in the replication
+  @brief Contains the classes representing events occurring in the replication
   stream. Each event is represented as a byte sequence with logical divisions
   as event header, event specific data and event footer. The header and footer
   are common to all the events and are represented as two different subclasses.
@@ -124,9 +124,9 @@
    8 /* type, table_map_for_update */ + 1U +                                  \
    4 /* type, master_data_written */ + /* type, db_1, db_2, ... */            \
    1U + (MAX_DBS_IN_EVENT_MTS * (1 + NAME_LEN)) + 3U +                        \
-   /* type, microseconds */ +1U + 32 * 3 + 1 +                                \
-   60 /* type, user_len, user, host_len, host */ + 1U +                       \
-   1 /* type, explicit_def..ts*/ + 1U + 8 /* type, xid of DDL */ + 1U +       \
+   /* type, microseconds */ +1U + 32 * 3 + /* type, user_len, user */         \
+   1 + 255 /* host_len, host */ + 1U + 1 /* type, explicit_def..ts*/ + 1U +   \
+   8 /* type, xid of DDL */ + 1U +                                            \
    2 /* type, default_collation_for_utf8mb4_number */ +                       \
    1 /* sql_require_primary_key */ + 1 /* type, default_table_encryption */)
 
@@ -345,11 +345,23 @@ enum Log_event_type {
   */
   PARTIAL_UPDATE_ROWS_EVENT = 39,
 
+  TRANSACTION_PAYLOAD_EVENT = 40,
+
   /**
     Add new events here - right above this comment!
     Existing events (except ENUM_END_EVENT) should never change their numbers
   */
   ENUM_END_EVENT /* end marker */
+};
+
+/**
+  Struct to pass basic information about a event: type, query, is it ignorable
+*/
+struct Log_event_basic_info {
+  Log_event_type event_type{UNKNOWN_EVENT};
+  const char *query{nullptr};
+  size_t query_length{0};
+  bool ignorable_event{false};
 };
 
 /**
@@ -823,7 +835,8 @@ class Binary_log_event {
     ROWS_HEADER_LEN_V2 = 10,
     TRANSACTION_CONTEXT_HEADER_LEN = 18,
     VIEW_CHANGE_HEADER_LEN = 52,
-    XA_PREPARE_HEADER_LEN = 0
+    XA_PREPARE_HEADER_LEN = 0,
+    TRANSACTION_PAYLOAD_HEADER_LEN = 0,
   };  // end enum_post_header_length
  protected:
   /**

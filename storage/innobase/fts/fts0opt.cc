@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2007, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2007, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -65,14 +65,11 @@ static const ulint FTS_OPTIMIZE_INTERVAL_IN_SECS = 300;
 /** Server is shutting down, so does we exiting the optimize thread */
 static bool fts_opt_start_shutdown = false;
 
-/** Event to wait for shutdown of the optimize thread */
-static os_event_t fts_opt_shutdown_event = NULL;
-
 /** Initial size of nodes in fts_word_t. */
 static const ulint FTS_WORD_NODES_INIT_SIZE = 64;
 
 /** Last time we did check whether system need a sync */
-static ib_time_t last_check_sync_time;
+static ib_time_monotonic_t last_check_sync_time;
 
 #if 0
 /** Check each table in round robin to see whether they'd
@@ -213,12 +210,12 @@ struct fts_slot_t {
   ulint deleted; /*!< Number of doc ids deleted since the
                  last time this table was optimized */
 
-  ib_time_t last_run; /*!< Time last run completed */
+  ib_time_monotonic_t last_run; /*!< Time last run completed */
 
-  ib_time_t completed; /*!< Optimize finish time */
+  ib_time_monotonic_t completed; /*!< Optimize finish time */
 
-  ib_time_t interval_time; /*!< Minimum time to wait before
-                           optimizing the table again. */
+  int64_t interval_time; /*!< Minimum time to wait before
+                         optimizing the table again. */
 };
 
 /** A table remove message for the FTS optimize thread. */
@@ -363,7 +360,7 @@ static fts_node_t *fts_optimize_read_node(fts_word_t *word, /*!< in: */
 {
   int i;
   fts_node_t *node =
-      static_cast<fts_node_t *>(ib_vector_push(word->nodes, NULL));
+      static_cast<fts_node_t *>(ib_vector_push(word->nodes, nullptr));
 
   /* Start from 1 since the first node has been read by the caller */
   for (i = 1; exp; exp = que_node_get_next(exp), ++i) {
@@ -424,7 +421,7 @@ ibool fts_optimize_index_fetch_node(
   ut_a(dfield_len <= FTS_MAX_WORD_LEN);
 
   if (ib_vector_size(words) == 0) {
-    word = static_cast<fts_word_t *>(ib_vector_push(words, NULL));
+    word = static_cast<fts_word_t *>(ib_vector_push(words, nullptr));
     fts_word_init(word, (byte *)data, dfield_len);
     is_word_init = true;
   }
@@ -433,7 +430,7 @@ ibool fts_optimize_index_fetch_node(
 
   if (dfield_len != word->text.f_len ||
       memcmp(word->text.f_str, data, dfield_len)) {
-    word = static_cast<fts_word_t *>(ib_vector_push(words, NULL));
+    word = static_cast<fts_word_t *>(ib_vector_push(words, nullptr));
     fts_word_init(word, (byte *)data, dfield_len);
     is_word_init = true;
   }
@@ -546,13 +543,13 @@ static byte *fts_zip_read_word(
     fts_string_t *word) /*!< out: uncompressed word */
 {
   short len = 0;
-  void *null = NULL;
+  void *null = nullptr;
   byte *ptr = word->f_str;
   int flush = Z_NO_FLUSH;
 
   /* Either there was an error or we are at the Z_STREAM_END. */
   if (zip->status != Z_OK) {
-    return (NULL);
+    return (nullptr);
   }
 
   zip->zp->next_out = reinterpret_cast<byte *>(&len);
@@ -623,11 +620,11 @@ static byte *fts_zip_read_word(
     }
   }
 
-  if (ptr != NULL) {
+  if (ptr != nullptr) {
     ut_ad(word->f_len == strlen((char *)ptr));
   }
 
-  return (zip->status == Z_OK || zip->status == Z_STREAM_END ? ptr : NULL);
+  return (zip->status == Z_OK || zip->status == Z_STREAM_END ? ptr : nullptr);
 }
 
 /** Callback function to fetch and compress the word in an FTS
@@ -656,7 +653,7 @@ static ibool fts_fetch_index_words(
   zip->word.f_len = len;
 
   ut_a(zip->zp->avail_in == 0);
-  ut_a(zip->zp->next_in == NULL);
+  ut_a(zip->zp->next_in == nullptr);
 
   /* The string is prefixed by len. */
   zip->zp->next_in = reinterpret_cast<byte *>(&len);
@@ -697,7 +694,7 @@ static ibool fts_fetch_index_words(
 
   /* All data should have been compressed. */
   ut_a(zip->zp->avail_in == 0);
-  zip->zp->next_in = NULL;
+  zip->zp->next_in = nullptr;
 
   ++zip->n_words;
 
@@ -709,7 +706,7 @@ static void fts_zip_deflate_end(
     fts_zip_t *zip) /*!< in: instance that should be closed*/
 {
   ut_a(zip->zp->avail_in == 0);
-  ut_a(zip->zp->next_in == NULL);
+  ut_a(zip->zp->next_in == nullptr);
 
   zip->status = deflate(zip->zp, Z_FINISH);
 
@@ -753,14 +750,14 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_index_fetch_words(
   pars_info_t *info;
   que_t *graph;
   ulint selected;
-  fts_zip_t *zip = NULL;
+  fts_zip_t *zip = nullptr;
   dberr_t error = DB_SUCCESS;
   mem_heap_t *heap = static_cast<mem_heap_t *>(optim->self_heap->arg);
   ibool inited = FALSE;
 
   optim->trx->op_info = "fetching FTS index words";
 
-  if (optim->zip == NULL) {
+  if (optim->zip == nullptr) {
     optim->zip = fts_zip_create(heap, FTS_ZIP_BLOCK_SIZE, n_words);
   } else {
     fts_zip_initialize(optim->zip);
@@ -870,8 +867,8 @@ static ibool fts_fetch_doc_ids(
   int i = 0;
   sel_node_t *sel_node = static_cast<sel_node_t *>(row);
   fts_doc_ids_t *fts_doc_ids = static_cast<fts_doc_ids_t *>(user_arg);
-  fts_update_t *update =
-      static_cast<fts_update_t *>(ib_vector_push(fts_doc_ids->doc_ids, NULL));
+  fts_update_t *update = static_cast<fts_update_t *>(
+      ib_vector_push(fts_doc_ids->doc_ids, nullptr));
 
   for (exp = sel_node->select_list; exp; exp = que_node_get_next(exp), ++i) {
     dfield_t *dfield = que_node_get_val(exp);
@@ -883,7 +880,7 @@ static ibool fts_fetch_doc_ids(
     /* Note: The column numbers below must match the SELECT. */
     switch (i) {
       case 0: /* DOC_ID */
-        update->fts_indexes = NULL;
+        update->fts_indexes = nullptr;
         update->doc_id = fts_read_doc_id(static_cast<byte *>(data));
         break;
 
@@ -908,7 +905,7 @@ dberr_t fts_table_fetch_doc_ids(
   ibool alloc_bk_trx = FALSE;
   char table_name[MAX_FULL_NAME_LEN];
 
-  ut_a(fts_table->suffix != NULL);
+  ut_a(fts_table->suffix != nullptr);
   ut_a(fts_table->type == FTS_COMMON_TABLE);
 
   if (!trx) {
@@ -1256,7 +1253,7 @@ static ib_vector_t *fts_optimize_word(
   ib_vector_t *nodes;
   ulint i = 0;
   int del_pos;
-  fts_node_t *dst_node = NULL;
+  fts_node_t *dst_node = nullptr;
   ib_vector_t *del_vec = optim->to_delete->doc_ids;
   ulint size = ib_vector_size(word->nodes);
 
@@ -1264,7 +1261,7 @@ static ib_vector_t *fts_optimize_word(
   nodes = ib_vector_create(word->heap_alloc, sizeof(*dst_node), 128);
 
   enc.src_last_doc_id = 0;
-  enc.src_ilist_ptr = NULL;
+  enc.src_ilist_ptr = nullptr;
 
   if (fts_enable_diag_print) {
     word->text.f_str[word->text.f_len] = 0;
@@ -1278,15 +1275,15 @@ static ib_vector_t *fts_optimize_word(
 
     src_node = (fts_node_t *)ib_vector_get(word->nodes, i);
 
-    if (dst_node == NULL || dst_node->last_doc_id > src_node->first_doc_id) {
-      dst_node = static_cast<fts_node_t *>(ib_vector_push(nodes, NULL));
+    if (dst_node == nullptr || dst_node->last_doc_id > src_node->first_doc_id) {
+      dst_node = static_cast<fts_node_t *>(ib_vector_push(nodes, nullptr));
       memset(dst_node, 0, sizeof(*dst_node));
     }
 
     /* Copy from the src to the dst node. */
     fts_optimize_node(del_vec, &del_pos, dst_node, src_node, &enc);
 
-    ut_a(enc.src_ilist_ptr != NULL);
+    ut_a(enc.src_ilist_ptr != nullptr);
 
     /* Determine the numer of bytes copied to dst_node. */
     copied = enc.src_ilist_ptr - src_node->ilist;
@@ -1297,25 +1294,25 @@ static ib_vector_t *fts_optimize_word(
     /* We are done with this node release the resources. */
     if (copied == src_node->ilist_size) {
       enc.src_last_doc_id = 0;
-      enc.src_ilist_ptr = NULL;
+      enc.src_ilist_ptr = nullptr;
 
       ut_free(src_node->ilist);
 
-      src_node->ilist = NULL;
+      src_node->ilist = nullptr;
       src_node->ilist_size = src_node->ilist_size_alloc = 0;
 
-      src_node = NULL;
+      src_node = nullptr;
 
       ++i; /* Get next source node to OPTIMIZE. */
     }
 
     if (dst_node->ilist_size >= FTS_ILIST_MAX_SIZE || i >= size) {
-      dst_node = NULL;
+      dst_node = nullptr;
     }
   }
 
   /* All dst nodes created should have been added to the vector. */
-  ut_a(dst_node == NULL);
+  ut_a(dst_node == nullptr);
 
   /* Return the OPTIMIZED nodes. */
   return (nodes);
@@ -1365,7 +1362,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_optimize_write_word(
   }
 
   fts_que_graph_free(graph);
-  graph = NULL;
+  graph = nullptr;
 
   /* Even if the operation needs to be rolled back and redone,
   we iterate over the nodes in order to free the ilist. */
@@ -1374,7 +1371,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_optimize_write_word(
 
     if (error == DB_SUCCESS) {
       /* Skip empty node. */
-      if (node->ilist == NULL) {
+      if (node->ilist == nullptr) {
         ut_ad(node->ilist_size == 0);
         continue;
       }
@@ -1390,11 +1387,11 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_optimize_write_word(
     }
 
     ut_free(node->ilist);
-    node->ilist = NULL;
+    node->ilist = nullptr;
     node->ilist_size = node->ilist_size_alloc = 0;
   }
 
-  if (graph != NULL) {
+  if (graph != nullptr) {
     fts_que_graph_free(graph);
   }
 
@@ -1416,9 +1413,9 @@ void fts_word_free(fts_word_t *word) /*!< in: instance to free.*/
 /** Optimize the word ilist and rewrite data to the FTS index.
  @return status one of RESTART, EXIT, ERROR */
 static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_optimize_compact(
-    fts_optimize_t *optim, /*!< in: optimize state data */
-    dict_index_t *index,   /*!< in: current FTS being optimized */
-    ib_time_t start_time)  /*!< in: optimize start time */
+    fts_optimize_t *optim,          /*!< in: optimize state data */
+    dict_index_t *index,            /*!< in: current FTS being optimized */
+    ib_time_monotonic_t start_time) /*!< in: optimize start time */
 {
   ulint i;
   dberr_t error = DB_SUCCESS;
@@ -1451,7 +1448,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t fts_optimize_compact(
     fts_word_free(word);
 
     if (fts_optimize_time_limit > 0 &&
-        (ut_time() - start_time) > fts_optimize_time_limit) {
+        ut_time_monotonic() - start_time > fts_optimize_time_limit) {
       optim->done = TRUE;
     }
   }
@@ -1551,22 +1548,22 @@ static void fts_optimize_graph_free(
 {
   if (graph->commit_graph) {
     que_graph_free(graph->commit_graph);
-    graph->commit_graph = NULL;
+    graph->commit_graph = nullptr;
   }
 
   if (graph->write_nodes_graph) {
     que_graph_free(graph->write_nodes_graph);
-    graph->write_nodes_graph = NULL;
+    graph->write_nodes_graph = nullptr;
   }
 
   if (graph->delete_nodes_graph) {
     que_graph_free(graph->delete_nodes_graph);
-    graph->delete_nodes_graph = NULL;
+    graph->delete_nodes_graph = nullptr;
   }
 
   if (graph->read_nodes_graph) {
     que_graph_free(graph->read_nodes_graph);
-    graph->read_nodes_graph = NULL;
+    graph->read_nodes_graph = nullptr;
   }
 }
 
@@ -1609,8 +1606,7 @@ static void fts_optimize_words(
     fts_string_t *word)    /*!< in: the starting word to optimize */
 {
   fts_fetch_t fetch;
-  ib_time_t start_time;
-  que_t *graph = NULL;
+  que_t *graph = nullptr;
   CHARSET_INFO *charset = optim->fts_index_table.charset;
 
   ut_a(!optim->done);
@@ -1619,7 +1615,7 @@ static void fts_optimize_words(
   fts_optimize_time_limit =
       fts_optimize_get_time_limit(optim->trx, &optim->fts_common_table);
 
-  start_time = ut_time();
+  const auto start_time = ut_time_monotonic();
 
   /* Setup the callback to use for fetching the word ilist etc. */
   fetch.read_arg = optim->words;
@@ -1665,7 +1661,7 @@ static void fts_optimize_words(
                        fts_select_index(charset, word->f_str, word->f_len) &&
                    graph) {
           fts_que_graph_free(graph);
-          graph = NULL;
+          graph = nullptr;
         }
       }
     } else if (error == DB_LOCK_WAIT_TIMEOUT) {
@@ -1682,7 +1678,7 @@ static void fts_optimize_words(
     }
   }
 
-  if (graph != NULL) {
+  if (graph != nullptr) {
     fts_que_graph_free(graph);
   }
 }
@@ -1890,7 +1886,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
     goto func_exit;
   }
 
-  graph = fts_parse_sql(NULL, info, fts_delete_doc_ids_sql);
+  graph = fts_parse_sql(nullptr, info, fts_delete_doc_ids_sql);
 
   /* Delete the doc ids that were copied at the start. */
   for (i = 0; i < ib_vector_size(optim->to_delete->doc_ids); ++i) {
@@ -1976,7 +1972,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   /* Delete the doc ids that were copied to delete pending state at
   the start of optimize. */
-  graph = fts_parse_sql(NULL, info, fts_end_delete_sql);
+  graph = fts_parse_sql(nullptr, info, fts_end_delete_sql);
 
   error = fts_eval_sql(optim->trx, graph);
   fts_que_graph_free(graph);
@@ -2085,7 +2081,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   }
 
   /* Move doc_ids that are to be deleted to state being deleted. */
-  graph = fts_parse_sql(NULL, info, fts_init_delete_sql);
+  graph = fts_parse_sql(nullptr, info, fts_init_delete_sql);
 
   error = fts_eval_sql(optim->trx, graph);
 
@@ -2145,7 +2141,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   if (error != DB_SUCCESS) {
     fts_doc_ids_free(optim->to_delete);
-    optim->to_delete = NULL;
+    optim->to_delete = nullptr;
   }
 
   return (error);
@@ -2282,7 +2278,7 @@ static dberr_t fts_optimize_table_bk(
 
   /* Avoid optimizing tables that were optimized recently. */
   if (slot->last_run > 0 &&
-      (ut_time() - slot->last_run) < slot->interval_time) {
+      ut_time_monotonic() - slot->last_run < slot->interval_time) {
     return (DB_SUCCESS);
 
   } else {
@@ -2302,7 +2298,7 @@ static dberr_t fts_optimize_table_bk(
         if (error == DB_SUCCESS) {
           slot->state = FTS_STATE_DONE;
           slot->last_run = 0;
-          slot->completed = ut_time();
+          slot->completed = ut_time_monotonic();
         }
       }
 
@@ -2311,7 +2307,7 @@ static dberr_t fts_optimize_table_bk(
   }
 
   /* Note time this run completed. */
-  slot->last_run = ut_time();
+  slot->last_run = ut_time_monotonic();
 
   return (error);
 }
@@ -2320,7 +2316,7 @@ static dberr_t fts_optimize_table_bk(
 dberr_t fts_optimize_table(dict_table_t *table) /*!< in: table to optimiza */
 {
   dberr_t error = DB_SUCCESS;
-  fts_optimize_t *optim = NULL;
+  fts_optimize_t *optim = nullptr;
   fts_t *fts = table->fts;
 
   if (fts_enable_diag_print) {
@@ -2364,7 +2360,7 @@ dberr_t fts_optimize_table(dict_table_t *table) /*!< in: table to optimiza */
       }
 
     } else {
-      ut_a(optim->to_delete == NULL);
+      ut_a(optim->to_delete == nullptr);
     }
 
     /* Only after all indexes have been optimized can we
@@ -2433,7 +2429,7 @@ void fts_optimize_add_table(dict_table_t *table) /*!< in: table to add */
   /* Make sure table with FTS index cannot be evicted */
   dict_table_prevent_eviction(table);
 
-  msg = fts_optimize_create_msg(FTS_MSG_ADD_TABLE, NULL);
+  msg = fts_optimize_create_msg(FTS_MSG_ADD_TABLE, nullptr);
 
   add = static_cast<fts_msg_id_t *>(mem_heap_alloc(msg->heap, sizeof(*add)));
 
@@ -2483,7 +2479,7 @@ void fts_optimize_remove_table(dict_table_t *table) /*!< in: table to remove */
     return;
   }
 
-  msg = fts_optimize_create_msg(FTS_MSG_DEL_TABLE, NULL);
+  msg = fts_optimize_create_msg(FTS_MSG_DEL_TABLE, nullptr);
 
   remove =
       static_cast<fts_msg_id_t *>(mem_heap_alloc(msg->heap, sizeof(*remove)));
@@ -2512,7 +2508,7 @@ void fts_optimize_request_sync_table(dict_table_t *table) {
     return;
   }
 
-  msg = fts_optimize_create_msg(FTS_MSG_SYNC_TABLE, NULL);
+  msg = fts_optimize_create_msg(FTS_MSG_SYNC_TABLE, nullptr);
 
   table_id =
       static_cast<table_id_t *>(mem_heap_alloc(msg->heap, sizeof(table_id_t)));
@@ -2540,7 +2536,7 @@ static fts_slot_t *fts_optimize_find_slot(
     }
   }
 
-  return (NULL);
+  return (nullptr);
 }
 
 /** Start optimizing table. */
@@ -2552,7 +2548,7 @@ static void fts_optimize_start_table(
 
   slot = fts_optimize_find_slot(tables, table->id);
 
-  if (slot == NULL) {
+  if (slot == nullptr) {
     ib::error(ER_IB_MSG_503) << "Table " << table->name
                              << " not registered"
                                 " with the optimize thread.";
@@ -2592,7 +2588,7 @@ static ibool fts_optimize_new_table(
 
   } else { /* Create a new slot. */
 
-    slot = static_cast<fts_slot_t *>(ib_vector_push(tables, NULL));
+    slot = static_cast<fts_slot_t *>(ib_vector_push(tables, nullptr));
   }
 
   memset(slot, 0x0, sizeof(*slot));
@@ -2638,11 +2634,10 @@ static ulint fts_optimize_how_many(
                                vector*/
 {
   ulint i;
-  ib_time_t delta;
   ulint n_tables = 0;
-  ib_time_t current_time;
+  ib_time_monotonic_t delta;
 
-  current_time = ut_time();
+  const auto current_time = ut_time_monotonic();
 
   for (i = 0; i < ib_vector_size(tables); ++i) {
     const fts_slot_t *slot;
@@ -2685,18 +2680,17 @@ static ulint fts_optimize_how_many(
 
 /** Check if the total memory used by all FTS table exceeds the maximum limit.
  @return true if a sync is needed, false otherwise */
-static bool fts_is_sync_needed(
-    const ib_vector_t *tables) /*!< in: registered tables
-                               vector*/
+static bool fts_is_sync_needed(const ib_vector_t *tables) /*!< in: registered
+                                                          tables vector*/
 {
   ulint total_memory = 0;
-  double time_diff = difftime(ut_time(), last_check_sync_time);
+  const auto time_diff = ut_time_monotonic() - last_check_sync_time;
 
   if (fts_need_sync || time_diff < 5) {
     return (false);
   }
 
-  last_check_sync_time = ut_time();
+  last_check_sync_time = ut_time_monotonic();
 
   mutex_enter(&dict_sys->mutex);
 
@@ -2782,7 +2776,7 @@ fts_optimize_need_sync(
 /** Sync fts cache of a table
 @param[in]	table_id	table id */
 void fts_optimize_sync_table(table_id_t table_id) {
-  dict_table_t *table = NULL;
+  dict_table_t *table = nullptr;
   MDL_ticket *mdl = nullptr;
   THD *thd = current_thd;
 
@@ -2807,7 +2801,6 @@ static void fts_optimize_thread(ib_wqueue_t *wq) {
   ulint n_tables = 0;
   ulint n_optimize = 0;
 
-  my_thread_init();
   ut_ad(!srv_read_only_mode);
 
   THD *thd = create_thd(false, true, true, 0);
@@ -2851,7 +2844,7 @@ static void fts_optimize_thread(ib_wqueue_t *wq) {
           ib_wqueue_timedwait(wq, FTS_QUEUE_WAIT_IN_USECS));
 
       /* Timeout ? */
-      if (msg == NULL) {
+      if (msg == nullptr) {
         if (fts_is_sync_needed(tables)) {
           fts_need_sync = true;
         }
@@ -2931,10 +2924,7 @@ static void fts_optimize_thread(ib_wqueue_t *wq) {
 
   ib::info(ER_IB_MSG_505) << "FTS optimize thread exiting.";
 
-  os_event_set(fts_opt_shutdown_event);
-
   destroy_thd(thd);
-  my_thread_end();
 }
 
 /** Startup the optimize thread and create the work queue. */
@@ -2942,15 +2932,16 @@ void fts_optimize_init(void) {
   ut_ad(!srv_read_only_mode);
 
   /* For now we only support one optimize thread. */
-  ut_a(fts_optimize_wq == NULL);
+  ut_a(fts_optimize_wq == nullptr);
 
   fts_optimize_wq = ib_wqueue_create();
-  fts_opt_shutdown_event = os_event_create(0);
-  ut_a(fts_optimize_wq != NULL);
-  last_check_sync_time = ut_time();
+  ut_a(fts_optimize_wq != nullptr);
+  last_check_sync_time = ut_time_monotonic();
 
-  os_thread_create(fts_optimize_thread_key, fts_optimize_thread,
-                   fts_optimize_wq);
+  srv_threads.m_fts_optimize = os_thread_create(
+      fts_optimize_thread_key, fts_optimize_thread, fts_optimize_wq);
+
+  srv_threads.m_fts_optimize.start();
 }
 
 /** Shutdown fts optimize thread. */
@@ -2973,14 +2964,12 @@ void fts_optimize_shutdown() {
   can't delete the work queue here because the add thread needs
   deregister the FTS tables. */
 
-  msg = fts_optimize_create_msg(FTS_MSG_STOP, NULL);
+  msg = fts_optimize_create_msg(FTS_MSG_STOP, nullptr);
 
   ib_wqueue_add(fts_optimize_wq, msg, msg->heap);
 
-  os_event_wait(fts_opt_shutdown_event);
-
-  os_event_destroy(fts_opt_shutdown_event);
+  srv_threads.m_fts_optimize.join();
 
   ib_wqueue_free(fts_optimize_wq);
-  fts_optimize_wq = NULL;
+  fts_optimize_wq = nullptr;
 }

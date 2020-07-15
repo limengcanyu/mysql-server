@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -106,40 +106,38 @@ Pipeline_stats_member_message::Pipeline_stats_member_message(
 Pipeline_stats_member_message::~Pipeline_stats_member_message() {}
 
 int32 Pipeline_stats_member_message::get_transactions_waiting_certification() {
-  DBUG_ENTER(
-      "Pipeline_stats_member_message::get_transactions_waiting_certification");
-  DBUG_RETURN(m_transactions_waiting_certification);
+  DBUG_TRACE;
+  return m_transactions_waiting_certification;
 }
 
 int64 Pipeline_stats_member_message::get_transactions_certified() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_certified");
-  DBUG_RETURN(m_transactions_certified);
+  DBUG_TRACE;
+  return m_transactions_certified;
 }
 
 int32 Pipeline_stats_member_message::get_transactions_waiting_apply() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_waiting_apply");
-  DBUG_RETURN(m_transactions_waiting_apply);
+  DBUG_TRACE;
+  return m_transactions_waiting_apply;
 }
 
 int64 Pipeline_stats_member_message::get_transactions_applied() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_applied");
-  DBUG_RETURN(m_transactions_applied);
+  DBUG_TRACE;
+  return m_transactions_applied;
 }
 
 int64 Pipeline_stats_member_message::get_transactions_local() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_local");
-  DBUG_RETURN(m_transactions_local);
+  DBUG_TRACE;
+  return m_transactions_local;
 }
 
 int64 Pipeline_stats_member_message::get_transactions_negative_certified() {
-  DBUG_ENTER(
-      "Pipeline_stats_member_message::get_transactions_negative_certified");
-  DBUG_RETURN(m_transactions_negative_certified);
+  DBUG_TRACE;
+  return m_transactions_negative_certified;
 }
 
 int64 Pipeline_stats_member_message::get_transactions_rows_validating() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_rows_validating");
-  DBUG_RETURN(m_transactions_rows_validating);
+  DBUG_TRACE;
+  return m_transactions_rows_validating;
 }
 
 bool Pipeline_stats_member_message::get_transation_gtids_present() const {
@@ -147,32 +145,30 @@ bool Pipeline_stats_member_message::get_transation_gtids_present() const {
 }
 
 int64 Pipeline_stats_member_message::get_transactions_local_rollback() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_transactions_local_rollback");
-  DBUG_RETURN(m_transactions_local_rollback);
+  DBUG_TRACE;
+  return m_transactions_local_rollback;
 }
 
 const std::string &
 Pipeline_stats_member_message::get_transaction_committed_all_members() {
-  DBUG_ENTER(
-      "Pipeline_stats_member_message::get_transaction_committed_all_members");
-  DBUG_RETURN(m_transactions_committed_all_members);
+  DBUG_TRACE;
+  return m_transactions_committed_all_members;
 }
 
 const std::string &
 Pipeline_stats_member_message::get_transaction_last_conflict_free() {
-  DBUG_ENTER(
-      "Pipeline_stats_member_message::get_transaction_last_conflict_free");
-  DBUG_RETURN(m_transaction_last_conflict_free);
+  DBUG_TRACE;
+  return m_transaction_last_conflict_free;
 }
 
 Flow_control_mode Pipeline_stats_member_message::get_flow_control_mode() {
-  DBUG_ENTER("Pipeline_stats_member_message::get_flow_control_mode");
-  DBUG_RETURN(m_flow_control_mode);
+  DBUG_TRACE;
+  return m_flow_control_mode;
 }
 
 void Pipeline_stats_member_message::encode_payload(
     std::vector<unsigned char> *buffer) const {
-  DBUG_ENTER("Pipeline_stats_member_message::encode_payload");
+  DBUG_TRACE;
 
   uint32 transactions_waiting_certification_aux =
       (uint32)m_transactions_waiting_certification;
@@ -218,20 +214,18 @@ void Pipeline_stats_member_message::encode_payload(
   encode_payload_item_int8(buffer, PIT_TRANSACTIONS_LOCAL_ROLLBACK,
                            transactions_local_rollback_aux);
 
-  char flow_control_mode_aux = static_cast<char>(flow_control_mode_var);
+  char flow_control_mode_aux = static_cast<char>(get_flow_control_mode_var());
   encode_payload_item_char(buffer, PIT_FLOW_CONTROL_MODE,
                            flow_control_mode_aux);
 
   char aux_transaction_gtids_present = m_transaction_gtids_present ? '1' : '0';
   encode_payload_item_char(buffer, PIT_TRANSACTION_GTIDS_PRESENT,
                            aux_transaction_gtids_present);
-
-  DBUG_VOID_RETURN;
 }
 
 void Pipeline_stats_member_message::decode_payload(const unsigned char *buffer,
                                                    const unsigned char *end) {
-  DBUG_ENTER("Pipeline_stats_member_message::decode_payload");
+  DBUG_TRACE;
   const unsigned char *slider = buffer;
   uint16 payload_item_type = 0;
   unsigned long long payload_item_length = 0;
@@ -329,8 +323,6 @@ void Pipeline_stats_member_message::decode_payload(const unsigned char *buffer,
         break;
     }
   }
-
-  DBUG_VOID_RETURN;
 }
 
 Pipeline_stats_member_collector::Pipeline_stats_member_collector()
@@ -473,7 +465,7 @@ uint64 Pipeline_stats_member_collector::
 
 void Pipeline_stats_member_collector::send_stats_member_message(
     Flow_control_mode mode) {
-  if (local_member_info == NULL) return; /* purecov: inspected */
+  if (local_member_info == nullptr) return; /* purecov: inspected */
   Group_member_info::Group_member_status member_status =
       local_member_info->get_recovery_status();
   if (member_status != Group_member_info::MEMBER_ONLINE &&
@@ -486,10 +478,10 @@ void Pipeline_stats_member_collector::send_stats_member_message(
   Certifier_interface *cert_interface =
       (applier_module && applier_module->get_certification_handler())
           ? applier_module->get_certification_handler()->get_certifier()
-          : NULL;
+          : nullptr;
 
-  if (send_transaction_identifiers && cert_interface != NULL) {
-    char *committed_transactions_buf = NULL;
+  if (send_transaction_identifiers && cert_interface != nullptr) {
+    char *committed_transactions_buf = nullptr;
     size_t committed_transactions_buf_length = 0;
     int get_group_stable_transactions_set_string_outcome =
         cert_interface->get_group_stable_transactions_set_string(
@@ -507,9 +499,11 @@ void Pipeline_stats_member_collector::send_stats_member_message(
       static_cast<int32>(applier_module->get_message_queue_size()),
       m_transactions_waiting_apply.load(), m_transactions_certified.load(),
       m_transactions_applied.load(), m_transactions_local.load(),
-      (cert_interface != NULL) ? cert_interface->get_negative_certified() : 0,
-      (cert_interface != NULL) ? cert_interface->get_certification_info_size()
-                               : 0,
+      (cert_interface != nullptr) ? cert_interface->get_negative_certified()
+                                  : 0,
+      (cert_interface != nullptr)
+          ? cert_interface->get_certification_info_size()
+          : 0,
       send_transaction_identifiers, committed_transactions,
       last_conflict_free_transaction, m_transactions_local_rollback.load(),
       mode);
@@ -560,6 +554,26 @@ Pipeline_member_stats::Pipeline_member_stats(Pipeline_stats_member_message &msg)
       m_flow_control_mode(msg.get_flow_control_mode()),
       m_stamp(0) {}
 
+Pipeline_member_stats::Pipeline_member_stats(
+    Pipeline_stats_member_collector *pipeline_stats, ulonglong applier_queue,
+    ulonglong negative_certified, ulonglong certification_size) {
+  m_transactions_waiting_certification = applier_queue;
+  m_transactions_waiting_apply =
+      pipeline_stats->get_transactions_waiting_apply();
+  m_transactions_certified = pipeline_stats->get_transactions_certified();
+  m_delta_transactions_certified = 0;
+  m_transactions_applied = pipeline_stats->get_transactions_applied();
+  m_delta_transactions_applied = 0;
+  m_transactions_local = pipeline_stats->get_transactions_local();
+  m_delta_transactions_local = 0;
+  m_transactions_negative_certified = negative_certified;
+  m_transactions_rows_validating = certification_size;
+  m_transactions_local_rollback =
+      pipeline_stats->get_transactions_local_rollback();
+  m_flow_control_mode = FCM_DISABLED;
+  m_stamp = 0;
+}
+
 void Pipeline_member_stats::update_member_stats(
     Pipeline_stats_member_message &msg, uint64 stamp) {
   m_transactions_waiting_certification =
@@ -608,8 +622,9 @@ void Pipeline_member_stats::update_member_stats(
 bool Pipeline_member_stats::is_flow_control_needed() {
   return (m_flow_control_mode == FCM_QUOTA) &&
          (m_transactions_waiting_certification >
-              flow_control_certifier_threshold_var ||
-          m_transactions_waiting_apply > flow_control_applier_threshold_var);
+              get_flow_control_certifier_threshold_var() ||
+          m_transactions_waiting_apply >
+              get_flow_control_applier_threshold_var());
 }
 
 int32 Pipeline_member_stats::get_transactions_waiting_certification() {
@@ -656,13 +671,24 @@ int64 Pipeline_member_stats::get_transactions_local_rollback() {
   return m_transactions_local_rollback;
 }
 
-const std::string &
-Pipeline_member_stats::get_transaction_committed_all_members() {
-  return m_transactions_committed_all_members;
+void Pipeline_member_stats::get_transaction_committed_all_members(
+    std::string &value) {
+  value.assign(m_transactions_committed_all_members);
 }
 
-const std::string &Pipeline_member_stats::get_transaction_last_conflict_free() {
-  return m_transaction_last_conflict_free;
+void Pipeline_member_stats::set_transaction_committed_all_members(char *str,
+                                                                  size_t len) {
+  m_transactions_committed_all_members.assign(str, len);
+}
+
+void Pipeline_member_stats::get_transaction_last_conflict_free(
+    std::string &value) {
+  value.assign(m_transaction_last_conflict_free);
+}
+
+void Pipeline_member_stats::set_transaction_last_conflict_free(
+    std::string &value) {
+  m_transaction_last_conflict_free.assign(value);
 }
 
 Flow_control_mode Pipeline_member_stats::get_flow_control_mode() {
@@ -694,11 +720,17 @@ Flow_control_module::Flow_control_module()
                    &m_flow_control_lock, MY_MUTEX_INIT_FAST);
   mysql_cond_init(key_GR_COND_pipeline_stats_flow_control,
                   &m_flow_control_cond);
+  m_flow_control_module_info_lock = new Checkable_rwlock(
+#ifdef HAVE_PSI_INTERFACE
+      key_GR_RWLOCK_flow_control_module_info
+#endif
+  );
 }
 
 Flow_control_module::~Flow_control_module() {
   mysql_mutex_destroy(&m_flow_control_lock);
   mysql_cond_destroy(&m_flow_control_cond);
+  delete m_flow_control_module_info_lock;
 }
 
 void Flow_control_module::flow_control_step(
@@ -706,8 +738,9 @@ void Flow_control_module::flow_control_step(
   if (--seconds_to_skip > 0) return;
 
   int32 holds = m_holds_in_period.exchange(0);
-  Flow_control_mode fcm = static_cast<Flow_control_mode>(flow_control_mode_var);
-  seconds_to_skip = flow_control_period_var;
+  Flow_control_mode fcm =
+      static_cast<Flow_control_mode>(get_flow_control_mode_var());
+  seconds_to_skip = get_flow_control_period_var();
   m_stamp++;
 
   /*
@@ -731,12 +764,15 @@ void Flow_control_module::flow_control_step(
   switch (fcm) {
     case FCM_QUOTA: {
       double HOLD_FACTOR =
-          1.0 - static_cast<double>(flow_control_hold_percent_var) / 100.0;
+          1.0 -
+          static_cast<double>(get_flow_control_hold_percent_var()) / 100.0;
       double RELEASE_FACTOR =
-          1.0 + static_cast<double>(flow_control_release_percent_var) / 100.0;
+          1.0 +
+          static_cast<double>(get_flow_control_release_percent_var()) / 100.0;
       double TARGET_FACTOR =
-          static_cast<double>(flow_control_member_quota_percent_var) / 100.0;
-      int64 max_quota = static_cast<int64>(flow_control_max_quota_var);
+          static_cast<double>(get_flow_control_member_quota_percent_var()) /
+          100.0;
+      int64 max_quota = static_cast<int64>(get_flow_control_max_quota_var());
 
       /*
         Postponed transactions
@@ -761,6 +797,7 @@ void Flow_control_module::flow_control_step(
         int64 min_certifier_capacity = MAXTPS, min_applier_capacity = MAXTPS,
               safe_capacity = MAXTPS;
 
+        m_flow_control_module_info_lock->rdlock();
         Flow_control_module_info::iterator it = m_info.begin();
         while (it != m_info.end()) {
           if (it->second.get_stamp() < (m_stamp - 10)) {
@@ -771,10 +808,10 @@ void Flow_control_module::flow_control_step(
             m_info.erase(it++);
           } else {
             if (it->second.get_flow_control_mode() == FCM_QUOTA) {
-              if (flow_control_certifier_threshold_var > 0 &&
+              if (get_flow_control_certifier_threshold_var() > 0 &&
                   it->second.get_delta_transactions_certified() > 0 &&
                   it->second.get_transactions_waiting_certification() -
-                          flow_control_certifier_threshold_var >
+                          get_flow_control_certifier_threshold_var() >
                       0 &&
                   min_certifier_capacity >
                       it->second.get_delta_transactions_certified()) {
@@ -787,10 +824,10 @@ void Flow_control_module::flow_control_step(
                     std::min(safe_capacity,
                              it->second.get_delta_transactions_certified());
 
-              if (flow_control_applier_threshold_var > 0 &&
+              if (get_flow_control_applier_threshold_var() > 0 &&
                   it->second.get_delta_transactions_applied() > 0 &&
                   it->second.get_transactions_waiting_apply() -
-                          flow_control_applier_threshold_var >
+                          get_flow_control_applier_threshold_var() >
                       0) {
                 if (min_applier_capacity >
                     it->second.get_delta_transactions_applied())
@@ -811,6 +848,7 @@ void Flow_control_module::flow_control_step(
             ++it;
           }
         }
+        m_flow_control_module_info_lock->unlock();
 
         // Avoid division by zero.
         num_writing_members = num_writing_members > 0 ? num_writing_members : 1;
@@ -821,13 +859,13 @@ void Flow_control_module::flow_control_step(
 
         // Minimum capacity will never be less than lim_throttle.
         int64 lim_throttle = static_cast<int64>(
-            0.05 * std::min(flow_control_certifier_threshold_var,
-                            flow_control_applier_threshold_var));
-        if (flow_control_min_recovery_quota_var > 0 &&
+            0.05 * std::min(get_flow_control_certifier_threshold_var(),
+                            get_flow_control_applier_threshold_var()));
+        if (get_flow_control_min_recovery_quota_var() > 0 &&
             num_non_recovering_members == 0)
-          lim_throttle = flow_control_min_recovery_quota_var;
-        if (flow_control_min_quota_var > 0)
-          lim_throttle = flow_control_min_quota_var;
+          lim_throttle = get_flow_control_min_recovery_quota_var();
+        if (get_flow_control_min_quota_var() > 0)
+          lim_throttle = get_flow_control_min_quota_var();
 
         min_capacity =
             std::max(std::min(min_capacity, safe_capacity), lim_throttle);
@@ -836,7 +874,7 @@ void Flow_control_module::flow_control_step(
         if (max_quota > 0) quota_size = std::min(quota_size, max_quota);
 
         if (num_writing_members > 1) {
-          if (flow_control_member_quota_percent_var == 0)
+          if (get_flow_control_member_quota_percent_var() == 0)
             quota_size /= num_writing_members;
           else
             quota_size = static_cast<int64>(static_cast<double>(quota_size) *
@@ -848,11 +886,12 @@ void Flow_control_module::flow_control_step(
 
 #ifndef DBUG_OFF
         LogPluginErr(INFORMATION_LEVEL, ER_GRP_RPL_FLOW_CONTROL_STATS,
-                     quota_size, flow_control_period_var, num_writing_members,
-                     num_non_recovering_members, min_capacity, lim_throttle);
+                     quota_size, get_flow_control_period_var(),
+                     num_writing_members, num_non_recovering_members,
+                     min_capacity, lim_throttle);
 #endif
       } else {
-        if (quota_size > 0 && flow_control_release_percent_var > 0 &&
+        if (quota_size > 0 && get_flow_control_release_percent_var() > 0 &&
             (quota_size * RELEASE_FACTOR) < MAXTPS) {
           int64 quota_size_next =
               static_cast<int64>(quota_size * RELEASE_FACTOR);
@@ -890,7 +929,7 @@ void Flow_control_module::flow_control_step(
 
 int Flow_control_module::handle_stats_data(const uchar *data, size_t len,
                                            const std::string &member_id) {
-  DBUG_ENTER("Flow_control_module::handle_stats_data");
+  DBUG_TRACE;
   int error = 0;
   Pipeline_stats_member_message message(data, len);
 
@@ -898,6 +937,7 @@ int Flow_control_module::handle_stats_data(const uchar *data, size_t len,
     This method is called synchronously by communication layer, so
     we do not need concurrency control.
   */
+  m_flow_control_module_info_lock->wrlock();
   Flow_control_module_info::iterator it = m_info.find(member_id);
   if (it == m_info.end()) {
     Pipeline_member_stats stats;
@@ -920,21 +960,34 @@ int Flow_control_module::handle_stats_data(const uchar *data, size_t len,
 #endif
   }
 
-  DBUG_RETURN(error);
+  m_flow_control_module_info_lock->unlock();
+  return error;
 }
 
 Pipeline_member_stats *Flow_control_module::get_pipeline_stats(
     const std::string &member_id) {
-  Pipeline_member_stats *member_pipeline_stats = NULL;
+  Pipeline_member_stats *member_pipeline_stats = nullptr;
+  m_flow_control_module_info_lock->rdlock();
   Flow_control_module_info::iterator it = m_info.find(member_id);
   if (it != m_info.end()) {
-    member_pipeline_stats = new Pipeline_member_stats(it->second);
+    try {
+      DBUG_EXECUTE_IF("flow_control_simulate_bad_alloc_exception",
+                      throw std::bad_alloc(););
+      member_pipeline_stats = new Pipeline_member_stats(it->second);
+    } catch (const std::bad_alloc &) {
+      my_error(ER_STD_BAD_ALLOC_ERROR, MYF(0),
+               "while getting replication_group_member_stats table rows",
+               "get_pipeline_stats");
+      m_flow_control_module_info_lock->unlock();
+      return nullptr;
+    }
   }
+  m_flow_control_module_info_lock->unlock();
   return member_pipeline_stats;
 }
 
 int32 Flow_control_module::do_wait() {
-  DBUG_ENTER("Flow_control_module::do_wait");
+  DBUG_TRACE;
   int64 quota_size = m_quota_size.load();
   int64 quota_used = ++m_quota_used;
 
@@ -947,5 +1000,5 @@ int32 Flow_control_module::do_wait() {
     mysql_mutex_unlock(&m_flow_control_lock);
   }
 
-  DBUG_RETURN(0);
+  return 0;
 }

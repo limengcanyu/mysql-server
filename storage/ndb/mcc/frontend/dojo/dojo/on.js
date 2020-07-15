@@ -1,177 +1,232 @@
 /*
-	Copyright (c) 2004-2011, The Dojo Foundation All Rights Reserved.
+	Copyright (c) 2004-2016, The JS Foundation All Rights Reserved.
 	Available via Academic Free License >= 2.1 OR the modified BSD license.
 	see: http://dojotoolkit.org/license for details
 */
 
 //>>built
-define("dojo/on",["./has!dom-addeventlistener?:./aspect","./_base/kernel","./has"],function(_1,_2,_3){
+define("dojo/on",["./has!dom-addeventlistener?:./aspect","./_base/kernel","./sniff"],function(_1,_2,_3){
 "use strict";
 if(1){
 var _4=window.ScriptEngineMajorVersion;
 _3.add("jscript",_4&&(_4()+ScriptEngineMinorVersion()/10));
 _3.add("event-orientationchange",_3("touch")&&!_3("android"));
-}
-var on=function(_5,_6,_7,_8){
-if(_5.on){
-return _5.on(_6,_7);
-}
-return on.parse(_5,_6,_7,_9,_8,this);
-};
-on.pausable=function(_a,_b,_c,_d){
-var _e;
-var _f=on(_a,_b,function(){
-if(!_e){
-return _c.apply(this,arguments);
-}
-},_d);
-_f.pause=function(){
-_e=true;
-};
-_f.resume=function(){
-_e=false;
-};
-return _f;
-};
-on.once=function(_10,_11,_12,_13){
-var _14=on(_10,_11,function(){
-_14.remove();
-return _12.apply(this,arguments);
+_3.add("event-stopimmediatepropagation",window.Event&&!!window.Event.prototype&&!!window.Event.prototype.stopImmediatePropagation);
+_3.add("event-focusin",function(_5,_6,_7){
+return "onfocusin" in _7;
 });
+if(_3("touch")){
+_3.add("touch-can-modify-event-delegate",function(){
+var _8=function(){
+};
+_8.prototype=document.createEvent("MouseEvents");
+try{
+var _9=new _8;
+_9.target=null;
+return _9.target===null;
+}
+catch(e){
+return false;
+}
+});
+}
+}
+var on=function(_a,_b,_c,_d){
+if(typeof _a.on=="function"&&typeof _b!="function"&&!_a.nodeType){
+return _a.on(_b,_c);
+}
+return on.parse(_a,_b,_c,_e,_d,this);
+};
+on.pausable=function(_f,_10,_11,_12){
+var _13;
+var _14=on(_f,_10,function(){
+if(!_13){
+return _11.apply(this,arguments);
+}
+},_12);
+_14.pause=function(){
+_13=true;
+};
+_14.resume=function(){
+_13=false;
+};
 return _14;
 };
-on.parse=function(_15,_16,_17,_18,_19,_1a){
-if(_16.call){
-return _16.call(_1a,_15,_17);
+on.once=function(_15,_16,_17,_18){
+var _19=on(_15,_16,function(){
+_19.remove();
+return _17.apply(this,arguments);
+});
+return _19;
+};
+on.parse=function(_1a,_1b,_1c,_1d,_1e,_1f){
+var _20;
+if(_1b.call){
+return _1b.call(_1f,_1a,_1c);
 }
-if(_16.indexOf(",")>-1){
-var _1b=_16.split(/\s*,\s*/);
-var _1c=[];
+if(_1b instanceof Array){
+_20=_1b;
+}else{
+if(_1b.indexOf(",")>-1){
+_20=_1b.split(/\s*,\s*/);
+}
+}
+if(_20){
+var _21=[];
 var i=0;
-var _1d;
-while(_1d=_1b[i++]){
-_1c.push(_18(_15,_1d,_17,_19,_1a));
+var _22;
+while(_22=_20[i++]){
+_21.push(on.parse(_1a,_22,_1c,_1d,_1e,_1f));
 }
-_1c.remove=function(){
-for(var i=0;i<_1c.length;i++){
-_1c[i].remove();
+_21.remove=function(){
+for(var i=0;i<_21.length;i++){
+_21[i].remove();
 }
 };
-return _1c;
+return _21;
 }
-return _18(_15,_16,_17,_19,_1a);
+return _1d(_1a,_1b,_1c,_1e,_1f);
 };
-var _1e=/^touch/;
-function _9(_1f,_20,_21,_22,_23){
-var _24=_20.match(/(.*):(.*)/);
-if(_24){
-_20=_24[2];
-_24=_24[1];
-return on.selector(_24,_20).call(_23,_1f,_21);
+var _23=/^touch/;
+function _e(_24,_25,_26,_27,_28){
+var _29=_25.match(/(.*):(.*)/);
+if(_29){
+_25=_29[2];
+_29=_29[1];
+return on.selector(_29,_25).call(_28,_24,_26);
 }
 if(_3("touch")){
-if(_1e.test(_20)){
-_21=_25(_21);
+if(_23.test(_25)){
+_26=_2a(_26);
 }
-if(!_3("event-orientationchange")&&(_20=="orientationchange")){
-_20="resize";
-_1f=window;
-_21=_25(_21);
+if(!_3("event-orientationchange")&&(_25=="orientationchange")){
+_25="resize";
+_24=window;
+_26=_2a(_26);
 }
 }
-if(_1f.addEventListener){
-var _26=_20 in _27;
-_1f.addEventListener(_26?_27[_20]:_20,_21,_26);
+if(_2b){
+_26=_2b(_26);
+}
+if(_24.addEventListener){
+var _2c=_25 in _2d,_2e=_2c?_2d[_25]:_25;
+_24.addEventListener(_2e,_26,_2c);
 return {remove:function(){
-_1f.removeEventListener(_20,_21,_26);
+_24.removeEventListener(_2e,_26,_2c);
 }};
 }
-_20="on"+_20;
-if(_28&&_1f.attachEvent){
-return _28(_1f,_20,_21);
+_25="on"+_25;
+if(_2f&&_24.attachEvent){
+return _2f(_24,_25,_26);
 }
 throw new Error("Target must be an event emitter");
 };
-on.selector=function(_29,_2a,_2b){
-return function(_2c,_2d){
-var _2e=this;
-var _2f=_2a.bubble;
-if(_2f){
-_2a=_2f;
-}else{
-if(_2b!==false){
-_2b=true;
+on.matches=function(_30,_31,_32,_33,_34){
+_34=_34&&(typeof _34.matches=="function")?_34:_2.query;
+_33=_33!==false;
+if(_30.nodeType!=1){
+_30=_30.parentNode;
+}
+while(!_34.matches(_30,_31,_32)){
+if(_30==_32||_33===false||!(_30=_30.parentNode)||_30.nodeType!=1){
+return false;
 }
 }
-return on(_2c,_2a,function(_30){
-var _31=_30.target;
-_2e=_2e&&_2e.matches?_2e:_2.query;
-while(!_2e.matches(_31,_29,_2c)){
-if(_31==_2c||!_2b||!(_31=_31.parentNode)){
-return;
+return _30;
+};
+on.selector=function(_35,_36,_37){
+return function(_38,_39){
+var _3a=typeof _35=="function"?{matches:_35}:this,_3b=_36.bubble;
+function _3c(_3d){
+return on.matches(_3d,_35,_38,_37,_3a);
+};
+if(_3b){
+return on(_38,_3b(_3c),_39);
 }
+return on(_38,_36,function(_3e){
+var _3f=_3c(_3e.target);
+if(_3f){
+_3e.selectorTarget=_3f;
+return _39.call(_3f,_3e);
 }
-return _2d.call(_31,_30);
 });
 };
 };
-function _32(){
+function _40(){
 this.cancelable=false;
+this.defaultPrevented=true;
 };
-function _33(){
+function _41(){
 this.bubbles=false;
 };
-var _34=[].slice,_35=on.emit=function(_36,_37,_38){
-var _39=_34.call(arguments,2);
-var _3a="on"+_37;
-if("parentNode" in _36){
-var _3b=_39[0]={};
-for(var i in _38){
-_3b[i]=_38[i];
+var _42=[].slice,_43=on.emit=function(_44,_45,_46){
+var _47=_42.call(arguments,2);
+var _48="on"+_45;
+if("parentNode" in _44){
+var _49=_47[0]={};
+for(var i in _46){
+_49[i]=_46[i];
 }
-_3b.preventDefault=_32;
-_3b.stopPropagation=_33;
-_3b.target=_36;
-_3b.type=_37;
-_38=_3b;
+_49.preventDefault=_40;
+_49.stopPropagation=_41;
+_49.target=_44;
+_49.type=_45;
+_46=_49;
 }
 do{
-_36[_3a]&&_36[_3a].apply(_36,_39);
-}while(_38&&_38.bubbles&&(_36=_36.parentNode));
-return _38&&_38.cancelable&&_38;
+_44[_48]&&_44[_48].apply(_44,_47);
+}while(_46&&_46.bubbles&&(_44=_44.parentNode));
+return _46&&_46.cancelable&&_46;
 };
-var _27={};
+var _2d=_3("event-focusin")?{}:{focusin:"focus",focusout:"blur"};
+if(!_3("event-stopimmediatepropagation")){
+var _4a=function(){
+this.immediatelyStopped=true;
+this.modified=true;
+};
+var _2b=function(_4b){
+return function(_4c){
+if(!_4c.immediatelyStopped){
+_4c.stopImmediatePropagation=_4a;
+return _4b.apply(this,arguments);
+}
+};
+};
+}
 if(_3("dom-addeventlistener")){
-_27={focusin:"focus",focusout:"blur"};
-if(_3("opera")){
-_27.keydown="keypress";
-}
-on.emit=function(_3c,_3d,_3e){
-if(_3c.dispatchEvent&&document.createEvent){
-var _3f=document.createEvent("HTMLEvents");
-_3f.initEvent(_3d,!!_3e.bubbles,!!_3e.cancelable);
-for(var i in _3e){
-var _40=_3e[i];
-if(!(i in _3f)){
-_3f[i]=_3e[i];
+on.emit=function(_4d,_4e,_4f){
+if(_4d.dispatchEvent&&document.createEvent){
+var _50=_4d.ownerDocument||document;
+var _51=_50.createEvent("HTMLEvents");
+_51.initEvent(_4e,!!_4f.bubbles,!!_4f.cancelable);
+for(var i in _4f){
+if(!(i in _51)){
+_51[i]=_4f[i];
 }
 }
-return _3c.dispatchEvent(_3f)&&_3f;
+return _4d.dispatchEvent(_51)&&_51;
 }
-return _35.apply(on,arguments);
+return _43.apply(on,arguments);
 };
 }else{
-on._fixEvent=function(evt,_41){
+on._fixEvent=function(evt,_52){
 if(!evt){
-var w=_41&&(_41.ownerDocument||_41.document||_41).parentWindow||window;
+var w=_52&&(_52.ownerDocument||_52.document||_52).parentWindow||window;
 evt=w.event;
 }
 if(!evt){
-return (evt);
+return evt;
+}
+try{
+if(_53&&evt.type==_53.type&&evt.srcElement==_53.target){
+evt=_53;
+}
+}
+catch(e){
 }
 if(!evt.target){
 evt.target=evt.srcElement;
-evt.currentTarget=(_41||evt.srcElement);
+evt.currentTarget=(_52||evt.srcElement);
 if(evt.type=="mouseover"){
 evt.relatedTarget=evt.fromElement;
 }
@@ -179,8 +234,8 @@ if(evt.type=="mouseout"){
 evt.relatedTarget=evt.toElement;
 }
 if(!evt.stopPropagation){
-evt.stopPropagation=_42;
-evt.preventDefault=_43;
+evt.stopPropagation=_54;
+evt.preventDefault=_55;
 }
 switch(evt.type){
 case "keypress":
@@ -198,54 +253,64 @@ c=99;
 }
 }
 evt.charCode=c;
-_44(evt);
+_56(evt);
 break;
 }
 }
 return evt;
 };
-var _45=function(_46){
-this.handle=_46;
+var _53,_57=function(_58){
+this.handle=_58;
 };
-_45.prototype.remove=function(){
+_57.prototype.remove=function(){
 delete _dojoIEListeners_[this.handle];
 };
-var _47=function(_48){
+var _59=function(_5a){
 return function(evt){
 evt=on._fixEvent(evt,this);
-return _48.call(this,evt);
+var _5b=_5a.call(this,evt);
+if(evt.modified){
+if(!_53){
+setTimeout(function(){
+_53=null;
+});
+}
+_53=evt;
+}
+return _5b;
 };
 };
-var _28=function(_49,_4a,_4b){
-_4b=_47(_4b);
-if(((_49.ownerDocument?_49.ownerDocument.parentWindow:_49.parentWindow||_49.window||window)!=top||_3("jscript")<5.8)&&!_3("config-_allow_leaks")){
+var _2f=function(_5c,_5d,_5e){
+_5e=_59(_5e);
+if(((_5c.ownerDocument?_5c.ownerDocument.parentWindow:_5c.parentWindow||_5c.window||window)!=top||_3("jscript")<5.8)&&!_3("config-_allow_leaks")){
 if(typeof _dojoIEListeners_=="undefined"){
 _dojoIEListeners_=[];
 }
-var _4c=_49[_4a];
-if(!_4c||!_4c.listeners){
-var _4d=_4c;
-_49[_4a]=_4c=Function("event","var callee = arguments.callee; for(var i = 0; i<callee.listeners.length; i++){var listener = _dojoIEListeners_[callee.listeners[i]]; if(listener){listener.call(this,event);}}");
-_4c.listeners=[];
-_4c.global=this;
-if(_4d){
-_4c.listeners.push(_dojoIEListeners_.push(_4d)-1);
+var _5f=_5c[_5d];
+if(!_5f||!_5f.listeners){
+var _60=_5f;
+_5f=Function("event","var callee = arguments.callee; for(var i = 0; i<callee.listeners.length; i++){var listener = _dojoIEListeners_[callee.listeners[i]]; if(listener){listener.call(this,event);}}");
+_5f.listeners=[];
+_5c[_5d]=_5f;
+_5f.global=this;
+if(_60){
+_5f.listeners.push(_dojoIEListeners_.push(_60)-1);
 }
 }
-var _4e;
-_4c.listeners.push(_4e=(_4c.global._dojoIEListeners_.push(_4b)-1));
-return new _45(_4e);
+var _61;
+_5f.listeners.push(_61=(_5f.global._dojoIEListeners_.push(_5e)-1));
+return new _57(_61);
 }
-return _1.after(_49,_4a,_4b,true);
+return _1.after(_5c,_5d,_5e,true);
 };
-var _44=function(evt){
+var _56=function(evt){
 evt.keyChar=evt.charCode?String.fromCharCode(evt.charCode):"";
 evt.charOrCode=evt.keyChar||evt.keyCode;
 };
-var _42=function(){
+var _54=function(){
 this.cancelBubble=true;
 };
-var _43=on._preventDefault=function(){
+var _55=on._preventDefault=function(){
 this.bubbledKeyCode=this.keyCode;
 if(this.ctrlKey){
 try{
@@ -254,56 +319,67 @@ this.keyCode=0;
 catch(e){
 }
 }
+this.defaultPrevented=true;
 this.returnValue=false;
+this.modified=true;
 };
 }
 if(_3("touch")){
-var _4f=function(){
+var _62=function(){
 };
-var _50=window.orientation;
-var _25=function(_51){
-return function(_52){
-var _53=_52.corrected;
-if(!_53){
-var _54=_52.type;
+var _63=window.orientation;
+var _2a=function(_64){
+return function(_65){
+var _66=_65.corrected;
+if(!_66){
+var _67=_65.type;
 try{
-delete _52.type;
+delete _65.type;
 }
 catch(e){
 }
-if(_52.type){
-_4f.prototype=_52;
-var _53=new _4f;
-_53.preventDefault=function(){
-_52.preventDefault();
+if(_65.type){
+if(_3("touch-can-modify-event-delegate")){
+_62.prototype=_65;
+_66=new _62;
+}else{
+_66={};
+for(var _68 in _65){
+_66[_68]=_65[_68];
+}
+}
+_66.preventDefault=function(){
+_65.preventDefault();
 };
-_53.stopPropagation=function(){
-_52.stopPropagation();
+_66.stopPropagation=function(){
+_65.stopPropagation();
 };
 }else{
-_53=_52;
-_53.type=_54;
+_66=_65;
+_66.type=_67;
 }
-_52.corrected=_53;
-if(_54=="resize"){
-if(_50==window.orientation){
+_65.corrected=_66;
+if(_67=="resize"){
+if(_63==window.orientation){
 return null;
 }
-_50=window.orientation;
-_53.type="orientationchange";
-return _51.call(this,_53);
+_63=window.orientation;
+_66.type="orientationchange";
+return _64.call(this,_66);
 }
-if(!("rotation" in _53)){
-_53.rotation=0;
-_53.scale=1;
+if(!("rotation" in _66)){
+_66.rotation=0;
+_66.scale=1;
 }
-var _55=_53.changedTouches[0];
-for(var i in _55){
-delete _53[i];
-_53[i]=_55[i];
+if(window.TouchEvent&&_65 instanceof TouchEvent){
+var _69=_66.changedTouches[0];
+for(var i in _69){
+delete _66[i];
+_66[i]=_69[i];
 }
 }
-return _51.call(this,_53);
+}
+return _64.call(this,_66);
 };
 };
 }

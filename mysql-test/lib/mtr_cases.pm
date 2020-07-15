@@ -1,5 +1,5 @@
 # -*- cperl -*-
-# Copyright (c) 2005, 2019, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2005, 2020, Oracle and/or its affiliates. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -49,8 +49,9 @@ use mtr_report;
 
 require "mtr_misc.pl";
 
-my $threads_support        = eval 'use threads; 1';
-my $threads_shared_support = eval 'use threads::shared; 1';
+my $secondary_engine_support = eval 'use mtr_secondary_engine; 1';
+my $threads_support          = eval 'use threads; 1';
+my $threads_shared_support   = eval 'use threads::shared; 1';
 
 # Precompiled regex's for tests to do or skip
 my $do_test_reg;
@@ -212,6 +213,30 @@ sub validate_test_name_part($$$$) {
   }
 }
 
+## Check that a test specified in disabled.def actually exists
+## if the suite it belongs to is collected.
+##
+## Arguments:
+##   $test_name      Name of the test to be located
+sub validate_test_existence($) {
+  my $test_name = shift;
+  my ($sname, $tname, $extension) = split_testname($test_name);
+
+  # Search if the specified suite is present in the list
+  # of suites which MTR collects
+  for my $suite (split(",", $::opt_suites)) {
+    if ($sname eq $suite or $sname eq "i_" . $suite) {
+      # Proceed to check if the disabled test exists only if its
+      # suite is picked up
+      my $suitedir = get_suite_dir($sname);
+      mtr_error("Disabled test '$test_name' could not be located.")
+        if $suitedir and
+        not my_find_file($suitedir, [ "", "t" ], "$tname.test", NOT_REQUIRED);
+      last;
+    }
+  }
+}
+
 ## Check if the comment section in a disabled.def file is correct. The
 ## format is "<BUG|WL>#<XXXX> [<comment>]". If the format is incorrect,
 ## throw an error and abort the test run.
@@ -269,6 +294,9 @@ sub validate_disabled_test_entry($$$) {
   my $test_name =
     validate_test_name_part($test_name_part, $line, $line_number,
                             $disabled_def_file);
+
+  # Check if the disabled test exists
+  validate_test_existence($test_name) if $test_name;
 
   # Check the format of comment part.
   my $comment =
@@ -566,9 +594,7 @@ sub collect_test_cases ($$$$) {
     @$cases = sort { $a->{criteria} cmp $b->{criteria}; } @$cases;
   }
 
-  # When $opt_repeat > 1 and $opt_parallel > 1, duplicate each test
-  # $opt_repeat number of times to allow them running in parallel.
-  if ($::opt_repeat > 1 and $::opt_parallel > 1) {
+  if ($::opt_repeat > 1) {
     $cases = duplicate_test_cases($cases);
   }
 
@@ -584,7 +610,7 @@ sub collect_test_cases ($$$$) {
 sub duplicate_test_cases($) {
   my $tests = shift;
 
-  my $new_tests;
+  my $new_tests = [];
   foreach my $test (@$tests) {
     # Don't repeat the test if 'skip' flag is enabled.
     if ($test->{'skip'}) {
@@ -701,9 +727,9 @@ sub create_test_combinations($$) {
     # Skip this combination if the values it provides already are set
     # in master_opt or slave_opt.
     if (My::Options::is_set($test->{master_opt}, $comb->{comb_opt}) ||
-        My::Options::is_set($test->{slave_opt}, $comb->{comb_opt}) ||
+        My::Options::is_set($test->{slave_opt},          $comb->{comb_opt}) ||
         My::Options::is_set(\@::opt_extra_bootstrap_opt, $comb->{comb_opt}) ||
-        My::Options::is_set(\@::opt_extra_mysqld_opt, $comb->{comb_opt})) {
+        My::Options::is_set(\@::opt_extra_mysqld_opt,    $comb->{comb_opt})) {
       next;
     }
 
@@ -767,20 +793,7 @@ sub collect_one_suite($$$$) {
       mtr_report(" - from '$suitedir'");
 
     } else {
-      $suitedir = my_find_dir(
-        $::basedir,
-        [ "internal/cloud/mysql-test/suite/",
-          "internal/mysql-test/suite/",
-          "internal/plugin/$suite/tests",
-          "lib/mysql-test/suite",
-          "mysql-test/suite",
-          # Look in plugin specific suite dir
-          "plugin/$suite/tests",
-          "share/mysql-test/suite",
-        ],
-        [ $suite, "mtr" ],
-        # Allow reference to no-existing suite in PB2
-        ($suite =~ /^i_/ || defined $ENV{PB2WORKDIR}));
+      $suitedir = get_suite_dir($suite);
       return unless $suitedir;
     }
     mtr_verbose("suitedir: $suitedir");
@@ -919,6 +932,26 @@ sub collect_one_suite($$$$) {
   return @cases;
 }
 
+# Find location of the specified suite
+sub get_suite_dir($) {
+  my $suite = shift;
+  return $::glob_mysql_test_dir if ($suite eq "main");
+  return my_find_dir(
+    $::basedir,
+    [ "internal/cloud/mysql-test/suite/",
+      "internal/mysql-test/suite/",
+      "internal/plugin/$suite/tests",
+      "lib/mysql-test/suite",
+      "mysql-test/suite",
+      # Look in plugin specific suite dir
+      "plugin/$suite/tests",
+      "share/mysql-test/suite",
+    ],
+    [ $suite, "mtr" ],
+    # Allow reference to non-existing suite in PB2
+    ($suite =~ /^i_/ || defined $ENV{PB2WORKDIR}));
+}
+
 # Set the skip flag in test object and add the skip comments.
 sub skip_test {
   my $tinfo   = shift;
@@ -986,12 +1019,6 @@ sub optimize_cases {
     foreach my $opt (@{ $tinfo->{master_opt} }) {
       (my $dash_opt = $opt) =~ s/_/-/g;
 
-      # Check whether server supports SSL connection.
-      if ($dash_opt eq "--skip-ssl" and $::opt_ssl) {
-        skip_test($tinfo, "Server doesn't support SSL connection");
-        next;
-      }
-
       my $default_engine =
         mtr_match_prefix($dash_opt, "--default-storage-engine=");
       my $default_tmp_engine =
@@ -1023,6 +1050,10 @@ sub optimize_cases {
           if ($default_tmp_engine =~ /^ndb/i);
         $tinfo->{'myisam_test'} = 1
           if ($default_tmp_engine =~ /^myisam/i);
+      }
+
+      if($secondary_engine_support) {
+        optimize_secondary_engine_tests($dash_opt, $tinfo);
       }
     }
 
@@ -1303,6 +1334,13 @@ sub collect_one_test_case {
     return $tinfo;
   }
 
+  if ($tinfo->{'asan_need_debug'} && !$::debug_compiled_binaries) {
+    if ($::mysql_version_extra =~ /asan/) {
+      skip_test($tinfo, "Test needs debug binaries if built with ASAN.");
+      return $tinfo;
+    }
+  }
+
   if ($tinfo->{'ndb_test'}) {
     # This is a NDB test
     if ($::ndbcluster_enabled == 0) {
@@ -1346,13 +1384,6 @@ sub collect_one_test_case {
       skip_test($tinfo, "No replication tests, --skip-rpl is enabled.");
       return $tinfo;
     }
-  }
-
-  # Check for a test that need SSL
-  if ($tinfo->{'need_ssl'} and !$::ssl_supported) {
-    # SSL is not supported, skip it
-    skip_test($tinfo, "No SSL support");
-    return $tinfo;
   }
 
   # Check for group replication tests
@@ -1458,6 +1489,7 @@ my @tags = (
   [ "include/force_myisam_default.inc", "myisam_test", 1 ],
 
   [ "include/big_test.inc",       "big_test",   1 ],
+  [ "include/asan_have_debug.inc","asan_need_debug", 1 ],
   [ "include/have_debug.inc",     "need_debug", 1 ],
   [ "include/have_ndb.inc",       "ndb_test",   1 ],
   [ "include/have_multi_ndb.inc", "ndb_test",   1 ],
@@ -1474,7 +1506,6 @@ my @tags = (
 
   [ "include/ndb_master-slave.inc", "ndb_test",       1 ],
   [ "federated.inc",                "federated_test", 1 ],
-  [ "include/have_ssl.inc",         "need_ssl",       1 ],
   [ "include/not_windows.inc",      "not_windows",    1 ],
   [ "include/not_parallel.inc",     "not_parallel",   1 ],
 
@@ -1484,10 +1515,11 @@ my @tags = (
 
   # Tests with below .inc file needs either big-test or only-big-test
   # option along with valgrind option.
-  [ "include/no_valgrind_without_big.inc", "no_valgrind_without_big", 1 ],
+  [ "include/no_valgrind_without_big.inc", "no_valgrind_without_big", 1 ]);
 
-  [ "include/have_change_propagation_off.inc", "change-propagation", 0 ],
-  [ "include/have_change_propagation_on.inc",  "change-propagation", 1 ],);
+if ($secondary_engine_support) {
+  push (@tags, get_secondary_engine_tags());
+}
 
 sub tags_from_test_file {
   my $tinfo = shift;

@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2009, 2020, Oracle and/or its affiliates.
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -63,10 +63,10 @@ MACRO (FIND_CURSES)
  IF(NOT CURSES_FOUND)
    SET(ERRORMSG "Curses library not found. Please install appropriate package,
     remove CMakeCache.txt and rerun cmake.")
-   IF(CMAKE_SYSTEM_NAME MATCHES "Linux")
-    SET(ERRORMSG ${ERRORMSG} 
-    "On Debian/Ubuntu, package name is libncurses5-dev, on Redhat and derivates " 
-    "it is ncurses-devel.")
+   IF(LINUX)
+     SET(ERRORMSG ${ERRORMSG} 
+       "On Debian/Ubuntu, package name is libncurses5-dev, on Redhat and derivates " 
+       "it is ncurses-devel.")
    ENDIF()
    MESSAGE(FATAL_ERROR ${ERRORMSG})
  ENDIF()
@@ -77,7 +77,7 @@ MACRO (FIND_CURSES)
    SET(HAVE_NCURSES_H 1 CACHE INTERNAL "")
  ENDIF()
 
- IF(CMAKE_SYSTEM_NAME MATCHES "Linux")
+ IF(LINUX)
    # -Wl,--as-needed breaks linking with -lcurses, e.g on Fedora 
    # Lower-level libcurses calls are exposed by libtinfo
    CHECK_LIBRARY_EXISTS(${CURSES_LIBRARY} tputs "" HAVE_TPUTS_IN_CURSES)
@@ -94,11 +94,14 @@ MACRO (MYSQL_USE_BUNDLED_EDITLINE)
   SET(WITH_EDITLINE "bundled" CACHE STRING "By default use bundled editline")
   SET(USE_LIBEDIT_INTERFACE 1)
   SET(HAVE_HIST_ENTRY 1)
-  SET(EDITLINE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/extra/libedit/editline)
+  SET(EDITLINE_HAVE_COMPLETION_CHAR 1 CACHE INTERNAL "")
+  SET(USE_NEW_EDITLINE_INTERFACE 1 CACHE INTERNAL "")
+  SET(EDITLINE_INCLUDE_DIR
+    ${CMAKE_SOURCE_DIR}/extra/libedit/libedit-20190324-3.1/src/editline)
   INCLUDE_DIRECTORIES(BEFORE SYSTEM ${EDITLINE_INCLUDE_DIR})
   SET(EDITLINE_LIBRARY edit)
   FIND_CURSES()
-  ADD_SUBDIRECTORY(${CMAKE_SOURCE_DIR}/extra/libedit)
+  ADD_SUBDIRECTORY(${CMAKE_SOURCE_DIR}/extra/libedit/libedit-20190324-3.1/src)
 ENDMACRO()
 
 MACRO (FIND_SYSTEM_EDITLINE)

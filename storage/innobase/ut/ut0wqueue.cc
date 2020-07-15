@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2006, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2006, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -56,7 +56,7 @@ ib_wqueue_t *ib_wqueue_create(void) {
   mutex_create(LATCH_ID_WORK_QUEUE, &wq->mutex);
 
   wq->items = ib_list_create();
-  wq->event = os_event_create(0);
+  wq->event = os_event_create();
 
   return (wq);
 }
@@ -72,11 +72,10 @@ void ib_wqueue_free(ib_wqueue_t *wq) /*!< in: work queue */
 }
 
 /** Add a work item to the queue. */
-void ib_wqueue_add(
-    ib_wqueue_t *wq,  /*!< in: work queue */
-    void *item,       /*!< in: work item */
-    mem_heap_t *heap) /*!< in: memory heap to use for allocating the
-                      list node */
+void ib_wqueue_add(ib_wqueue_t *wq,  /*!< in: work queue */
+                   void *item,       /*!< in: work item */
+                   mem_heap_t *heap) /*!< in: memory heap to use for allocating
+                                     the list node */
 {
   mutex_enter(&wq->mutex);
 
@@ -93,7 +92,7 @@ void *ib_wqueue_timedwait(
     ib_wqueue_t *wq,         /* in: work queue */
     ib_time_t wait_in_usecs) /* in: wait time in micro seconds */
 {
-  ib_list_node_t *node = NULL;
+  ib_list_node_t *node = nullptr;
 
   for (;;) {
     ulint error;
@@ -121,7 +120,7 @@ void *ib_wqueue_timedwait(
     }
   }
 
-  return (node ? node->data : NULL);
+  return (node ? node->data : nullptr);
 }
 
 /********************************************************************

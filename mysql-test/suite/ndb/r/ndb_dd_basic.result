@@ -55,9 +55,9 @@ PARTITION BY KEY() PARTITIONS 8;
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `pk1` int(11) NOT NULL,
-  `b` int(11) NOT NULL,
-  `c` int(11) NOT NULL,
+  `pk1` int NOT NULL,
+  `b` int NOT NULL,
+  `c` int NOT NULL,
   PRIMARY KEY (`pk1`)
 ) /*!50100 TABLESPACE `ts1` STORAGE DISK */ ENGINE=ndbcluster DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
 /*!50100 PARTITION BY KEY ()
@@ -214,6 +214,19 @@ INITIAL_SIZE 1000000000000K
 ENGINE = NDB;
 ERROR HY000: The size number was correct but we don't allow the digit part to be more than 2 billion
 DROP TABLE t1;
+create table t1(
+col1 int unsigned not null primary key,
+col2 int unsigned not null,
+col3 varchar(8176),
+col4 int)
+tablespace ts1 storage disk
+charset = latin1 engine=ndbcluster;
+ERROR HY000: Can't create table 't1'
+show warnings;
+Level	Code	Message
+Warning	1296	Got error 851 'Fixed-size column offset exceeded max.Use VARCHAR or COLUMN_FORMAT DYNAMIC for memory-stored columns' from NDB
+Warning	1296	Failed to commit NDB schema transaction
+Error	1005	Can't create table 't1'
 CREATE TABLE t1 (a bigint primary key, b bigint storage disk)
 ENGINE ndb
 COMMENT="NDB_TABLE=NOLOGGING=1"
@@ -244,6 +257,9 @@ PRIMARY KEY (ID)
 ) ENGINE=ndbcluster
 tablespace ts2
 storage disk;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 create table t1 (a int primary key, b int)
 engine = ndbcluster tablespace ts2 storage disk;
 insert into t1 values (1,1);
@@ -644,7 +660,7 @@ insert into t1 values(1, 1, 3);
 insert into t1 values(2, 2, 3);
 # Confirm that the update fails
 update t1 set c1 = 1 where id = 2;
-ERROR 23000: Can't write; duplicate key in table ''
+ERROR 23000: Duplicate entry '1' for key 't1.c1'
 # Cleanup
 drop table t1;
 ALTER TABLESPACE ts1

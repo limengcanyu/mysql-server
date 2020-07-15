@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -21,6 +21,7 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 
 #include "sql/dd/impl/types/tablespace_impl.h"
+#include "sql/dd/impl/bootstrap/bootstrap_ctx.h"  // DD_bootstrap_ctx
 
 #include <algorithm>
 #include <atomic>
@@ -88,19 +89,13 @@ class Sdi_wcontext;
 
 static const std::set<String_type> default_valid_option_keys = {"encryption"};
 
-static const std::set<String_type> default_valid_se_private_data_keys = {
-    // NDB keys:
-    "object_id", "object_version", "object_type",
-    // InnoDB keys:
-    "flags", "id", "server_version", "space_version", "state"};
-
 ///////////////////////////////////////////////////////////////////////////
 // Tablespace_impl implementation.
 ///////////////////////////////////////////////////////////////////////////
 
 Tablespace_impl::Tablespace_impl()
     : m_options(default_valid_option_keys),
-      m_se_private_data(default_valid_se_private_data_keys),
+      m_se_private_data(),
       m_files() {} /* purecov: tested */
 
 Tablespace_impl::~Tablespace_impl() {}
@@ -169,6 +164,12 @@ bool Tablespace_impl::restore_attributes(const Raw_record &r) {
 
   m_engine = r.read_str(Tablespaces::FIELD_ENGINE);
 
+  // m_engine_attributes and m_secondary_engine_attributes was added in 80021
+  if (!bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade_from_before(
+          bootstrap::DD_VERSION_80021)) {
+    m_engine_attribute = r.read_str(Tablespaces::FIELD_ENGINE_ATTRIBUTE, "");
+  }
+
   return false;
 }
 
@@ -177,11 +178,24 @@ bool Tablespace_impl::restore_attributes(const Raw_record &r) {
 bool Tablespace_impl::store_attributes(Raw_record *r) {
 #ifndef DBUG_OFF
   if (my_strcasecmp(system_charset_info, "InnoDB", m_engine.c_str()) == 0) {
-    DBUG_ASSERT(m_options.exists("encryption"));
+    /* Innodb can request for space rename during upgrade when options are not
+    upgraded yet. */
+    DBUG_ASSERT(m_options.exists("encryption") ||
+                bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade());
   } else {
     DBUG_ASSERT(!m_options.exists("encryption"));
   }
 #endif
+
+  // Store engine_attributes and secondary_engine_attributes only if
+  // we're not upgrading from before 80021
+  if (!bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade_from_before(
+          bootstrap::DD_VERSION_80021) &&
+      (r->store(Tablespaces::FIELD_ENGINE_ATTRIBUTE, m_engine_attribute,
+                m_engine_attribute.empty()))) {
+    return true;
+  }
+
   return store_id(r, Tablespaces::FIELD_ID) ||
          store_name(r, Tablespaces::FIELD_NAME) ||
          r->store(Tablespaces::FIELD_COMMENT, m_comment) ||
@@ -192,8 +206,9 @@ bool Tablespace_impl::store_attributes(Raw_record *r) {
 
 ///////////////////////////////////////////////////////////////////////////
 
-static_assert(Tablespaces::FIELD_ENGINE == 5,
-              "Tablespaces definition has changed, review (de)ser memfuns!");
+static_assert(Tablespaces::NUMBER_OF_FIELDS == 7,
+              "Tablespaces definition has changed, check if serialize() and "
+              "deserialize() need to be updated!");
 void Tablespace_impl::serialize(Sdi_wcontext *wctx, Sdi_writer *w) const {
   w->StartObject();
   Entity_object_impl::serialize(wctx, w);
@@ -201,6 +216,7 @@ void Tablespace_impl::serialize(Sdi_wcontext *wctx, Sdi_writer *w) const {
   write_properties(w, m_options, STRING_WITH_LEN("options"));
   write_properties(w, m_se_private_data, STRING_WITH_LEN("se_private_data"));
   write(w, m_engine, STRING_WITH_LEN("engine"));
+  write(w, m_engine_attribute, STRING_WITH_LEN("engine_attribute"));
   serialize_each(wctx, w, m_files, STRING_WITH_LEN("files"));
   w->EndObject();
 }
@@ -213,7 +229,9 @@ bool Tablespace_impl::deserialize(Sdi_rcontext *rctx, const RJ_Value &val) {
   read_properties(&m_options, val, "options");
   read_properties(&m_se_private_data, val, "se_private_data");
   read(&m_engine, val, "engine");
-  deserialize_each(rctx, [this]() { return add_file(); }, val, "files");
+  read(&m_engine_attribute, val, "engine_attribute");
+  deserialize_each(
+      rctx, [this]() { return add_file(); }, val, "files");
   return false;
 }
 
@@ -267,6 +285,7 @@ void Tablespace_impl::debug_print(String_type &outb) const {
      << "m_options " << m_options.raw_string() << "; "
      << "m_se_private_data " << m_se_private_data.raw_string() << "; "
      << "m_engine: " << m_engine << "; "
+     << "m_engine_attribute: " << m_engine_attribute << "; "
      << "m_files: " << m_files.size() << " [ ";
 
   for (const Tablespace_file *f : files()) {
@@ -324,15 +343,12 @@ Tablespace_impl::Tablespace_impl(const Tablespace_impl &src)
       m_options(src.m_options),
       m_se_private_data(src.m_se_private_data),
       m_engine(src.m_engine),
+      m_engine_attribute(src.m_engine_attribute),
       m_files() {
   m_files.deep_copy(src.m_files, this);
 }
 
 ///////////////////////////////////////////////////////////////////////////
-
-bool operator==(const dd::sdi_key &a, const dd::sdi_key &b) {
-  return a.id == b.id && a.type == b.type;
-}
 
 namespace {
 /* purecov: begin inspected */

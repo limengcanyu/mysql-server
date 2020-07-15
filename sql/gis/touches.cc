@@ -1,4 +1,4 @@
-// Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+// Copyright (c) 2017, 2020, Oracle and/or its affiliates.
 //
 // This program is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License, version 2.0,
@@ -62,11 +62,11 @@ static bool geometry_collection_apply_touches(const Touches &f,
                                               const Geometry *g1,
                                               const Geometry *g2) {
   boost::geometry::strategy::within::geographic_winding<Geographic_point>
-  geographic_pl_pa_strategy(
-      bg::srs::spheroid<double>(f.semi_major(), f.semi_minor()));
+      geographic_pl_pa_strategy(
+          bg::srs::spheroid<double>(f.semi_major(), f.semi_minor()));
   boost::geometry::strategy::intersection::geographic_segments<>
-  geographic_ll_la_aa_strategy(
-      bg::srs::spheroid<double>(f.semi_major(), f.semi_minor()));
+      geographic_ll_la_aa_strategy(
+          bg::srs::spheroid<double>(f.semi_major(), f.semi_minor()));
 
   if (g1->type() == Geometry_type::kGeometrycollection) {
     if (g2->type() == Geometry_type::kGeometrycollection) {
@@ -152,7 +152,7 @@ static bool geometry_collection_apply_touches(const Touches &f,
              i++) {
           auto &pt = (*down_cast<Geographic_multipoint *>(g1_mpt.get()))[i];
           if (bg::relate(pt, *down_cast<Geographic_multipoint *>(g2_mpt.get()),
-                         mask, geographic_pl_pa_strategy) ||
+                         mask) ||
               bg::relate(pt,
                          *down_cast<Geographic_multilinestring *>(g2_mls.get()),
                          mask, geographic_pl_pa_strategy) ||
@@ -329,7 +329,7 @@ static bool geometry_collection_apply_touches(const Touches &f,
           case Geometry_type::kPoint:
             if (bg::relate(*down_cast<const Geographic_point *>(g1),
                            *down_cast<Geographic_multipoint *>(g2_mpt.get()),
-                           mask, geographic_pl_pa_strategy) ||
+                           mask) ||
                 bg::relate(
                     *down_cast<const Geographic_point *>(g1),
                     *down_cast<Geographic_multilinestring *>(g2_mls.get()),

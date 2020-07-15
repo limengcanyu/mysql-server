@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -71,7 +71,7 @@ class Deprecated_trigger_syntax_handler : public Internal_error_handler {
   LEX_STRING *m_trigger_name;
 
  public:
-  Deprecated_trigger_syntax_handler() : m_trigger_name(NULL) {}
+  Deprecated_trigger_syntax_handler() : m_trigger_name(nullptr) {}
 
   virtual bool handle_condition(THD *thd, uint sql_errno, const char *,
                                 Sql_condition::enum_severity_level *,
@@ -177,12 +177,11 @@ static bool construct_create_trigger_stmt_with_definer(
 }
 
 static const LEX_CSTRING trg_action_time_type_names[] = {
-    {C_STRING_WITH_LEN("BEFORE")}, {C_STRING_WITH_LEN("AFTER")}};
+    {STRING_WITH_LEN("BEFORE")}, {STRING_WITH_LEN("AFTER")}};
 
-static const LEX_CSTRING trg_event_type_names[] = {
-    {C_STRING_WITH_LEN("INSERT")},
-    {C_STRING_WITH_LEN("UPDATE")},
-    {C_STRING_WITH_LEN("DELETE")}};
+static const LEX_CSTRING trg_event_type_names[] = {{STRING_WITH_LEN("INSERT")},
+                                                   {STRING_WITH_LEN("UPDATE")},
+                                                   {STRING_WITH_LEN("DELETE")}};
 
 const LEX_CSTRING &Trigger::get_action_time_as_string() const {
   return trg_action_time_type_names[m_action_time];
@@ -228,7 +227,7 @@ Trigger *Trigger::create_from_parser(THD *thd, TABLE *subject_table,
   LEX_CSTRING client_cs_name;
   LEX_CSTRING connection_cl_name;
   LEX_CSTRING db_cl_name;
-  const CHARSET_INFO *default_db_cl = NULL;
+  const CHARSET_INFO *default_db_cl = nullptr;
 
   if (get_default_db_collation(thd, subject_table->s->db.str, &default_db_cl)) {
     DBUG_ASSERT(thd->is_error() || thd->killed);
@@ -286,9 +285,8 @@ Trigger *Trigger::create_from_parser(THD *thd, TABLE *subject_table,
 
   timeval created_timestamp_not_set = {0, 0};
   Trigger *t = new (&subject_table->mem_root) Trigger(
-      trigger_name, &subject_table->mem_root,
-      to_lex_cstring(subject_table->s->db),
-      to_lex_cstring(subject_table->s->table_name), definition, definition_utf8,
+      trigger_name, &subject_table->mem_root, subject_table->s->db,
+      subject_table->s->table_name, definition, definition_utf8,
       thd->variables.sql_mode, definer_user, definer_host, client_cs_name,
       connection_cl_name, db_cl_name, lex->sphead->m_trg_chistics.event,
       lex->sphead->m_trg_chistics.action_time,
@@ -419,7 +417,7 @@ bool Trigger::execute(THD *thd) {
     in case of failure during trigger execution.
   */
   save_current_select = thd->lex->current_select();
-  thd->lex->set_current_select(NULL);
+  thd->lex->set_current_select(nullptr);
   err_status = m_sp->execute_trigger(thd, m_db_name, m_subject_table_name,
                                      &m_subject_table_grant);
   thd->lex->set_current_select(save_current_select);
@@ -511,18 +509,18 @@ bool Trigger::parse(THD *thd, bool is_upgrade) {
   thd->push_internal_handler(&error_handler);
 
   sp_rcontext *sp_runtime_ctx_saved = thd->sp_runtime_ctx;
-  thd->sp_runtime_ctx = NULL;
+  thd->sp_runtime_ctx = nullptr;
 
   sql_digest_state *digest_saved = thd->m_digest;
   PSI_statement_locker *statement_locker_saved = thd->m_statement_psi;
-  thd->m_digest = NULL;
-  thd->m_statement_psi = NULL;
+  thd->m_digest = nullptr;
+  thd->m_statement_psi = nullptr;
 
   Trigger_creation_ctx *creation_ctx = Trigger_creation_ctx::create(
       thd, m_db_name, m_subject_table_name, m_client_cs_name,
       m_connection_cl_name, m_db_cl_name);
   bool parse_error = false;
-  if (creation_ctx != NULL)
+  if (creation_ctx != nullptr)
     parse_error = parse_sql(thd, &parser_state, creation_ctx);
 
   thd->m_digest = digest_saved;
@@ -533,7 +531,7 @@ bool Trigger::parse(THD *thd, bool is_upgrade) {
   thd->pop_internal_handler();
 
   bool fatal_error = false;
-  if (creation_ctx == NULL) {
+  if (creation_ctx == nullptr) {
     fatal_error = true;
     goto cleanup;
   }
@@ -549,7 +547,7 @@ bool Trigger::parse(THD *thd, bool is_upgrade) {
 
   // Ensure that lex.sp_head is NULL in case of parse errors.
 
-  DBUG_ASSERT(!parse_error || (parse_error && lex.sphead == NULL));
+  DBUG_ASSERT(!parse_error || (parse_error && lex.sphead == nullptr));
 
   // That's it in case of parse error.
 
@@ -565,37 +563,28 @@ bool Trigger::parse(THD *thd, bool is_upgrade) {
     can be determined while parsing the trigger definition.
   */
   if (is_upgrade) {
-    const LEX_STRING *trigger_name_ptr = NULL;
-    const LEX_STRING *trigger_body_ptr = NULL;
-    const LEX_STRING *trigger_body_utf8_ptr = NULL;
-
-    trigger_name_ptr = &lex.spname->m_name;
-    trigger_body_ptr = &lex.sphead->m_body;
-    trigger_body_utf8_ptr = &lex.sphead->m_body_utf8;
-
     // Make a copy of trigger name and set it.
-    LEX_STRING s, def, def_utf8;
-    if (lex_string_strmake(m_mem_root, &s, trigger_name_ptr->str,
-                           trigger_name_ptr->length)) {
+    LEX_CSTRING trigger_name;
+    if (lex_string_strmake(m_mem_root, &trigger_name, lex.spname->m_name.str,
+                           lex.spname->m_name.length)) {
       fatal_error = true;
       goto cleanup;
     }
 
-    if (lex_string_strmake(m_mem_root, &def, trigger_body_ptr->str,
-                           trigger_body_ptr->length)) {
+    LEX_CSTRING trigger_def;
+    if (lex_string_strmake(m_mem_root, &trigger_def, lex.sphead->m_body.str,
+                           lex.sphead->m_body.length)) {
       fatal_error = true;
       goto cleanup;
     }
 
-    if (lex_string_strmake(m_mem_root, &def_utf8, trigger_body_utf8_ptr->str,
-                           trigger_body_utf8_ptr->length)) {
+    LEX_CSTRING trigger_def_utf8;
+    if (lex_string_strmake(m_mem_root, &trigger_def_utf8,
+                           lex.sphead->m_body_utf8.str,
+                           lex.sphead->m_body_utf8.length)) {
       fatal_error = true;
       goto cleanup;
     }
-
-    const LEX_CSTRING trigger_name = {s.str, s.length};
-    const LEX_CSTRING trigger_def = {def.str, def.length};
-    const LEX_CSTRING trigger_def_utf8 = {def_utf8.str, def_utf8.length};
 
     set_trigger_name(trigger_name);
     set_trigger_def(trigger_def);
@@ -617,7 +606,7 @@ bool Trigger::parse(THD *thd, bool is_upgrade) {
   DBUG_ASSERT(!m_sp);
 
   m_sp = lex.sphead;
-  lex.sphead = NULL; /* Prevent double cleanup. */
+  lex.sphead = nullptr; /* Prevent double cleanup. */
 
   /*
     Set some SP attributes.

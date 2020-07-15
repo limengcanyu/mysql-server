@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, 2018, Oracle and/or its affiliates. All Rights Reserved.
+/* Copyright (c) 2016, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -37,13 +37,13 @@ namespace temptable {
 Column::Column(const unsigned char *mysql_row,
                const TABLE &mysql_table TEMPTABLE_UNUSED_NODBUG,
                const Field &mysql_field) {
-/* NOTE: The contents of mysql_row could be bogus at this time,
- * we don't look at the data, we just use it to calculate offsets
- * later used to get the user data inside our own copy of a row in
- * `m_mysql_row` which is neither record[0] nor record[1]. */
+  /* NOTE: The contents of mysql_row could be bogus at this time,
+   * we don't look at the data, we just use it to calculate offsets
+   * later used to get the user data inside our own copy of a row in
+   * `m_mysql_row` which is neither record[0] nor record[1]. */
 
 #if !defined(DBUG_OFF)
-  unsigned char *field_ptr = mysql_field.ptr;
+  const unsigned char *field_ptr = mysql_field.field_ptr();
   const size_t mysql_row_length = mysql_table.s->rec_buff_length;
 
   DBUG_ASSERT(field_ptr >= mysql_row);
@@ -52,10 +52,10 @@ Column::Column(const unsigned char *mysql_row,
 
   size_t data_offset;
 
-  m_is_blob = ((mysql_field.flags & BLOB_FLAG) != 0);
+  m_is_blob = (mysql_field.is_flag_set(BLOB_FLAG) || mysql_field.is_array());
 
   if (m_is_blob) {
-    auto blob_field = static_cast<const Field_blob &>(mysql_field);
+    auto &blob_field = static_cast<const Field_blob &>(mysql_field);
 
     DBUG_ASSERT(blob_field.pack_length_no_ptr() <=
                 std::numeric_limits<decltype(m_length_bytes_size)>::max());
@@ -63,36 +63,30 @@ Column::Column(const unsigned char *mysql_row,
     m_length_bytes_size = blob_field.pack_length_no_ptr();
     m_offset = mysql_field.offset(const_cast<unsigned char *>(mysql_row));
 
-    const unsigned char *data_ptr = mysql_field.ptr + m_length_bytes_size;
+    const unsigned char *data_ptr =
+        mysql_field.field_ptr() + m_length_bytes_size;
 
     data_offset = static_cast<size_t>(data_ptr - mysql_row);
   } else if (mysql_field.type() == MYSQL_TYPE_VARCHAR) {
     auto &varstring_field = static_cast<const Field_varstring &>(mysql_field);
 
-    DBUG_ASSERT(varstring_field.length_bytes <=
+    DBUG_ASSERT(varstring_field.get_length_bytes() <=
                 std::numeric_limits<decltype(m_length_bytes_size)>::max());
 
-    m_length_bytes_size = varstring_field.length_bytes;
+    m_length_bytes_size = varstring_field.get_length_bytes();
     m_offset = mysql_field.offset(const_cast<unsigned char *>(mysql_row));
-
-    unsigned char *data_ptr;
-    const_cast<Field &>(mysql_field).get_ptr(&data_ptr);
-
-    data_offset = static_cast<size_t>(data_ptr - mysql_row);
+    data_offset = static_cast<size_t>(
+        mysql_field.field_ptr() + mysql_field.get_length_bytes() - mysql_row);
   } else {
     m_length_bytes_size = 0;
-    m_length = const_cast<Field &>(mysql_field).data_length();
-
-    unsigned char *data_ptr;
-    const_cast<Field &>(mysql_field).get_ptr(&data_ptr);
-
-    data_offset = static_cast<size_t>(data_ptr - mysql_row);
+    m_length = mysql_field.data_length();
+    data_offset = static_cast<size_t>(mysql_field.field_ptr() - mysql_row);
   }
   DBUG_ASSERT(data_offset <=
               std::numeric_limits<decltype(m_user_data_offset)>::max());
   m_user_data_offset = static_cast<decltype(m_user_data_offset)>(data_offset);
 
-  m_nullable = mysql_field.real_maybe_null();
+  m_nullable = mysql_field.is_nullable();
   m_null_bitmask = mysql_field.null_bit;
 
   if (m_nullable) {

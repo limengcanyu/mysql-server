@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 1996, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 1996, 2020, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -33,7 +33,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #ifndef trx0trx_h
 #define trx0trx_h
 
-#include <list>
+#include <atomic>
 #include <set>
 
 #include "ha_prototypes.h"
@@ -103,8 +103,11 @@ void trx_free_resurrected(trx_t *trx);
 @param[in,out]	trx	transaction object to free */
 void trx_free_for_background(trx_t *trx);
 
-/** At shutdown, frees a transaction object that is in the PREPARED state. */
-void trx_free_prepared(trx_t *trx); /*!< in, own: trx object */
+/** At shutdown, frees a transaction object that represents either:
+ - a PREPARED transaction,
+ - or a recovered ACTIVE transaction.
+@param[in, out]  trx   transaction object to free */
+void trx_free_prepared_or_active_recovered(trx_t *trx);
 
 /** Free a transaction object for MySQL.
 @param[in,out]	trx	transaction */
@@ -209,13 +212,14 @@ int trx_recover_for_mysql(
     XA_recover_txn *txn_list, /*!< in/out: prepared transactions */
     ulint len,                /*!< in: number of slots in xid_list */
     MEM_ROOT *mem_root);      /*!< in: memory for table names */
+
 /** This function is used to find one X/Open XA distributed transaction
  which is in the prepared state
+ @param[in]   xid   X/Open XA transaction identifier
  @return trx or NULL; on match, the trx->xid will be invalidated;
- note that the trx may have been committed, unless the caller is
- holding lock_sys->mutex */
-trx_t *trx_get_trx_by_xid(
-    const XID *xid); /*!< in: X/Open XA transaction identifier */
+ note that the trx may have been committed */
+trx_t *trx_get_trx_by_xid(const XID *xid);
+
 /** If required, flushes the log to disk if we called trx_commit_for_mysql()
  with trx->flush_log_later == TRUE. */
 void trx_commit_complete_for_mysql(trx_t *trx); /*!< in/out: transaction */
@@ -261,20 +265,20 @@ void trx_print_low(FILE *f,
 /*!< in: mem_heap_get_size(trx->lock.lock_heap) */
 
 /** Prints info about a transaction.
- The caller must hold lock_sys->mutex and trx_sys->mutex.
- When possible, use trx_print() instead. */
-void trx_print_latched(
-    FILE *f,              /*!< in: output stream */
-    const trx_t *trx,     /*!< in: transaction */
-    ulint max_query_len); /*!< in: max query length to print,
-                          or 0 to use the default max length */
+The caller must hold lock_sys exclusive global latch and trx_sys->mutex.
+@param[in]  f               output stream
+@param[in]  trx             transaction
+@param[in]  max_query_len   max query length to print, or 0 to use the default
+                            max length */
+void trx_print_latched(FILE *f, const trx_t *trx, ulint max_query_len);
 
 /** Prints info about a transaction.
- Acquires and releases lock_sys->mutex and trx_sys->mutex. */
-void trx_print(FILE *f,              /*!< in: output stream */
-               const trx_t *trx,     /*!< in: transaction */
-               ulint max_query_len); /*!< in: max query length to print,
-                                     or 0 to use the default max length */
+Acquires and releases lock_sys exclusive global latch and trx_sys->mutex.
+@param[in]  f               output stream
+@param[in]  trx             transaction
+@param[in]  max_query_len   max query length to print, or 0 to use the default
+                            max length */
+void trx_print(FILE *f, const trx_t *trx, ulint max_query_len);
 
 /** Determine if a transaction is a dictionary operation.
  @return dictionary operation mode */
@@ -299,6 +303,13 @@ bool trx_state_eq(const trx_t *trx,  /*!< in: transaction */
                   trx_state_t state) /*!< in: state */
     MY_ATTRIBUTE((warn_unused_result));
 #ifdef UNIV_DEBUG
+/** Determines if trx can be handled by current thread, which is when
+trx->mysql_thd is nullptr (a "background" trx) or equals current_thd.
+@param[in]    trx   The transaction to check
+@return true iff current thread can handle the transaction
+*/
+bool trx_can_be_handled_by_current_thread(const trx_t *trx);
+
 /** Asserts that a transaction has been started.
  The caller must hold trx_sys->mutex.
  @return true if started */
@@ -397,9 +408,9 @@ UNIV_INLINE
 bool trx_is_high_priority(const trx_t *trx);
 
 /**
-Kill all transactions that are blocking this transaction from acquiring locks.
+If this is a high priority transaction,
+kill all transactions that are blocking this transaction from acquiring locks.
 @param[in,out] trx	High priority transaction */
-
 void trx_kill_blocking(trx_t *trx);
 
 /** Provides an id of the transaction which does not change over time.
@@ -409,7 +420,7 @@ a transaction can no longer be treated as read-only and becomes read-write.
 @return the transaction's immutable id */
 UNIV_INLINE
 uint64_t trx_immutable_id(const trx_t *trx) {
-  return reinterpret_cast<uint64_t>(trx);
+  return (uint64_t{reinterpret_cast<uintptr_t>(trx)});
 }
 
 /**
@@ -534,15 +545,16 @@ typedef std::vector<ib_lock_t *, ut_allocator<ib_lock_t *>> lock_pool_t;
  changed asynchronously.
 
  All these operations take place within the context of locking. Therefore state
- changes within the locking code must acquire both the lock mutex and the
- trx->mutex when changing trx->lock.que_state to TRX_QUE_LOCK_WAIT or
+ changes within the locking code must latch the shard with the wait_lock and
+ the trx->mutex when changing trx->lock.que_state to TRX_QUE_LOCK_WAIT or
  trx->lock.wait_lock to non-NULL but when the lock wait ends it is sufficient
  to only acquire the trx->mutex.
  To query the state either of the mutexes is sufficient within the locking
  code and no mutex is required when the query thread is no longer waiting. */
 
-/** The locks and state of an active transaction. Protected by
-lock_sys->mutex, trx->mutex or both. */
+/** The locks and state of an active transaction.
+Protected by exclusive lock_sys latch or trx->mutex combined with shared
+lock_sys latch (unless stated otherwise for particular field). */
 struct trx_lock_t {
   ulint n_active_thrs; /*!< number of active query threads */
 
@@ -550,19 +562,85 @@ struct trx_lock_t {
                        == TRX_STATE_ACTIVE: TRX_QUE_RUNNING,
                        TRX_QUE_LOCK_WAIT, ... */
 
-  lock_t *wait_lock;         /*!< if trx execution state is
-                             TRX_QUE_LOCK_WAIT, this points to
-                             the lock request, otherwise this is
-                             NULL; set to non-NULL when holding
-                             both trx->mutex and lock_sys->mutex;
-                             set to NULL when holding
-                             lock_sys->mutex; readers should
-                             hold lock_sys->mutex, except when
-                             they are holding trx->mutex and
-                             wait_lock==NULL */
-  ib_uint64_t deadlock_mark; /*!< A mark field that is initialized
-                             to and checked against lock_mark_counter
-                             by lock_deadlock_recursive(). */
+  /** Incremented each time a lock is added or removed from the
+  trx->lock.trx_locks, so that the thread which iterates over the list can spot
+  a change if it occurred while it was reacquiring latches.
+  Protected by trx->mutex. */
+  uint64_t trx_locks_version;
+
+  /** If this transaction is waiting for a lock, then blocking_trx points to a
+  transaction which holds a conflicting lock.
+  It is possible that the transaction has trx->lock.wait_lock == nullptr, yet it
+  has non-null value of trx->lock.blocking_trx. For example this can happen when
+  we are in the process of moving locks from one heap_no to another. This
+  however is always done while the lock_sys shards which contain the queues
+  involved are latched and conceptually it is true that the blocking_trx is
+  the one for which the transaction waits, even though temporarily there is no
+  pointer to a particular WAITING lock object.
+
+  This field is changed from null to non-null, when holding this->mutex and
+  mutex for lock_sys shard containing the new value of trx->lock.wait_lock.
+  The field is changed from non-null to different non-null value, while holding
+  mutex for lock_sys shard containing the trx->lock.wait_lock.
+  The field is changed from non-null to null, while holding this->mutex,
+  mutex for lock_sys shard containing the old value of trx->lock.wait_lock,
+  before it was changed to null.
+
+  Readers might read it without any latch, but then they should validate the
+  value, i.e. test if it is not-null, and points to a valid trx.
+  To make any definite judgments one needs to latch the lock_sys shard
+  containing the trx->lock.wait_lock. */
+  std::atomic<trx_t *> blocking_trx;
+
+  /** The lock request of this transaction is waiting for.
+  It might be NULL if the transaction is not currently waiting, or if the lock
+  was temporarily removed during B-tree reorganization and will be recreated in
+  a different queue. Such move is protected by latching the shards containing
+  both queues, so the intermediate state should not be observed by readers who
+  latch the old shard.
+
+  Changes from NULL to non-NULL while holding trx->mutex and latching the shard
+  containing the new wait_lock value.
+  Changes from non-NULL to NULL while latching the shard containing the old
+  wait_lock value.
+  Never changes from non-NULL to other non-NULL directly.
+
+  Readers should hold exclusive global latch on lock_sys, as in general they
+  can't know what shard the lock belongs to before reading it.
+  However, in debug assertions, where we strongly believe to know the value of
+  this field in advance, we can:
+  - read without any latch if we believe the value should be NULL
+  - read latching only the shard containing the wait_lock we expect */
+  std::atomic<lock_t *> wait_lock;
+
+  /** Stores the type of the most recent lock for which this trx had to wait.
+  Set to lock_get_type_low(wait_lock) together with wait_lock in
+  lock_set_lock_and_trx_wait().
+  This field is not cleared when wait_lock is set to NULL during
+  lock_reset_lock_and_trx_wait() as in lock_wait_suspend_thread() we are
+  interested in reporting the last known value of this field via
+  thd_wait_begin(). When a thread has to wait for a lock, it first releases
+  lock-sys latch, and then calls lock_wait_suspend_thread() where among other
+  things it tries to report statistic via thd_wait_begin() about the kind of
+  lock (THD_WAIT_ROW_LOCK vs THD_WAIT_TABLE_LOCK) that caused the wait. But
+  there is a possibility that before it gets to call thd_wait_begin() some other
+  thread could latch lock-sys and grant the lock and call
+  lock_reset_lock_and_trx_wait(). In other words: in case another thread was
+  quick enough to grant the lock, we still would like to report the reason for
+  attempting to sleep.
+  Another common scenario of "setting trx->lock.wait_lock to NULL" is page
+  reorganization: when we have to move records between pages, we also move
+  locks, and when doing so, we temporarily remove the old waiting lock, and then
+  add another one. For example look at lock_rec_move_low(). It first calls
+  lock_reset_lock_and_trx_wait() which changes trx->lock.wait_lock to NULL, but
+  then calls lock_rec_add_to_queue() -> RecLock::create() -> RecLock::lock_add()
+  -> lock_set_lock_and_trx_wait() to set it again to the new lock. This all
+  happens while holding lock-sys latch, but we read wait_lock_type without this
+  latch, so we should not clear the wait_lock_type simply because somebody
+  changed wait_lock to NULL.
+  Protected by trx->mutex. */
+  uint32_t wait_lock_type;
+
   bool was_chosen_as_deadlock_victim;
   /*!< when the transaction decides to
   wait for a lock, it sets this to false;
@@ -570,37 +648,80 @@ struct trx_lock_t {
   transaction as a victim in deadlock
   resolution, it sets this to true.
   Protected by trx->mutex. */
-  time_t wait_started; /*!< lock wait started at this time,
-                       protected only by lock_sys->mutex */
 
-  que_thr_t *wait_thr; /*!< query thread belonging to this
-                       trx that is in QUE_THR_LOCK_WAIT
-                       state. For threads suspended in a
-                       lock wait, this is protected by
-                       lock_sys->mutex. Otherwise, this may
-                       only be modified by the thread that is
-                       serving the running transaction. */
+  /** Lock wait started at this time.
+  Writes under shared lock_sys latch combined with trx->mutex.
+  Reads require either trx->mutex or exclusive lock_sys latch. */
+  time_t wait_started;
 
-  lock_pool_t rec_pool; /*!< Pre-allocated record locks */
+  /** query thread belonging to this trx that is in QUE_THR_LOCK_WAIT state.
+  For threads suspended in a lock wait, this is protected by lock_sys latch for
+  the wait_lock's shard.
+  Otherwise, this may only be modified by the thread that is serving the running
+  transaction.
+  */
+  que_thr_t *wait_thr;
 
-  lock_pool_t table_pool; /*!< Pre-allocated table locks */
+  /** Pre-allocated record locks. Protected by trx->mutex. */
+  lock_pool_t rec_pool;
 
-  ulint rec_cached; /*!< Next free rec lock in pool */
+  /** Pre-allocated table locks. Protected by trx->mutex. */
+  lock_pool_t table_pool;
 
-  ulint table_cached; /*!< Next free table lock in pool */
+  /** Next free record lock in pool. Protected by trx->mutex. */
+  ulint rec_cached;
 
-  mem_heap_t *lock_heap; /*!< memory heap for trx_locks;
-                         protected by lock_sys->mutex */
+  /** Next free table lock in pool. Protected by trx->mutex. */
+  ulint table_cached;
 
-  trx_lock_list_t trx_locks; /*!< locks requested by the transaction;
-                             insertions are protected by trx->mutex
-                             and lock_sys->mutex; removals are
-                             protected by lock_sys->mutex */
+  /** Memory heap for trx_locks. Protected by trx->mutex */
+  mem_heap_t *lock_heap;
 
-  lock_pool_t table_locks; /*!< All table locks requested by this
-                           transaction, including AUTOINC locks */
+  /** Locks requested by the transaction.
+  Modifications are protected by trx->mutex and shard of lock_sys mutex.
+  Reads can be performed while holding trx->mutex or exclusive lock_sys latch.
+  One can also check if this list is empty or not from the thread running this
+  transaction without holding any latches, keeping in mind that other threads
+  might modify the list in parallel (for example during implicit-to-explicit
+  conversion, or when B-tree split or merge causes locks to be moved from one
+  page to another) - we rely on assumption that such operations do not change
+  the "emptiness" of the list and that one can check for emptiness in a safe
+  manner (in current implementation length of the list is stored explicitly so
+  one can read it without risking unsafe pointer operations) */
+  trx_lock_list_t trx_locks;
 
-  ulint n_rec_locks; /*!< number of rec locks in this trx */
+  /** All table locks requested by this transaction, including AUTOINC locks.
+  Protected by trx->mutex. */
+  lock_pool_t table_locks;
+
+  /** AUTOINC locks held by this transaction. Note that these are also in the
+  lock list trx_locks and table_locks. This vector needs to be freed explicitly
+  when the trx instance is destroyed.
+  Protected by trx->mutex. */
+  ib_vector_t *autoinc_locks;
+
+  /** Number of rec locks in this trx.
+  It is modified with shared lock_sys latch.
+  It is read with exclusive lock_sys latch. */
+  std::atomic<ulint> n_rec_locks;
+
+  /** Used to indicate that every lock of this transaction placed on a record
+  which is being purged should be inherited to the gap.
+  Readers should hold a latch on the lock they'd like to learn about whether or
+  not it should be inherited.
+  Writers who want to set it to true, should hold a latch on the lock-sys queue
+  they intend to add a lock to.
+  Writers may set it to false at any time. */
+  std::atomic<bool> inherit_all;
+
+  /** Weight of the waiting transaction used for scheduling.
+  The higher the weight the more we are willing to grant a lock to this
+  transaction.
+  Values are updated and read without any synchronization beyond that provided
+  by atomics, as slightly stale values do not hurt correctness, just the
+  performance. */
+  std::atomic<trx_schedule_weight_t> schedule_weight;
+
 #ifdef UNIV_DEBUG
   /** When a transaction is forced to rollback due to a deadlock
   check or by another high priority transaction this is true. Used
@@ -654,7 +775,7 @@ and lock_trx_release_locks() [invoked by trx_commit()].
 
 * Print of transactions may access transactions not associated with
 the current thread. The caller must be holding trx_sys->mutex and
-lock_sys->mutex.
+exclusive global lock_sys latch.
 
 * When a transaction handle is in the trx_sys->mysql_trx_list or
 trx_sys->trx_list, some of its fields must not be modified without
@@ -662,13 +783,21 @@ holding trx_sys->mutex exclusively.
 
 * The locking code (in particular, deadlock checking and implicit to
 explicit conversion) will access transactions associated to other
-connections. The locks of transactions are protected by lock_sys->mutex
+connections. The locks of transactions are protected by lock_sys latches
 and sometimes by trx->mutex.
 
 * Killing of asynchronous transactions. */
 
 /** Represents an instance of rollback segment along with its state variables.*/
 struct trx_undo_ptr_t {
+  /** @return true iff no undo segment is allocated yet. */
+  bool is_empty() { return (insert_undo == nullptr && update_undo == nullptr); }
+
+  /** @return true iff only insert undo segment is allocated. */
+  bool is_insert_only() {
+    return (insert_undo != nullptr && update_undo == nullptr);
+  }
+
   trx_rseg_t *rseg;        /*!< rollback segment assigned to the
                            transaction, or NULL if not assigned
                            yet */
@@ -697,19 +826,6 @@ enum trx_rseg_type_t {
   TRX_RSEG_TYPE_NOREDO    /*!< non-redo rollback segment. */
 };
 
-struct TrxVersion {
-  TrxVersion(trx_t *trx);
-
-  /**
-  @return true if the trx_t instance is the same */
-  bool operator==(const TrxVersion &rhs) const { return (rhs.m_trx == m_trx); }
-
-  trx_t *m_trx;
-  ulint m_version;
-};
-
-typedef std::list<TrxVersion, ut_allocator<TrxVersion>> hit_list_t;
-
 struct trx_t {
   enum isolation_level_t {
 
@@ -736,17 +852,9 @@ struct trx_t {
     SERIALIZABLE
   };
 
-  TrxMutex mutex; /*!< Mutex protecting the fields
-                  state and lock (except some fields
-                  of lock, which are protected by
-                  lock_sys->mutex) */
-
-  bool owns_mutex; /*!< Set to the transaction that owns
-                   the mutex during lock acquire and/or
-                   release.
-
-                   This is used to avoid taking the
-                   trx_t::mutex recursively. */
+  /** Mutex protecting the fields `state` and `lock` (except some fields of
+  `lock`,  which are protected by lock_sys latches) */
+  mutable TrxMutex mutex;
 
   /* Note: in_depth was split from in_innodb for fixing a RO
   performance issue. Acquiring the trx_t::mutex for each row
@@ -834,8 +942,7 @@ struct trx_t {
   ACTIVE->COMMITTED is possible when the transaction is in
   rw_trx_list.
 
-  Transitions to COMMITTED are protected by both lock_sys->mutex
-  and trx->mutex.
+  Transitions to COMMITTED are protected by trx->mutex.
 
   NOTE: Some of these state change constraints are an overkill,
   currently only required for a consistent view for printing stats.
@@ -861,18 +968,14 @@ struct trx_t {
            to check for the view limit for
            transactions that are committing */
 
-  trx_lock_t lock;   /*!< Information about the transaction
-                     locks and state. Protected by
-                     trx->mutex or lock_sys->mutex
-                     or both */
+  /** Information about the transaction locks and state.
+  Protected by trx->mutex or lock_sys latches or both */
+  trx_lock_t lock;
+
   bool is_recovered; /*!< 0=normal transaction,
                      1=recovered, must be rolled back,
                      protected by trx_sys->mutex when
                      trx->in_rw_trx_list holds */
-
-  hit_list_t hit_list; /*!< List of transactions to kill,
-                       when a high priority transaction
-                       is blocked on a lock wait. */
 
   os_thread_id_t killed_by; /*!< The thread ID that wants to
                             kill this transaction asynchronously.
@@ -926,7 +1029,6 @@ struct trx_t {
                         the transaction; in that case we must
                         flush the log in
                         trx_commit_complete_for_mysql() */
-  ulint duplicates;          /*!< TRX_DUP_IGNORE | TRX_DUP_REPLACE */
   bool has_search_latch;
   /*!< TRUE if this trx has latched the
   search system latch in S-mode.
@@ -962,12 +1064,6 @@ struct trx_t {
   time_t start_time; /*!< time the state last time became
                      TRX_STATE_ACTIVE */
 
-  /** Weight/Age of the transaction in the record lock wait queue. */
-  int32_t age;
-
-  /** For tracking if Weight/age has been updated. */
-  uint64_t age_updated;
-
   lsn_t commit_lsn; /*!< lsn at the time of the commit */
 
   /*------------------------------*/
@@ -979,7 +1075,7 @@ struct trx_t {
   contains a pointer to the latest file
   name; this is NULL if binlog is not
   used */
-  int64_t mysql_log_offset;
+  uint64_t mysql_log_offset;
   /*!< if MySQL binlog is used, this
   field contains the end offset of the
   binlog entry */
@@ -1062,15 +1158,9 @@ struct trx_t {
   ulint pages_undone; /*!< number of undo log pages undone
                       since the last undo log truncation */
   /*------------------------------*/
-  ulint n_autoinc_rows;       /*!< no. of AUTO-INC rows required for
-                              an SQL statement. This is useful for
-                              multi-row INSERTs */
-  ib_vector_t *autoinc_locks; /* AUTOINC locks held by this
-                              transaction. Note that these are
-                              also in the lock list trx_locks. This
-                              vector needs to be freed explicitly
-                              when the trx instance is destroyed.
-                              Protected by lock_sys->mutex. */
+  ulint n_autoinc_rows; /*!< no. of AUTO-INC rows required for
+                        an SQL statement. This is useful for
+                        multi-row INSERTs */
   /*------------------------------*/
   bool read_only;        /*!< true if transaction is flagged
                          as a READ-ONLY transaction.
@@ -1100,6 +1190,9 @@ struct trx_t {
                  transactions are always treated as
                  read-write. */
                  /*------------------------------*/
+  /** Transaction persists GTID. */
+  bool persists_gtid;
+
 #ifdef UNIV_DEBUG
   ulint start_line;       /*!< Track where it was started from */
   const char *start_file; /*!< Filename where it was started */
@@ -1178,11 +1271,6 @@ inline bool trx_is_started(const trx_t *trx) {
           trx->state != TRX_STATE_FORCED_ROLLBACK);
 }
 
-/* Treatment of duplicate values (trx->duplicates; for example, in inserts).
-Multiple flags can be combined with bitwise OR. */
-#define TRX_DUP_IGNORE 1  /* duplicate rows are to be updated */
-#define TRX_DUP_REPLACE 2 /* duplicate rows are to be replaced */
-
 /** Commit node states */
 enum commit_node_state {
   COMMIT_NODE_SEND = 1, /*!< about to send a commit signal to
@@ -1197,19 +1285,56 @@ struct commit_node_t {
   enum commit_node_state state; /*!< node execution state */
 };
 
-/** Test if trx->mutex is owned. */
+/** Test if trx->mutex is owned by the current thread. */
 #define trx_mutex_own(t) mutex_own(&t->mutex)
 
-/** Acquire the trx->mutex. */
-#define trx_mutex_enter(t)  \
-  do {                      \
-    mutex_enter(&t->mutex); \
+#ifdef UNIV_DEBUG
+/**
+Verifies the invariants and records debug state related to latching rules.
+Called during trx_mutex_enter before the actual mutex acquisition.
+@param[in]  trx             The transaction for which trx_mutex_enter(trx) is
+                            called
+@param[in]  allow_another   If false, then no further calls to trx_mutex_enter
+                            are allowed, until trx_mutex_exit().
+                            If true, then this must be the first trx acquisition
+                            and we will allow one more.
+*/
+void trx_before_mutex_enter(const trx_t *trx, bool allow_another);
+
+/**
+Verifies the invariants and records debug state related to latching rules.
+Called during trx_mutex_exit before the actual mutex release.
+@param[in]  trx   The transaction for which trx_mutex_exit(trx) is called
+*/
+void trx_before_mutex_exit(const trx_t *trx);
+#endif
+
+/**
+Please do not use this low-level macro.
+Use trx_mutex_enter(t) instead.
+In rare cases where you need to take two trx->mutex-es, take the first one
+using trx_mutex_enter_first_of_two(t1), and the second one with
+trx_mutex(2)
+*/
+#define trx_mutex_enter_low(t, first_of_two)       \
+  do {                                             \
+    ut_ad(!trx_mutex_own(t));                      \
+    ut_d(trx_before_mutex_enter(t, first_of_two)); \
+    mutex_enter(&t->mutex);                        \
   } while (0)
 
+/** Acquire the trx->mutex (and promise not to request any more). */
+#define trx_mutex_enter(t) trx_mutex_enter_low(t, false)
+
+/** Acquire the trx->mutex (and indicate we might request one more). */
+#define trx_mutex_enter_first_of_two(t) trx_mutex_enter_low(t, true)
+
 /** Release the trx->mutex. */
-#define trx_mutex_exit(t)  \
-  do {                     \
-    mutex_exit(&t->mutex); \
+#define trx_mutex_exit(t)           \
+  do {                              \
+    ut_ad(trx_mutex_own(t));        \
+    ut_d(trx_before_mutex_exit(t)); \
+    mutex_exit(&t->mutex);          \
   } while (0)
 
 /** Track if a transaction is executing inside InnoDB code. It acts
@@ -1354,7 +1479,7 @@ class TrxInInnoDB {
 
   /**
   Wait for the asynchronous rollback to complete, if it is in progress */
-  static void wait(trx_t *trx) {
+  static void wait(const trx_t *trx) {
     ut_ad(trx_mutex_own(trx));
 
     ulint loop_count = 0;
@@ -1398,6 +1523,15 @@ class TrxInInnoDB {
   Transaction instance crossing the handler boundary from the Server. */
   trx_t *m_trx;
 };
+
+/** Check if transaction is internal XA transaction
+@param[in]	trx	transaction
+@return true, iff internal XA transaction. */
+bool trx_is_mysql_xa(const trx_t *trx);
+
+/** Update transaction binlog file name and position from session THD.
+@param[in,out]  trx     current transaction. */
+void trx_sys_update_binlog_position(trx_t *trx);
 
 #include "trx0trx.ic"
 #endif /* !UNIV_HOTBACKUP */

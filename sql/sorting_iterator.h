@@ -1,7 +1,7 @@
 #ifndef SQL_SORTING_ITERATOR_H_
 #define SQL_SORTING_ITERATOR_H_
 
-/* Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "my_alloc.h"
 #include "my_base.h"
 #include "sql/basic_row_iterators.h"
 #include "sql/row_iterator.h"
@@ -57,7 +58,12 @@ class SortingIterator final : public RowIterator {
   // times). It _does_ take ownership of "source", and is responsible for
   // calling Init() on it, but does not hold the memory.
   // "examined_rows", if not nullptr, is incremented for each successful Read().
-  SortingIterator(THD *thd, Filesort *filesort,
+  //
+  // qep_tab is used for two things: To fill in any old-style information schema
+  // tables before scanning, if needed, and to count the number of read rows
+  // (for SQL_CALC_FOUND_ROWS). If you need neither of these, you can pass
+  // nullptr.
+  SortingIterator(THD *thd, QEP_TAB *qep_tab, Filesort *filesort,
                   unique_ptr_destroy_only<RowIterator> source,
                   ha_rows *examined_rows);
   ~SortingIterator() override;
@@ -80,6 +86,11 @@ class SortingIterator final : public RowIterator {
   int Read() override { return m_result_iterator->Read(); }
 
   void SetNullRowFlag(bool is_null_row) override {
+    if (m_result_iterator == nullptr) {
+      // If we don't have a result yet, it will come up with the flag unset.
+      DBUG_ASSERT(is_null_row == false);
+      return;
+    }
     m_result_iterator->SetNullRowFlag(is_null_row);
   }
 
@@ -91,11 +102,21 @@ class SortingIterator final : public RowIterator {
 
   std::vector<std::string> DebugString() const override;
 
+  /// Optional (when JOIN::destroy() runs, the iterator and its buffers
+  /// will be cleaned up anyway); used to clean up the buffers a little
+  /// bit earlier.
+  ///
+  /// When we get cached JOIN objects (prepare/optimize once) that can
+  /// live for a long time between queries, calling this will become more
+  /// important.
+  void CleanupAfterQuery();
+
  private:
-  int DoSort(QEP_TAB *qep_tab);
+  int DoSort();
   void ReleaseBuffers();
 
   Filesort *m_filesort;
+  QEP_TAB *m_qep_tab;
 
   // The iterator we are reading records from. We don't read from it
   // after Init() is done, but we may read from the TABLE it wraps,
@@ -109,13 +130,20 @@ class SortingIterator final : public RowIterator {
   // using packed addons, etc..
   unique_ptr_destroy_only<RowIterator> m_result_iterator;
 
+  // Holds the buffers for m_sort_result.
+  Filesort_info m_fs_info;
+
   Sort_result m_sort_result;
 
   ha_rows *m_examined_rows;
 
-  // Similarly to iterator_holder in READ_RECORD, allows us to keep one of
-  // the different forms of result iterators without incurring a heap
-  // allocation.
+  // Holds one out of all RowIterator implementations we need so that it is
+  // possible to initialize a RowIterator without heap allocations.
+  // (m_result_iterator typically points to this union, and is responsible for
+  // running the right destructor.)
+  //
+  // TODO: If we need to add TimingIterator directly on this iterator,
+  // switch to allocating it on the MEM_ROOT.
   union IteratorHolder {
     IteratorHolder() {}
     ~IteratorHolder() {}

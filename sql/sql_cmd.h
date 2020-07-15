@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -36,6 +36,7 @@ class THD;
 class Prepared_statement;
 struct handlerton;
 struct MYSQL_LEX_STRING;
+struct MYSQL_LEX_CSTRING;
 
 /**
   Representation of an SQL command.
@@ -149,7 +150,7 @@ class Sql_cmd {
     the statement is not eligible for execution in a secondary storage
     engine
   */
-  virtual const MYSQL_LEX_STRING *eligible_secondary_storage_engine() const {
+  virtual const MYSQL_LEX_CSTRING *eligible_secondary_storage_engine() const {
     return nullptr;
   }
 
@@ -182,6 +183,11 @@ class Sql_cmd {
 
   /**
     Is this statement using a secondary storage engine?
+    @note that this is reliable during optimization and afterwards; during
+    preparation, if this is an explicit preparation (SQL PREPARE, C API
+    PREPARE, and automatic repreparation), it may be false as RAPID tables have
+    not yet been opened. Therefore, during preparation, it is safer to test
+    THD::secondary_engine_optimization().
   */
   bool using_secondary_storage_engine() const {
     return m_secondary_engine != nullptr;
@@ -193,6 +199,14 @@ class Sql_cmd {
     used.
   */
   const handlerton *secondary_engine() const { return m_secondary_engine; }
+
+  void set_optional_transform_prepared(bool value) {
+    m_prepared_with_optional_transform = value;
+  }
+
+  bool is_optional_transform_prepared() {
+    return m_prepared_with_optional_transform;
+  }
 
  protected:
   Sql_cmd() : m_owner(nullptr), m_prepared(false), prepare_only(true) {}
@@ -230,6 +244,12 @@ class Sql_cmd {
     not be considered for executing this statement.
   */
   bool m_secondary_engine_enabled{true};
+
+  /**
+    Keeps track of whether the statement was prepared optional
+    transformation.
+  */
+  bool m_prepared_with_optional_transform{false};
 
   /**
     The secondary storage engine to use for execution of this

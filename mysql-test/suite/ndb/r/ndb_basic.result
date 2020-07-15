@@ -97,7 +97,9 @@ Ndb_index_stat_cache_query	#
 Ndb_index_stat_status	#
 Ndb_last_commit_epoch_server	#
 Ndb_last_commit_epoch_session	#
+Ndb_metadata_blacklist_size	#
 Ndb_metadata_detected_count	#
+Ndb_metadata_synced_count	#
 Ndb_number_of_data_nodes	#
 Ndb_number_of_ready_data_nodes	#
 Ndb_pruned_scan_count	#
@@ -110,6 +112,7 @@ Ndb_schema_locks_count	#
 Ndb_slave_max_replicated_epoch	#
 Ndb_sorted_scan_count	#
 Ndb_system_name	#
+Ndb_trans_hint_count_session	#
 SHOW GLOBAL VARIABLES WHERE Variable_name LIKE 'ndb\_%' and 
 Variable_name NOT LIKE 'ndb_dbg\_%';
 Variable_name	Value
@@ -140,6 +143,7 @@ ndb_log_binlog_index	#
 ndb_log_empty_epochs	#
 ndb_log_empty_update	#
 ndb_log_exclusive_reads	#
+ndb_log_fail_terminate	#
 ndb_log_orig	#
 ndb_log_transaction_id	#
 ndb_log_update_as_write	#
@@ -147,6 +151,7 @@ ndb_log_update_minimal	#
 ndb_log_updated_only	#
 ndb_metadata_check	#
 ndb_metadata_check_interval	#
+ndb_metadata_sync	#
 ndb_mgmd_host	#
 ndb_nodeid	#
 ndb_optimization_delay	#
@@ -157,6 +162,8 @@ ndb_recv_thread_cpu_mask	#
 ndb_report_thresh_binlog_epoch_slip	#
 ndb_report_thresh_binlog_mem_usage	#
 ndb_row_checksum	#
+ndb_schema_dist_lock_wait_timeout	#
+ndb_schema_dist_timeout	#
 ndb_schema_dist_upgrade_allowed	#
 ndb_show_foreign_key_mock_tables	#
 ndb_slave_conflict_role	#
@@ -637,7 +644,7 @@ create table t1 ( c50 char(255) column_format fixed, c49 char(255) column_format
 ERROR HY000: Can't create table 't1'
 show warnings;
 Level	Code	Message
-Warning	1296	Got error 851 'Maximum 8052 bytes of FIXED columns supported, use varchar or COLUMN_FORMAT DYNAMIC instead' from NDB
+Warning	1296	Got error 851 'Fixed-size column offset exceeded max.Use VARCHAR or COLUMN_FORMAT DYNAMIC for memory-stored columns' from NDB
 Warning	1296	Failed to commit NDB schema transaction
 Error	1005	Can't create table 't1'
 create table `t1` (`a` int, b int, primary key (a,b)) engine=ndb partition by key(`a`,`b`,`a`);
@@ -726,6 +733,8 @@ create table t1
 datavalue char(40) default 'XXXX',
 primary key (counter)
 ) ENGINE=ndbcluster;
+Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 insert into t1 (datavalue) values ('newval');
 insert into t1 (datavalue) values ('newval');
 select * from t1 order by counter;
@@ -908,10 +917,10 @@ drop table t1,t2;
 create table t1 (a int not null primary key, b int not null) engine=ndb;
 insert into t1 values (1,10), (2,20), (3,30);
 insert into t1 set a=1, b=100;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't1.PRIMARY'
 insert ignore into t1 set a=1, b=100;
 Warnings:
-Warning	1062	Duplicate entry '1' for key 'PRIMARY'
+Warning	1062	Duplicate entry '1' for key 't1.PRIMARY'
 select * from t1 order by a;
 a	b
 1	10
@@ -929,7 +938,7 @@ create table t2 (c int not null primary key, d int not null) engine=ndb;
 insert into t1 values (1,10), (2,10), (3,30), (4, 30);
 insert into t2 values (1,10), (2,10), (3,30), (4, 30);
 update t1 set a = 1 where a = 3;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't1.PRIMARY'
 select * from t1 order by a;
 a	b
 1	10
@@ -944,7 +953,7 @@ a	b
 3	30
 4	1
 update t1,t2 set a = 1, c = 1 where a = 3 and c = 3;
-ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+ERROR 23000: Duplicate entry '1' for key 't1.PRIMARY'
 select * from t1 order by a;
 a	b
 1	10
@@ -953,8 +962,8 @@ a	b
 4	1
 update ignore t1,t2 set a = 1, c = 1 where a = 3 and c = 3;
 Warnings:
-Warning	1062	Duplicate entry '1' for key 'PRIMARY'
-Warning	1062	Duplicate entry '1' for key 'PRIMARY'
+Warning	1062	Duplicate entry '1' for key 't1.PRIMARY'
+Warning	1062	Duplicate entry '1' for key 't2.PRIMARY'
 select * from t1 order by a;
 a	b
 1	10
@@ -1025,6 +1034,7 @@ PRIMARY KEY (`id`)
 ) ENGINE=ndbcluster DEFAULT CHARSET=utf8
 comment="NDB_TABLE=PARTITION_BALANCE=FOR_RP_BY_LDM";
 Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
 CREATE TABLE `t2` (
 `id` int(11) NOT NULL,
@@ -1034,6 +1044,8 @@ KEY `obj_id` (`obj_id`)
 ) ENGINE=ndbcluster DEFAULT CHARSET=utf8
 comment="NDB_TABLE=PARTITION_BALANCE=FOR_RP_BY_LDM";
 Warnings:
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
+Warning	1681	Integer display width is deprecated and will be removed in a future release.
 Warning	3719	'utf8' is currently an alias for the character set UTF8MB3, but will be an alias for UTF8MB4 in a future release. Please consider using UTF8MB4 in order to be unambiguous.
 # here we used to segv
 explain SELECT t1.id FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t2.obj_id=1;

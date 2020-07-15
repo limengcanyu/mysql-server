@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -25,7 +25,9 @@
 
 #include <atomic>
 #include <list>
+#include <mutex>  // std::adopt_lock_t
 
+#include "libbinlogevents/include/compression/base.h"
 #include "libbinlogevents/include/uuid.h"
 #include "map_helpers.h"
 #include "my_dbug.h"
@@ -35,7 +37,6 @@
 #include "prealloced_array.h"        // Prealloced_array
 #include "sql/rpl_reporting.h"       // MAX_SLAVE_ERRMSG
 #include "template_utils.h"
-#include "typelib.h"
 
 struct TABLE_LIST;
 class THD;
@@ -44,7 +45,8 @@ class THD;
   Report an error from code that can be linked into either the server
   or mysqlbinlog.  There is no common error reporting mechanism, so we
   have to duplicate the error message (write it out in the source file
-  for mysqlbinlog, write it in share/errmsg-utf8.txt for the server).
+  for mysqlbinlog, write it in share/messages_to_clients.txt for the
+  server).
 
   @param MYSQLBINLOG_ERROR arguments to mysqlbinlog's 'error'
   function, including the function call parentheses
@@ -63,8 +65,6 @@ extern PSI_memory_key key_memory_Gtid_state_to_string;
 extern PSI_memory_key key_memory_Gtid_cache_to_string;
 extern PSI_memory_key key_memory_Gtid_set_Interval_chunk;
 extern PSI_memory_key key_memory_Gtid_state_group_commit_sidno;
-
-extern std::atomic<ulong> gtid_mode_counter;
 
 /**
   This macro is used to check that the given character, pointed to by the
@@ -161,7 +161,7 @@ extern void check_return_status(enum_return_status status, const char *action,
     if (__propagate_error_status != RETURN_STATUS_OK) {                       \
       __CHECK_RETURN_STATUS(__propagate_error_status, "Propagating", #STATUS, \
                             ALLOW_UNREPORTED);                                \
-      DBUG_RETURN(RETURN_VALUE);                                              \
+      return RETURN_VALUE;                                                    \
     }                                                                         \
   } while (0)
 /// Low-level macro that returns STATUS. @see __DO_RETURN_STATUS
@@ -170,7 +170,7 @@ extern void check_return_status(enum_return_status status, const char *action,
     enum_return_status __return_status_status = STATUS;                 \
     __CHECK_RETURN_STATUS(__return_status_status, "Returning", #STATUS, \
                           ALLOW_UNREPORTED);                            \
-    DBUG_RETURN(__return_status_status);                                \
+    return __return_status_status;                                      \
   } while (0)
 /**
   If STATUS (of type enum_return_status) returns RETURN_STATUS_OK,
@@ -203,7 +203,7 @@ extern void check_return_status(enum_return_status status, const char *action,
 */
 #define RETURN_REPORTED_STATUS(STATUS) __RETURN_STATUS(STATUS, false)
 /// Returns RETURN_STATUS_OK.
-#define RETURN_OK DBUG_RETURN(RETURN_STATUS_OK)
+#define RETURN_OK return RETURN_STATUS_OK
 /// Does a DBUG_PRINT and returns RETURN_STATUS_REPORTED_ERROR.
 #define RETURN_REPORTED_ERROR RETURN_STATUS(RETURN_STATUS_REPORTED_ERROR)
 /// Does a DBUG_PRINT and returns RETURN_STATUS_UNREPORTED_ERROR.
@@ -213,138 +213,12 @@ extern void check_return_status(enum_return_status status, const char *action,
   enum to map the result of Uuid::parse to the above Macros
 */
 inline enum_return_status map_macro_enum(int status) {
-  DBUG_ENTER("map status error with the return value of uuid::parse_method");
+  DBUG_TRACE;
   if (status == 0)
     RETURN_OK;
   else
     RETURN_UNREPORTED_ERROR;
 }
-
-/// Possible values for @@GLOBAL.GTID_MODE.
-enum enum_gtid_mode {
-  /**
-    New transactions are anonymous. Replicated transactions must be
-    anonymous; replicated GTID-transactions generate an error.
-  */
-  GTID_MODE_OFF = 0,
-  DEFAULT_GTID_MODE = GTID_MODE_OFF,
-  /**
-    New transactions are anonyomus. Replicated transactions can be
-    either anonymous or GTID-transactions.
-  */
-  GTID_MODE_OFF_PERMISSIVE = 1,
-  /**
-    New transactions are GTID-transactions. Replicated transactions
-    can be either anonymous or GTID-transactions.
-  */
-  GTID_MODE_ON_PERMISSIVE = 2,
-  /**
-    New transactions are GTID-transactions. Replicated transactions
-    must be GTID-transactions; replicated anonymous transactions
-    generate an error.
-  */
-  GTID_MODE_ON = 3
-};
-
-/**
-  The gtid_mode.
-
-  Please do not access this directly - use the getters and setters
-  defined below.
-
-  It is ulong rather than enum_gtid_mode because of how sys_vars are
-  updated.
-*/
-extern ulong _gtid_mode;
-/**
-  Strings holding the enumeration values for gtid_mode. Use
-  get_gtid_mode_string instead of accessing this directly.
-*/
-extern const char *gtid_mode_names[];
-/**
-  'Typelib' for the mode names. Use get_gtid_mode_string instead
-  of accessing this directly.
-*/
-extern TYPELIB gtid_mode_typelib;
-
-/**
-  Return the given string GTID_MODE as an enumeration value.
-
-  @param string The string to decode.
-
-  @param[out] error If the string does not represent a valid
-  GTID_MODE, this is set to true, otherwise it is left untouched.
-
-  @return The GTID_MODE.
-*/
-inline enum_gtid_mode get_gtid_mode(const char *string, bool *error) {
-  int ret = find_type(string, &gtid_mode_typelib, 1);
-  if (ret == 0) {
-    *error = true;
-    return GTID_MODE_OFF;
-  } else
-    return (enum_gtid_mode)(ret - 1);
-}
-/// Return the given GTID_MODE as a string.
-inline const char *get_gtid_mode_string(enum_gtid_mode gtid_mode_arg) {
-  return gtid_mode_names[gtid_mode_arg];
-}
-
-/**
-  Locks needed to access gtid_mode.
-
-  When writing, all these locks must be held (for the rwlocks, the
-  wrlock must be held).
-
-  When reading, one of them must be held (for the wrlocks, the rdlock
-  suffices).
-*/
-enum enum_gtid_mode_lock {
-  /// No lock held.
-  GTID_MODE_LOCK_NONE,
-  /// The specific gtid_mode_lock is held.
-  GTID_MODE_LOCK_GTID_MODE,
-  /// global_sid_lock held.
-  GTID_MODE_LOCK_SID,
-  /// read or write lock on channel_map lock is held.
-  GTID_MODE_LOCK_CHANNEL_MAP
-  /*
-    Currently, no function that calls get_gtid_mode needs
-    this. Uncomment this, and uncomment the case in get_gtid_mode, if it
-    is ever needed.
-
-    /// mysql_bin_log.get_log_lock() held.
-    GTID_MODE_LOCK_LOG
-  */
-};
-/**
-  Return the current GTID_MODE as an enumeration value.
-
-  This variable can be read while holding any one of the locks
-  enumerated in enum_gtid_mode_lock (see above).
-
-  When the variable is updated by a SET GTID_MODE statement, all these
-  locks will be taken (the wrlock on global_sid_map).
-
-  To avoid the mistake of reading the GTID_MODE with no lock, the
-  caller has to pass the lock type as a parameter.  The function will
-  assert that the corresponding lock is held.  If no lock is held, it
-  will acquire and release global_sid_lock.rdlock.
-
-  @param have_lock The lock type held by the caller.
-*/
-enum_gtid_mode get_gtid_mode(enum_gtid_mode_lock have_lock);
-
-#ifndef DBUG_OFF
-/**
-  Return the current GTID_MODE as a string. Used only for debugging.
-
-  @param have_lock Pass this parameter to get_gtid_mode(bool).
-*/
-inline const char *get_gtid_mode_string(enum_gtid_mode_lock have_lock) {
-  return get_gtid_mode_string(get_gtid_mode(have_lock));
-}
-#endif  // ifndef DBUG_OFF
 
 /**
   Possible values for ENFORCE_GTID_CONSISTENCY.
@@ -435,56 +309,167 @@ class Checkable_rwlock {
 #endif
   ) {
 #ifndef DBUG_OFF
-    lock_state.store(0);
-    dbug_trace = true;
+    m_lock_state.store(0);
+    m_dbug_trace = true;
 #else
-    is_write_lock = false;
+    m_is_write_lock = false;
 #endif
 #if defined(HAVE_PSI_INTERFACE)
-    mysql_rwlock_init(psi_key, &rwlock);
+    mysql_rwlock_init(psi_key, &m_rwlock);
 #else
-    mysql_rwlock_init(0, &rwlock);
+    mysql_rwlock_init(0, &m_rwlock);
 #endif
   }
   /// Destroy this Checkable_lock.
-  ~Checkable_rwlock() { mysql_rwlock_destroy(&rwlock); }
+  ~Checkable_rwlock() { mysql_rwlock_destroy(&m_rwlock); }
+
+  enum enum_lock_type { NO_LOCK, READ_LOCK, WRITE_LOCK };
+
+  /**
+    RAII class to acquire a lock for the duration of a block.
+  */
+  class Guard {
+    Checkable_rwlock &m_lock;
+    enum_lock_type m_lock_type;
+
+   public:
+    /**
+      Create a guard, and optionally acquire a lock on it.
+    */
+    Guard(Checkable_rwlock &lock, enum_lock_type lock_type)
+        : m_lock(lock), m_lock_type(NO_LOCK) {
+      DBUG_TRACE;
+      switch (lock_type) {
+        case READ_LOCK:
+          rdlock();
+          break;
+        case WRITE_LOCK:
+          wrlock();
+          break;
+        case NO_LOCK:
+          break;
+      }
+    }
+
+    /**
+      Create a guard, assuming the caller already holds a lock on it.
+    */
+    Guard(Checkable_rwlock &lock, enum_lock_type lock_type,
+          std::adopt_lock_t t MY_ATTRIBUTE((unused)))
+        : m_lock(lock), m_lock_type(lock_type) {
+      DBUG_TRACE;
+      switch (lock_type) {
+        case READ_LOCK:
+          lock.assert_some_rdlock();
+          break;
+        case WRITE_LOCK:
+          lock.assert_some_wrlock();
+          break;
+        case NO_LOCK:
+          break;
+      }
+    }
+
+    /// Objects of this class should not be copied or moved.
+    Guard(Guard const &copy) = delete;
+    Guard(Guard const &&copy) = delete;
+
+    /// Unlock on destruct.
+    ~Guard() {
+      DBUG_TRACE;
+      unlock_if_locked();
+    }
+
+    /// Acquire the read lock.
+    void rdlock() {
+      DBUG_TRACE;
+      DBUG_ASSERT(m_lock_type == NO_LOCK);
+      m_lock.rdlock();
+      m_lock_type = READ_LOCK;
+    }
+
+    /// Acquire the write lock.
+    void wrlock() {
+      DBUG_TRACE;
+      DBUG_ASSERT(m_lock_type == NO_LOCK);
+      m_lock.wrlock();
+      m_lock_type = WRITE_LOCK;
+    }
+
+    /**
+      Try to acquire the write lock, and fail if it cannot be
+      immediately granted.
+    */
+    int trywrlock() {
+      DBUG_TRACE;
+      DBUG_ASSERT(m_lock_type == NO_LOCK);
+      int ret = m_lock.trywrlock();
+      if (ret == 0) m_lock_type = WRITE_LOCK;
+      return ret;
+    }
+
+    /// Unlock the lock.
+    void unlock() {
+      DBUG_TRACE;
+      DBUG_ASSERT(m_lock_type != NO_LOCK);
+      m_lock.unlock();
+    }
+
+    /// Unlock the lock, if it was acquired by this guard.
+    void unlock_if_locked() {
+      DBUG_TRACE;
+      if (m_lock_type != NO_LOCK) unlock();
+    }
+
+    /// Return the underlying Checkable_rwlock object.
+    Checkable_rwlock &get_lock() const { return m_lock; }
+
+    /// Return true if this object is read locked.
+    bool is_rdlocked() const { return m_lock_type == READ_LOCK; }
+
+    /// Return true if this object is write locked.
+    bool is_wrlocked() const { return m_lock_type == WRITE_LOCK; }
+
+    /// Return true if this object is either read locked or write locked.
+    bool is_locked() const { return m_lock_type != NO_LOCK; }
+  };
 
   /// Acquire the read lock.
   inline void rdlock() {
-    mysql_rwlock_rdlock(&rwlock);
+    mysql_rwlock_rdlock(&m_rwlock);
     assert_no_wrlock();
 #ifndef DBUG_OFF
-    if (dbug_trace) DBUG_PRINT("info", ("%p.rdlock()", this));
-    ++lock_state;
+    if (m_dbug_trace) DBUG_PRINT("info", ("%p.rdlock()", this));
+    ++m_lock_state;
 #endif
   }
   /// Acquire the write lock.
   inline void wrlock() {
-    mysql_rwlock_wrlock(&rwlock);
+    mysql_rwlock_wrlock(&m_rwlock);
     assert_no_lock();
 #ifndef DBUG_OFF
-    if (dbug_trace) DBUG_PRINT("info", ("%p.wrlock()", this));
-    lock_state.store(-1);
+    if (m_dbug_trace) DBUG_PRINT("info", ("%p.wrlock()", this));
+    m_lock_state.store(-1);
 #else
-    is_write_lock = true;
+    m_is_write_lock = true;
 #endif
   }
   /// Release the lock (whether it is a write or read lock).
   inline void unlock() {
     assert_some_lock();
 #ifndef DBUG_OFF
-    if (dbug_trace) DBUG_PRINT("info", ("%p.unlock()", this));
-    int val = lock_state.load();
+    if (m_dbug_trace) DBUG_PRINT("info", ("%p.unlock()", this));
+    int val = m_lock_state.load();
     if (val > 0)
-      --lock_state;
+      --m_lock_state;
     else if (val == -1)
-      lock_state.store(0);
+      m_lock_state.store(0);
     else
       DBUG_ASSERT(0);
 #else
-    is_write_lock = false;
+    m_is_write_lock = false;
 #endif
-    mysql_rwlock_unlock(&rwlock);
+    mysql_rwlock_unlock(&m_rwlock);
   }
   /**
     Return true if the write lock is held. Must only be called by
@@ -495,7 +480,7 @@ class Checkable_rwlock {
 #ifndef DBUG_OFF
     return get_state() == -1;
 #else
-    return is_write_lock;
+    return m_is_write_lock;
 #endif
   }
 
@@ -503,15 +488,15 @@ class Checkable_rwlock {
     Return 0 if the write lock is held, otherwise an error will be returned.
   */
   inline int trywrlock() {
-    int ret = mysql_rwlock_trywrlock(&rwlock);
+    int ret = mysql_rwlock_trywrlock(&m_rwlock);
 
     if (ret == 0) {
       assert_no_lock();
 #ifndef DBUG_OFF
-      if (dbug_trace) DBUG_PRINT("info", ("%p.wrlock()", this));
-      lock_state.store(-1);
+      if (m_dbug_trace) DBUG_PRINT("info", ("%p.wrlock()", this));
+      m_lock_state.store(-1);
 #else
-      is_write_lock = true;
+      m_is_write_lock = true;
 #endif
     }
 
@@ -534,7 +519,7 @@ class Checkable_rwlock {
 #ifndef DBUG_OFF
 
   /// If enabled, print any lock/unlock operations to the DBUG trace.
-  bool dbug_trace;
+  bool m_dbug_trace;
 
  private:
   /**
@@ -543,26 +528,144 @@ class Checkable_rwlock {
     -1 - write locked
     >0 - read locked by that many threads
   */
-  std::atomic<int32> lock_state;
+  std::atomic<int32> m_lock_state;
   /// Read lock_state atomically and return the value.
-  inline int32 get_state() const { return lock_state.load(); }
+  inline int32 get_state() const { return m_lock_state.load(); }
 
 #else
 
  private:
-  bool is_write_lock;
+  bool m_is_write_lock;
 
 #endif
   /// The rwlock.
-  mysql_rwlock_t rwlock;
+  mysql_rwlock_t m_rwlock;
 };
 
 /// Protects Gtid_state.  See comment above gtid_state for details.
 extern Checkable_rwlock *global_sid_lock;
 
-/// One of the locks that protects GTID_MODE.  See
-/// get_gtid_mode(enum_gtid_mode_lock).
-extern Checkable_rwlock *gtid_mode_lock;
+/**
+  Class to access the value of @@global.gtid_mode in an efficient and
+  thread-safe manner.
+*/
+class Gtid_mode {
+ private:
+  std::atomic<int> m_atomic_mode;
+
+ public:
+  Gtid_mode() : m_atomic_mode(0) {}
+
+  /**
+    The sys_var framework needs a variable of type ulong to store the
+    value in.  The sys_var framework takes the value from there, but
+    we copy it (in the methods of sys_var_gtid_mode) to the atomic
+    value Gtid_mode::mode, and use only that in all other places.
+  */
+  static ulong sysvar_mode;
+
+  /// Possible values for @@global.gtid_mode.
+  enum value_type {
+    /**
+      New transactions are anonymous. Replicated transactions must be
+      anonymous; replicated GTID-transactions generate an error.
+    */
+    OFF = 0,
+    DEFAULT = OFF,
+    /**
+      New transactions are anonyomus. Replicated transactions can be
+      either anonymous or GTID-transactions.
+    */
+    OFF_PERMISSIVE = 1,
+    /**
+      New transactions are GTID-transactions. Replicated transactions
+      can be either anonymous or GTID-transactions.
+    */
+    ON_PERMISSIVE = 2,
+    /**
+      New transactions are GTID-transactions. Replicated transactions
+      must be GTID-transactions; replicated anonymous transactions
+      generate an error.
+    */
+    ON = 3
+  };
+
+  /**
+    Strings holding the enumeration values for gtid_mode.  Use
+    Gtid_mode::get_string instead of accessing this directly.
+  */
+  static const char *names[];
+
+  /**
+    Protects updates to @@global.gtid_mode.
+
+    SET @@global.gtid_mode will try to take the write lock.  If the
+    lock is not granted immediately, SET will fail.
+
+    Thus, any other operation can block updates to
+    @@global.gtid_mode by acquiring the read lock.
+  */
+  static Checkable_rwlock lock;
+
+  /**
+    Set a new value for @@global.gtid_mode.
+
+    This should only be called from Sys_var_gtid_mode::global_update
+    and gtid_server_init.
+  */
+  void set(value_type value);
+
+ public:
+  /**
+    Return the current gtid_mode as an enumeration value.
+  */
+  value_type get() const;
+
+#ifndef DBUG_OFF
+  /**
+    Return the current gtid_mode as a string.
+
+    Used only for debugging.  Non-debug code typically reads and acts
+    on the enum value before printing it. Then it is better to print
+    the enum value.
+  */
+  const char *get_string() const;
+#endif  // ifndef DBUG_OFF
+
+  /**
+    Return the given string gtid_mode as an enumeration value.
+
+    @param s The string to decode.
+
+    @return A pair, where the first component indicates failure and
+    the second component is the GTID_MODE.  Specifically, the first
+    component is false if the string is a valid GTID_MODE, and true if
+    it is not.
+  */
+  static std::pair<bool, value_type> from_string(std::string s);
+
+  /// Return the given gtid_mode as a string.
+  static const char *to_string(value_type value);
+};
+
+std::ostream &operator<<(std::ostream &oss, Gtid_mode::value_type const &mode);
+#ifndef DBUG_OFF
+/**
+  Typically, code will print Gtid_mode only after reading and acting
+  on the enum value. Then it is better to print the enum value than to
+  read the shared resource again.  Hence we enable this only in debug
+  mode, since it makes more sense to just get the string when doing a
+  debug printout.
+*/
+std::ostream &operator<<(std::ostream &oss, Gtid_mode const &mode);
+#endif
+
+/**
+  The one and only instance of Gtid_mode.
+
+  All access to @@global.gtid_mode should use this object.
+*/
+extern Gtid_mode global_gtid_mode;
 
 /**
   Represents a bidirectional map between SID and SIDNO.
@@ -621,7 +724,7 @@ class Sid_map {
     @retval 0 if the given SID does not exist in this map.
   */
   rpl_sidno sid_to_sidno(const rpl_sid &sid) const {
-    if (sid_lock != NULL) sid_lock->assert_some_lock();
+    if (sid_lock != nullptr) sid_lock->assert_some_lock();
     const auto it = _sid_to_sidno.find(sid);
     if (it == _sid_to_sidno.end()) return 0;
     return it->second->sidno;
@@ -647,7 +750,7 @@ class Sid_map {
     destroyed.
   */
   const rpl_sid &sidno_to_sid(rpl_sidno sidno, bool need_lock = false) const {
-    if (sid_lock != NULL) {
+    if (sid_lock != nullptr) {
       if (need_lock)
         sid_lock->rdlock();
       else
@@ -655,7 +758,7 @@ class Sid_map {
     }
     DBUG_ASSERT(sidno >= 1 && sidno <= get_max_sidno());
     const rpl_sid &ret = (_sidno_to_sid[sidno - 1])->sid;
-    if (sid_lock != NULL && need_lock) sid_lock->unlock();
+    if (sid_lock != nullptr && need_lock) sid_lock->unlock();
     return ret;
   }
   /**
@@ -667,7 +770,7 @@ class Sid_map {
     @param n A number in the interval [0, get_max_sidno()-1], inclusively.
   */
   rpl_sidno get_sorted_sidno(rpl_sidno n) const {
-    if (sid_lock != NULL) sid_lock->assert_some_lock();
+    if (sid_lock != nullptr) sid_lock->assert_some_lock();
     return _sorted[n];
   }
   /**
@@ -677,7 +780,7 @@ class Sid_map {
     invoking this function.
   */
   rpl_sidno get_max_sidno() const {
-    if (sid_lock != NULL) sid_lock->assert_some_lock();
+    if (sid_lock != nullptr) sid_lock->assert_some_lock();
     return static_cast<rpl_sidno>(_sidno_to_sid.size());
   }
 
@@ -831,19 +934,19 @@ class Mutex_cond_array {
     thread was killed, the error has been generated.
   */
   inline bool wait(const THD *thd, int sidno, struct timespec *abstime) const {
-    DBUG_ENTER("Mutex_cond_array::wait");
+    DBUG_TRACE;
     int error = 0;
     Mutex_cond *mutex_cond = get_mutex_cond(sidno);
     global_lock->unlock();
     mysql_mutex_assert_owner(&mutex_cond->mutex);
-    if (is_thd_killed(thd)) DBUG_RETURN(true);
-    if (abstime != NULL)
+    if (is_thd_killed(thd)) return true;
+    if (abstime != nullptr)
       error =
           mysql_cond_timedwait(&mutex_cond->cond, &mutex_cond->mutex, abstime);
     else
       mysql_cond_wait(&mutex_cond->cond, &mutex_cond->mutex);
     mysql_mutex_assert_owner(&mutex_cond->mutex);
-    DBUG_RETURN(is_timeout(error));
+    return is_timeout(error);
   }
 #ifdef MYSQL_SERVER
   /// Execute THD::enter_cond for the n'th condition variable.
@@ -1040,6 +1143,12 @@ struct Trx_monitoring_info {
   ulong transaction_retries;
   /// True when the transaction is retrying
   bool is_retrying;
+  /// The compression type
+  binary_log::transaction::compression::type compression_type;
+  /// The compressed bytes
+  ulonglong compressed_bytes;
+  /// The uncompressed bytes
+  ulonglong uncompressed_bytes;
 
   /// Constructor
   Trx_monitoring_info();
@@ -1169,7 +1278,7 @@ class Gtid_monitoring_info {
                             on mi->data_lock. When no mutex is specified, the
                             object will rely on its own atomic mechanism.
   */
-  Gtid_monitoring_info(mysql_mutex_t *atomic_mutex_arg = NULL);
+  Gtid_monitoring_info(mysql_mutex_t *atomic_mutex_arg = nullptr);
 
   /// Destroy this GTID monitoring info object.
   ~Gtid_monitoring_info();
@@ -1225,9 +1334,9 @@ class Gtid_monitoring_info {
     Clear only the last_processed_trx monitoring info.
   */
   void clear_last_processed_trx();
+
   /**
     Sets the initial monitoring information.
-
     @param gtid_arg         The Gtid to be stored.
     @param original_ts_arg  The original commit timestamp of the GTID.
     @param immediate_ts_arg The immediate commit timestamp of the GTID.
@@ -1237,6 +1346,9 @@ class Gtid_monitoring_info {
   */
   void start(Gtid gtid_arg, ulonglong original_ts_arg,
              ulonglong immediate_ts_arg, bool skipped_arg = false);
+
+  void update(binary_log::transaction::compression::type t, size_t payload_size,
+              size_t uncompressed_size);
 
   /**
     Sets the final information, copy processing info to last_processed
@@ -1311,7 +1423,7 @@ class Gtid_set {
     number of SIDs. This may be NULL if such changes do not need to be
     protected.
   */
-  Gtid_set(Sid_map *sid_map, Checkable_rwlock *sid_lock = NULL);
+  Gtid_set(Sid_map *sid_map, Checkable_rwlock *sid_lock = nullptr);
   /**
     Constructs a new Gtid_set that contains the gtids in the given
     string, in the same format as add_gtid_text(char *).
@@ -1329,7 +1441,7 @@ class Gtid_set {
     there will be a short period when the lock is not held at all.
   */
   Gtid_set(Sid_map *sid_map, const char *text, enum_return_status *status,
-           Checkable_rwlock *sid_lock = NULL);
+           Checkable_rwlock *sid_lock = nullptr);
 
  private:
   /// Worker for the constructor.
@@ -1362,11 +1474,11 @@ class Gtid_set {
     @param gno GNO of the GTID to add.
   */
   void _add_gtid(rpl_sidno sidno, rpl_gno gno) {
-    DBUG_ENTER("Gtid_set::_add_gtid(sidno, gno)");
+    DBUG_TRACE;
     Interval_iterator ivit(this, sidno);
     Free_intervals_lock lock(this);
     add_gno_interval(&ivit, gno, gno + 1, &lock);
-    DBUG_VOID_RETURN;
+    return;
   }
   /**
     Removes the given GTID from this Gtid_set.
@@ -1375,13 +1487,13 @@ class Gtid_set {
     @param gno GNO of the GTID to remove.
   */
   void _remove_gtid(rpl_sidno sidno, rpl_gno gno) {
-    DBUG_ENTER("Gtid_set::_remove_gtid(rpl_sidno, rpl_gno)");
+    DBUG_TRACE;
     if (sidno <= get_max_sidno()) {
       Interval_iterator ivit(this, sidno);
       Free_intervals_lock lock(this);
       remove_gno_interval(&ivit, gno, gno + 1, &lock);
     }
-    DBUG_VOID_RETURN;
+    return;
   }
   /**
     Adds the given GTID to this Gtid_set.
@@ -1467,8 +1579,8 @@ class Gtid_set {
 
     @return RETURN_STATUS_OK or RETURN_STATUS_REPORTED_ERROR.
   */
-  enum_return_status add_gtid_text(const char *text, bool *anonymous = NULL,
-                                   bool *starts_with_plus = NULL);
+  enum_return_status add_gtid_text(const char *text, bool *anonymous = nullptr,
+                                   bool *starts_with_plus = nullptr);
   /**
     Decodes a Gtid_set from the given string.
 
@@ -1481,7 +1593,7 @@ class Gtid_set {
     @return RETURN_STATUS_OK or RETURN_STATUS_REPORTED_ERROR.
   */
   enum_return_status add_gtid_encoding(const uchar *encoded, size_t length,
-                                       size_t *actual_length = NULL);
+                                       size_t *actual_length = nullptr);
   /// Return true iff the given GTID exists in this set.
   bool contains_gtid(rpl_sidno sidno, rpl_gno gno) const;
   /// Return true iff the given GTID exists in this set.
@@ -1549,6 +1661,38 @@ class Gtid_set {
     Gtid_iterator git(this);
     return git.get().sidno == 0;
   }
+
+  /**
+    What is the count of all the GTIDs in all intervals for a sidno
+
+    @param sidno  The sidno that contains the intervals
+
+    @return the number of all GTIDs in all intervals
+  */
+  ulonglong get_interval_count(rpl_sidno sidno) const {
+    Const_interval_iterator ivit(this, sidno);
+    ulonglong ret = 0;
+    while (ivit.get() != nullptr) {
+      ret += ivit.get()->end - ivit.get()->start;
+      ivit.next();
+    }
+    return ret;
+  }
+
+  /**
+    What is the count of all the GTIDs for all sidno
+
+    @return the number of all GTIDs
+  */
+  ulonglong get_gtid_number() const {
+    if (sid_lock != nullptr) sid_lock->assert_some_wrlock();
+    rpl_sidno max_sidno = get_max_sidno();
+    ulonglong ret = 0;
+    for (rpl_sidno sidno = 1; sidno <= max_sidno; sidno++)
+      ret += get_interval_count(sidno);
+    return ret;
+  }
+
   /**
     Returns true if this Gtid_set contains at least one GTID with
     the given SIDNO.
@@ -1563,7 +1707,7 @@ class Gtid_set {
     DBUG_ASSERT(sidno >= 1);
     if (sidno > get_max_sidno()) return false;
     Const_interval_iterator ivit(this, sidno);
-    return ivit.get() != NULL;
+    return ivit.get() != nullptr;
   }
   /**
     Returns true if the given string is a valid specification of a
@@ -1609,7 +1753,7 @@ class Gtid_set {
     separators in the resulting text.
     @return The length.
   */
-  size_t get_string_length(const String_format *string_format = NULL) const;
+  size_t get_string_length(const String_format *string_format = nullptr) const;
   /**
     Formats this Gtid_set as a string and saves in a given buffer.
 
@@ -1624,7 +1768,7 @@ class Gtid_set {
     @return Length of the generated string.
   */
   size_t to_string(char *buf, bool need_lock = false,
-                   const String_format *string_format = NULL) const;
+                   const String_format *string_format = nullptr) const;
 
   /**
     Formats a Gtid_set as a string and saves in a newly allocated buffer.
@@ -1638,13 +1782,13 @@ class Gtid_set {
     @retval Length of the generated string, or -1 on out of memory.
   */
   long to_string(char **buf, bool need_lock = false,
-                 const String_format *string_format = NULL) const;
+                 const String_format *string_format = nullptr) const;
 #ifndef DBUG_OFF
   /// Debug only: Print this Gtid_set to stdout.
 
   /// For use with C `printf`
   void print(bool need_lock = false,
-             const Gtid_set::String_format *sf = NULL) const {
+             const Gtid_set::String_format *sf = nullptr) const {
     char *str;
     to_string(&str, need_lock, sf);
     printf("%s\n", str ? str : "out of memory in Gtid_set::print");
@@ -1664,10 +1808,10 @@ class Gtid_set {
     Print this Gtid_set to the trace file if debug is enabled; no-op
     otherwise.
   */
-  void dbug_print(
-      const char *text MY_ATTRIBUTE((unused)) = "",
-      bool need_lock MY_ATTRIBUTE((unused)) = false,
-      const Gtid_set::String_format *sf MY_ATTRIBUTE((unused)) = NULL) const {
+  void dbug_print(const char *text MY_ATTRIBUTE((unused)) = "",
+                  bool need_lock MY_ATTRIBUTE((unused)) = false,
+                  const Gtid_set::String_format *sf MY_ATTRIBUTE((unused)) =
+                      nullptr) const {
 #ifndef DBUG_OFF
     char *str;
     to_string(&str, need_lock, sf);
@@ -1729,9 +1873,9 @@ class Gtid_set {
     @param intervals_param Array of n_intervals intervals.
   */
   void add_interval_memory(int n_intervals, Interval *intervals_param) {
-    if (sid_lock != NULL) mysql_mutex_lock(&free_intervals_mutex);
+    if (sid_lock != nullptr) mysql_mutex_lock(&free_intervals_mutex);
     add_interval_memory_lock_taken(n_intervals, intervals_param);
-    if (sid_lock != NULL) mysql_mutex_unlock(&free_intervals_mutex);
+    if (sid_lock != nullptr) mysql_mutex_unlock(&free_intervals_mutex);
   }
 
   /**
@@ -1767,7 +1911,7 @@ class Gtid_set {
     }
     /// Advance current_elem one step.
     inline void next() {
-      DBUG_ASSERT(*p != NULL);
+      DBUG_ASSERT(*p != nullptr);
       p = const_cast<Interval_p *>(&(*p)->next);
     }
     /// Return current_elem.
@@ -1825,7 +1969,7 @@ class Gtid_set {
     }
     /// Remove current_elem.
     inline void remove(Gtid_set *gtid_set) {
-      DBUG_ASSERT(get() != NULL);
+      DBUG_ASSERT(get() != nullptr);
       Interval *next = (*p)->next;
       gtid_set->put_free_interval(*p);
       set(next);
@@ -1847,7 +1991,7 @@ class Gtid_set {
   class Gtid_iterator {
    public:
     Gtid_iterator(const Gtid_set *gs) : gtid_set(gs), sidno(0), ivit(gs) {
-      if (gs->sid_lock != NULL) gs->sid_lock->assert_some_wrlock();
+      if (gs->sid_lock != nullptr) gs->sid_lock->assert_some_wrlock();
       next_sidno();
     }
     /// Advance to next gtid.
@@ -1860,7 +2004,7 @@ class Gtid_set {
         ivit.next();
         const Interval *iv = ivit.get();
         // last interval for this sidno? then go to next sidno
-        if (iv == NULL) {
+        if (iv == nullptr) {
           next_sidno();
           // last sidno? then don't try more
           if (sidno == 0) return;
@@ -1888,7 +2032,7 @@ class Gtid_set {
         }
         ivit.init(gtid_set, sidno);
         iv = ivit.get();
-      } while (iv == NULL);
+      } while (iv == nullptr);
       gno = iv->start;
     }
     /// The Gtid_set we iterate over.
@@ -1950,7 +2094,7 @@ class Gtid_set {
   int get_n_intervals(rpl_sidno sidno) const {
     Const_interval_iterator ivit(this, sidno);
     int ret = 0;
-    while (ivit.get() != NULL) {
+    while (ivit.get() != nullptr) {
       ret++;
       ivit.next();
     }
@@ -1958,7 +2102,7 @@ class Gtid_set {
   }
   /// Return the number of intervals in this Gtid_set.
   int get_n_intervals() const {
-    if (sid_lock != NULL) sid_lock->assert_some_wrlock();
+    if (sid_lock != nullptr) sid_lock->assert_some_wrlock();
     rpl_sidno max_sidno = get_max_sidno();
     int ret = 0;
     for (rpl_sidno sidno = 1; sidno < max_sidno; sidno++)
@@ -2041,7 +2185,7 @@ class Gtid_set {
     bool locked;
   };
   void assert_free_intervals_locked() {
-    if (sid_lock != NULL) mysql_mutex_assert_owner(&free_intervals_mutex);
+    if (sid_lock != nullptr) mysql_mutex_assert_owner(&free_intervals_mutex);
   }
 
   /**
@@ -2189,8 +2333,8 @@ struct Gtid_set_or_null {
   bool is_non_null;
   /// Return NULL if this is NULL, otherwise return the Gtid_set.
   inline Gtid_set *get_gtid_set() const {
-    DBUG_ASSERT(!(is_non_null && gtid_set == NULL));
-    return is_non_null ? gtid_set : NULL;
+    DBUG_ASSERT(!(is_non_null && gtid_set == nullptr));
+    return is_non_null ? gtid_set : nullptr;
   }
   /**
     Do nothing if this object is non-null; set to empty set otherwise.
@@ -2199,12 +2343,12 @@ struct Gtid_set_or_null {
   */
   Gtid_set *set_non_null(Sid_map *sm) {
     if (!is_non_null) {
-      if (gtid_set == NULL)
+      if (gtid_set == nullptr)
         gtid_set = new Gtid_set(sm);
       else
         gtid_set->clear();
     }
-    is_non_null = (gtid_set != NULL);
+    is_non_null = (gtid_set != nullptr);
     return gtid_set;
   }
   /// Set this Gtid_set to NULL.
@@ -2307,7 +2451,7 @@ class Owned_gtids {
       bool printed_sid = false;
       for (const auto &key_and_value : *get_hash(sidno)) {
         Node *node = key_and_value.second.get();
-        DBUG_ASSERT(node != NULL);
+        DBUG_ASSERT(node != nullptr);
         if (!printed_sid) {
           p += global_sid_map->sidno_to_sid(sidno).to_string(p);
           printed_sid = true;
@@ -2343,7 +2487,7 @@ class Owned_gtids {
   bool thread_owns_anything(my_thread_id thd_id) const {
     Gtid_iterator git(this);
     Node *node = git.get_node();
-    while (node != NULL) {
+    while (node != nullptr) {
       if (node->owner == thd_id) return true;
       git.next();
       node = git.get_node();
@@ -2359,7 +2503,7 @@ class Owned_gtids {
   char *to_string() const {
     char *str = (char *)my_malloc(key_memory_Owned_gtids_to_string,
                                   get_max_string_length(), MYF(MY_WME));
-    DBUG_ASSERT(str != NULL);
+    DBUG_ASSERT(str != nullptr);
     to_string(str);
     return str;
   }
@@ -2421,7 +2565,7 @@ class Owned_gtids {
   class Gtid_iterator {
    public:
     Gtid_iterator(const Owned_gtids *og)
-        : owned_gtids(og), sidno(1), hash(NULL), node(NULL) {
+        : owned_gtids(og), sidno(1), hash(nullptr), node(nullptr) {
       max_sidno = owned_gtids->get_max_sidno();
       if (sidno <= max_sidno) {
         hash = owned_gtids->get_hash(sidno);
@@ -2436,10 +2580,10 @@ class Owned_gtids {
 #endif
 
       while (sidno <= max_sidno) {
-        DBUG_ASSERT(hash != NULL);
+        DBUG_ASSERT(hash != nullptr);
         if (node_it != hash->end()) {
           node = node_it->second.get();
-          DBUG_ASSERT(node != NULL);
+          DBUG_ASSERT(node != nullptr);
           // Jump to next node on next iteration.
           ++node_it;
           return;
@@ -2453,7 +2597,7 @@ class Owned_gtids {
           node_it = hash->begin();
         }
       }
-      node = NULL;
+      node = nullptr;
     }
     /// Return next GTID, or {0,0} if we reached the end.
     inline Gtid get() const {
@@ -2568,9 +2712,9 @@ class Gtid_state {
     @retval false The gtid is not logged in the binary log.
   */
   bool is_executed(const Gtid &gtid) const {
-    DBUG_ENTER("Gtid_state::is_executed");
+    DBUG_TRACE;
     bool ret = executed_gtids.contains_gtid(gtid);
-    DBUG_RETURN(ret);
+    return ret;
   }
   /**
     Returns true if GTID is owned, otherwise returns 0.
@@ -2647,9 +2791,9 @@ class Gtid_state {
     gtid_mode could have changed to ON by a concurrent SET GTID_MODE.)
   */
   void acquire_anonymous_ownership() {
-    DBUG_ENTER("Gtid_state::acquire_anonymous_ownership");
+    DBUG_TRACE;
     sid_lock->assert_some_lock();
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) != GTID_MODE_ON);
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::ON);
 #ifndef DBUG_OFF
     int32 new_value =
 #endif
@@ -2657,14 +2801,14 @@ class Gtid_state {
     DBUG_PRINT("info",
                ("atomic_anonymous_gtid_count increased to %d", new_value));
     DBUG_ASSERT(new_value >= 1);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /// Release anonymous ownership.
   void release_anonymous_ownership() {
-    DBUG_ENTER("Gtid_state::release_anonymous_ownership");
+    DBUG_TRACE;
     sid_lock->assert_some_lock();
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) != GTID_MODE_ON);
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::ON);
 #ifndef DBUG_OFF
     int32 new_value =
 #endif
@@ -2672,7 +2816,7 @@ class Gtid_state {
     DBUG_PRINT("info",
                ("atomic_anonymous_gtid_count decreased to %d", new_value));
     DBUG_ASSERT(new_value >= 0);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /// Return the number of clients that hold anonymous ownership.
@@ -2683,8 +2827,8 @@ class Gtid_state {
     transaction having GTID_NEXT=AUTOMATIC.
   */
   void begin_automatic_gtid_violating_transaction() {
-    DBUG_ENTER("Gtid_state::begin_automatic_gtid_violating_transaction");
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) <= GTID_MODE_OFF_PERMISSIVE);
+    DBUG_TRACE;
+    DBUG_ASSERT(global_gtid_mode.get() <= Gtid_mode::OFF_PERMISSIVE);
     DBUG_ASSERT(get_gtid_consistency_mode() != GTID_CONSISTENCY_MODE_ON);
 #ifndef DBUG_OFF
     int32 new_value =
@@ -2695,7 +2839,7 @@ class Gtid_state {
         ("ongoing_automatic_gtid_violating_transaction_count increased to %d",
          new_value));
     DBUG_ASSERT(new_value >= 1);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /**
@@ -2703,10 +2847,10 @@ class Gtid_state {
     transaction having GTID_NEXT=AUTOMATIC.
   */
   void end_automatic_gtid_violating_transaction() {
-    DBUG_ENTER("Gtid_state::end_automatic_gtid_violating_transaction");
+    DBUG_TRACE;
 #ifndef DBUG_OFF
     global_sid_lock->rdlock();
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) <= GTID_MODE_OFF_PERMISSIVE);
+    DBUG_ASSERT(global_gtid_mode.get() <= Gtid_mode::OFF_PERMISSIVE);
     DBUG_ASSERT(get_gtid_consistency_mode() != GTID_CONSISTENCY_MODE_ON);
     global_sid_lock->unlock();
     int32 new_value =
@@ -2717,7 +2861,7 @@ class Gtid_state {
         ("ongoing_automatic_gtid_violating_transaction_count decreased to %d",
          new_value));
     DBUG_ASSERT(new_value >= 0);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /**
@@ -2733,8 +2877,8 @@ class Gtid_state {
     transaction having GTID_NEXT=ANONYMOUS.
   */
   void begin_anonymous_gtid_violating_transaction() {
-    DBUG_ENTER("Gtid_state::begin_anonymous_gtid_violating_transaction");
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) != GTID_MODE_ON);
+    DBUG_TRACE;
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::ON);
     DBUG_ASSERT(get_gtid_consistency_mode() != GTID_CONSISTENCY_MODE_ON);
 #ifndef DBUG_OFF
     int32 new_value =
@@ -2743,7 +2887,7 @@ class Gtid_state {
     DBUG_PRINT("info", ("atomic_anonymous_gtid_violation_count increased to %d",
                         new_value));
     DBUG_ASSERT(new_value >= 1);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /**
@@ -2751,10 +2895,10 @@ class Gtid_state {
     transaction having GTID_NEXT=ANONYMOUS.
   */
   void end_anonymous_gtid_violating_transaction() {
-    DBUG_ENTER("Gtid_state::end_anonymous_gtid_violating_transaction");
+    DBUG_TRACE;
 #ifndef DBUG_OFF
     global_sid_lock->rdlock();
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_SID) != GTID_MODE_ON);
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::ON);
     DBUG_ASSERT(get_gtid_consistency_mode() != GTID_CONSISTENCY_MODE_ON);
     global_sid_lock->unlock();
     int32 new_value =
@@ -2765,7 +2909,7 @@ class Gtid_state {
         ("ongoing_anonymous_gtid_violating_transaction_count decreased to %d",
          new_value));
     DBUG_ASSERT(new_value >= 0);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   void end_gtid_violating_transaction(THD *thd);
@@ -2782,10 +2926,9 @@ class Gtid_state {
     Increase the global counter when starting a call to
     WAIT_FOR_EXECUTED_GTID_SET or WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS.
   */
-  void begin_gtid_wait(
-      enum_gtid_mode_lock gtid_mode_lock MY_ATTRIBUTE((unused))) {
-    DBUG_ENTER("Gtid_state::begin_gtid_wait");
-    DBUG_ASSERT(get_gtid_mode(gtid_mode_lock) != GTID_MODE_OFF);
+  void begin_gtid_wait() {
+    DBUG_TRACE;
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::OFF);
 #ifndef DBUG_OFF
     int32 new_value =
 #endif
@@ -2793,7 +2936,7 @@ class Gtid_state {
     DBUG_PRINT("info", ("atomic_gtid_wait_count changed from %d to %d",
                         new_value - 1, new_value));
     DBUG_ASSERT(new_value >= 1);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /**
@@ -2801,8 +2944,8 @@ class Gtid_state {
     WAIT_FOR_EXECUTED_GTID_SET or WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS.
   */
   void end_gtid_wait() {
-    DBUG_ENTER("Gtid_state::end_gtid_wait");
-    DBUG_ASSERT(get_gtid_mode(GTID_MODE_LOCK_NONE) != GTID_MODE_OFF);
+    DBUG_TRACE;
+    DBUG_ASSERT(global_gtid_mode.get() != Gtid_mode::OFF);
 #ifndef DBUG_OFF
     int32 new_value =
 #endif
@@ -2810,7 +2953,7 @@ class Gtid_state {
     DBUG_PRINT("info", ("atomic_gtid_wait_count changed from %d to %d",
                         new_value + 1, new_value));
     DBUG_ASSERT(new_value >= 0);
-    DBUG_VOID_RETURN;
+    return;
   }
 
   /**
@@ -2843,8 +2986,8 @@ class Gtid_state {
     This variable can be read and modified in four places:
     - During server startup, holding global_sid_lock.wrlock;
     - By a client thread holding global_sid_lock.wrlock (doing a RESET MASTER);
-    - By a client thread calling MYSQL_BIN_LOG::write_gtid function (often the
-      group commit FLUSH stage leader). It will call
+    - By a client thread calling MYSQL_BIN_LOG::write_transaction function
+    (often the group commit FLUSH stage leader). It will call
       Gtid_state::generate_automatic_gtid, that will acquire
       global_sid_lock.rdlock and lock_sidno(get_server_sidno()) when getting a
       new automatically generated GTID;
@@ -2887,7 +3030,7 @@ class Gtid_state {
   enum_return_status generate_automatic_gtid(THD *thd,
                                              rpl_sidno specified_sidno = 0,
                                              rpl_gno specified_gno = 0,
-                                             rpl_sidno *locked_sidno = NULL);
+                                             rpl_sidno *locked_sidno = nullptr);
 
   /// Locks a mutex for the given SIDNO.
   void lock_sidno(rpl_sidno sidno) { sid_locks.lock(sidno); }
@@ -2926,7 +3069,7 @@ class Gtid_state {
     caller waits for one specific GTID.
   */
   bool wait_for_gtid(THD *thd, const Gtid &gtid,
-                     struct timespec *abstime = NULL);
+                     struct timespec *abstime = nullptr);
   /**
     Wait until the given Gtid_set is included in @@GLOBAL.GTID_EXECUTED.
 
@@ -2990,6 +3133,10 @@ class Gtid_state {
     @return RETURN_STATUS_OK or RETURN_STATUS_REPORTED_ERROR.
    */
   enum_return_status add_lost_gtids(Gtid_set *gtid_set, bool starts_with_plus);
+
+  /** Updates previously logged GTID set before writing to table. */
+  void update_prev_gtids(Gtid_set *write_gtid_set);
+
   /// Return a pointer to the Gtid_set that contains the lost gtids.
   const Gtid_set *get_lost_gtids() const { return &lost_gtids; }
   /*
@@ -3096,14 +3243,12 @@ class Gtid_state {
   /**
     Save the set of gtids logged in the last binlog into gtid_executed table.
 
-    @param on_rotation  true if it is on binlog rotation.
-
     @retval
       0    OK
     @retval
       -1   Error
   */
-  int save_gtids_of_last_binlog_into_table(bool on_rotation);
+  int save_gtids_of_last_binlog_into_table();
   /**
     Fetch gtids from gtid_executed table and store them into
     gtid_executed set.
@@ -3827,54 +3972,5 @@ inline void gtid_state_commit_or_rollback(THD *thd, bool needs_to,
 }
 
 #endif  // ifdef MYSQL_SERVER
-
-/**
-  An optimized way of checking GTID_MODE without acquiring locks every time.
-
-  GTID_MODE is a global variable that should not be changed often, but the
-  access to it is protected by any of the four locks described at
-  enum_gtid_mode_lock.
-
-  Every time a channel receiver thread connects to a master, and every time
-  a Gtid_log_event or an Anonymous_gtid_log_event is queued by a receiver
-  thread, there must be checked if the current GTID_MODE is compatible with
-  the operation.
-
-  There are some places where the verification is performed while already
-  holding one of the above mentioned locks, but there are other places that
-  rely on no lock and will rely on the global_sid_lock, blocking any other
-  GTID operation relying on the global_sid_map.
-
-  In order to avoid acquiring lock to check a variable that is not changed
-  often, there is a global (atomic) counter of how many times the GTID_MODE
-  was changed since the server startup.
-
-  This class holds a copy of the last GTID_MODE to be returned without the
-  need of acquiring locks if the local GTID mode counter has the same value
-  as the global atomic counter.
-*/
-class Gtid_mode_copy {
- public:
-  /**
-    Return the current server GTID_MODE without acquiring locks if possible.
-
-    @param have_lock The lock type held by the caller.
-  */
-  enum_gtid_mode get_gtid_mode_from_copy(enum_gtid_mode_lock have_lock) {
-    ulong current_gtid_mode_counter = gtid_mode_counter;
-    // Update out copy of GTID_MODE if needed
-    if (m_gtid_mode_counter != current_gtid_mode_counter) {
-      m_gtid_mode = get_gtid_mode(have_lock);
-      m_gtid_mode_counter = current_gtid_mode_counter;
-    }
-    return m_gtid_mode;
-  }
-
- private:
-  /// The copy of the atomic counter of the last time we copied the GTID_MODE
-  ulong m_gtid_mode_counter = 0;
-  /// Local copy of the GTID_MODE
-  enum_gtid_mode m_gtid_mode = DEFAULT_GTID_MODE;
-};
 
 #endif /* RPL_GTID_H_INCLUDED */

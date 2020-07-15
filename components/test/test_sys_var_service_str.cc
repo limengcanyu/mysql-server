@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -26,7 +26,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
 #include <mysql/components/services/component_sys_var_service.h>
 #include <mysql/plugin.h>
 
-#include "../../components/mysql_server/component_sys_var_service.h"
 #include "my_macros.h"
 #include "typelib.h"
 
@@ -59,35 +58,79 @@ static char *str_variable_value;
   the service.
 */
 static mysql_service_status_t test_component_sys_var_service_str_init() {
+  str_variable_value = nullptr;
   unlink(filename);
   outfile = fopen(filename, "w+");
 
   WRITE_LOG("%s\n", "test_component_sys_var_str init:");
 
   STR_CHECK_ARG(str) str_arg;
-  str_arg.def_val = NULL;
+  str_arg.def_val = nullptr;
   if (mysql_service_component_sys_variable_register->register_variable(
           "test_component_str", "str_sys_var",
           PLUGIN_VAR_STR | PLUGIN_VAR_MEMALLOC,
-          "Registering string sys_variable", NULL, NULL, (void *)&str_arg,
+          "Registering string sys_variable", nullptr, nullptr, (void *)&str_arg,
           (void *)&str_variable_value)) {
     WRITE_LOG("%s\n", "register_variable failed.");
   }
 
   {
-    char var[160];
+    char var1[160];
     char *pvar;
-    size_t len = sizeof(var) - 1;
+    size_t len = sizeof(var1) - 1;
 
-    pvar = &var[0];
+    pvar = &var1[0];
     if (mysql_service_component_sys_variable_register->get_variable(
             "mysql_server", "character_set_server", (void **)&pvar, &len)) {
       WRITE_LOG("%s\n",
                 "get_variable mysql_server.character_set_server failed.");
     } else {
-      WRITE_LOG2("character_set_server=[%.*s]\n", (int)len, var);
+      WRITE_LOG2("character_set_server=[%.*s]\n", (int)len, pvar);
+    }
+
+    /* Use too small buffer, value is 7 bytes long (utf8mb4). */
+    char var2[7];
+    len = sizeof(var2) - 1;
+    pvar = &var2[0];
+    if (mysql_service_component_sys_variable_register->get_variable(
+            "mysql_server", "character_set_server", (void **)&pvar, &len)) {
+      WRITE_LOG(
+          "get_variable mysql_server.character_set_server failed. "
+          "The variable requires buffer %i bytes long.\n",
+          (int)len);
+    } else {
+      WRITE_LOG2("character_set_server=[%.*s]\n", (int)len, pvar);
+    }
+
+    /* Use smallest buffer that can hold the value, value is 7 bytes long
+     * (utf8mb4). */
+    char var3[8];
+    len = sizeof(var3) - 1;
+    pvar = &var3[0];
+    if (mysql_service_component_sys_variable_register->get_variable(
+            "mysql_server", "character_set_server", (void **)&pvar, &len)) {
+      WRITE_LOG(
+          "get_variable mysql_server.character_set_server failed. \n"
+          "The variable requires buffer %i bytes long.\n",
+          (int)len);
+    } else {
+      WRITE_LOG2("character_set_server=[%.*s]\n", (int)len, pvar);
     }
   }
+  {
+    char var[FN_REFLEN];
+    char *pvar;
+    size_t len = sizeof(var) - 1;
+
+    pvar = &var[0];
+    if (mysql_service_component_sys_variable_register->get_variable(
+            "mysql_server", "datadir", (void **)&pvar, &len)) {
+      WRITE_LOG("%s\n", "get_variable mysql_server.datadir failed.");
+    } else {
+      WRITE_LOG("%s\n", "get_variable mysql_server.datadir success.");
+    }
+  }
+
   WRITE_LOG("%s\n", "test_component_sys_var_str end of init:");
 
   fclose(outfile);
@@ -107,6 +150,7 @@ static mysql_service_status_t test_component_sys_var_service_str_deinit() {
 
   var_value = new char[1024];
 
+  len = 1024;
   if (mysql_service_component_sys_variable_register->get_variable(
           "test_component_str", "str_sys_var", (void **)&var_value, &len)) {
     WRITE_LOG("%s\n", "get_variable failed.");
@@ -123,6 +167,7 @@ static mysql_service_status_t test_component_sys_var_service_str_deinit() {
 
   delete[] var_value;
   fclose(outfile);
+  str_variable_value = nullptr;
   return false;
 }
 

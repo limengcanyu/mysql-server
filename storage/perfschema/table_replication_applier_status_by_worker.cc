@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -97,8 +97,8 @@ Plugin_table table_replication_applier_status_by_worker::m_table_def(
 PFS_engine_table_share table_replication_applier_status_by_worker::m_share = {
     &pfs_readonly_acl,
     table_replication_applier_status_by_worker::create,
-    NULL, /* write_row */
-    NULL, /* delete_all_rows */
+    nullptr, /* write_row */
+    nullptr, /* delete_all_rows */
     table_replication_applier_status_by_worker::get_row_count, /*records*/
     sizeof(pos_t),                                             /* ref length */
     &m_table_lock,
@@ -167,10 +167,12 @@ bool PFS_index_rpl_applier_status_by_worker_by_thread::match(Master_info *mi) {
     if (mi->rli->slave_running) {
       /* STS will use SQL thread as workers on this table */
       if (mi->rli->get_worker_count() == 0) {
-        PSI_thread *psi = thd_get_psi(mi->rli->info_thd);
+        PSI_thread *psi MY_ATTRIBUTE((unused)) = thd_get_psi(mi->rli->info_thd);
+#ifdef HAVE_PSI_THREAD_INTERFACE
         if (psi != nullptr) {
           row.thread_id = PSI_THREAD_CALL(get_thread_internal_id)(psi);
         }
+#endif /* HAVE_PSI_THREAD_INTERFACE */
       }
     }
 
@@ -195,10 +197,12 @@ bool PFS_index_rpl_applier_status_by_worker_by_thread::match(
 
     if (mi->rli->slave_running) {
       if (worker) {
-        PSI_thread *psi = thd_get_psi(worker->info_thd);
+        PSI_thread *psi MY_ATTRIBUTE((unused)) = thd_get_psi(worker->info_thd);
+#ifdef HAVE_PSI_THREAD_INTERFACE
         if (psi != nullptr) {
           row.thread_id = PSI_THREAD_CALL(get_thread_internal_id)(psi);
         }
+#endif /* HAVE_PSI_THREAD_INTERFACE */
       }
     }
 
@@ -312,7 +316,7 @@ int table_replication_applier_status_by_worker::rnd_pos(const void *pos) {
     /* Multi Thread Slave */
     if (m_pos.m_index_2 < wc) {
       worker = mi->rli->get_worker(m_pos.m_index_2);
-      if (worker != NULL) {
+      if (worker != nullptr) {
         make_row(worker);
         res = 0;
       }
@@ -326,7 +330,7 @@ end:
 }
 
 int table_replication_applier_status_by_worker::index_init(uint idx, bool) {
-  PFS_index_rpl_applier_status_by_worker *result = NULL;
+  PFS_index_rpl_applier_status_by_worker *result = nullptr;
 
   switch (idx) {
     case 0:
@@ -420,8 +424,8 @@ int table_replication_applier_status_by_worker::make_row(Master_info *mi) {
   m_row.thread_id = 0;
   m_row.thread_id_is_null = true;
 
-  DBUG_ASSERT(mi != NULL);
-  DBUG_ASSERT(mi->rli != NULL);
+  DBUG_ASSERT(mi != nullptr);
+  DBUG_ASSERT(mi->rli != nullptr);
 
   mysql_mutex_lock(&mi->rli->data_lock);
 
@@ -430,11 +434,13 @@ int table_replication_applier_status_by_worker::make_row(Master_info *mi) {
          m_row.channel_name_length);
 
   if (mi->rli->slave_running) {
-    PSI_thread *psi = thd_get_psi(mi->rli->info_thd);
+    PSI_thread *psi MY_ATTRIBUTE((unused)) = thd_get_psi(mi->rli->info_thd);
+#ifdef HAVE_PSI_THREAD_INTERFACE
     if (psi != nullptr) {
       m_row.thread_id = PSI_THREAD_CALL(get_thread_internal_id)(psi);
       m_row.thread_id_is_null = false;
     }
+#endif /* HAVE_PSI_THREAD_INTERFACE */
   }
 
   if (mi->rli->slave_running) {
@@ -450,7 +456,7 @@ int table_replication_applier_status_by_worker::make_row(Master_info *mi) {
 
   /** if error, set error message and timestamp */
   if (m_row.last_error_number) {
-    char *temp_store = (char *)mi->rli->last_error().message;
+    const char *temp_store = mi->rli->last_error().message;
     m_row.last_error_message_length = strlen(temp_store);
     memcpy(m_row.last_error_message, temp_store,
            m_row.last_error_message_length);
@@ -479,11 +485,13 @@ int table_replication_applier_status_by_worker::make_row(Slave_worker *w) {
 
   mysql_mutex_lock(&w->jobs_lock);
   if (w->running_status == Slave_worker::RUNNING) {
-    PSI_thread *psi = thd_get_psi(w->info_thd);
+    PSI_thread *psi MY_ATTRIBUTE((unused)) = thd_get_psi(w->info_thd);
+#ifdef HAVE_PSI_THREAD_INTERFACE
     if (psi != nullptr) {
       m_row.thread_id = PSI_THREAD_CALL(get_thread_internal_id)(psi);
       m_row.thread_id_is_null = false;
     }
+#endif /* HAVE_PSI_THREAD_INTERFACE */
   }
 
   if (w->running_status == Slave_worker::RUNNING) {
@@ -498,7 +506,7 @@ int table_replication_applier_status_by_worker::make_row(Slave_worker *w) {
 
   /** if error, set error message and timestamp */
   if (m_row.last_error_number) {
-    char *temp_store = (char *)w->last_error().message;
+    const char *temp_store = w->last_error().message;
     m_row.last_error_message_length = strlen(temp_store);
     memcpy(m_row.last_error_message, w->last_error().message,
            m_row.last_error_message_length);
@@ -561,8 +569,8 @@ int table_replication_applier_status_by_worker::read_row_values(
   buf[0] = 0;
 
   for (; (f = *fields); fields++) {
-    if (read_all || bitmap_is_set(table->read_set, f->field_index)) {
-      switch (f->field_index) {
+    if (read_all || bitmap_is_set(table->read_set, f->field_index())) {
+      switch (f->field_index()) {
         case 0: /** channel_name */
           set_field_char_utf8(f, m_row.channel_name, m_row.channel_name_length);
           break;

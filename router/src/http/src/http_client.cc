@@ -158,7 +158,7 @@ HttpClientConnection::HttpClientConnection(IOContext &io_ctx,
   bufferevent *bev =
       bufferevent_socket_new(ev_base(), -1, BEV_OPT_CLOSE_ON_FREE);
   pImpl_->conn.reset(evhttp_connection_base_bufferevent_new(
-      ev_base(), NULL, bev, address.c_str(), port));
+      ev_base(), nullptr, bev, address.c_str(), port));
 }
 
 void HttpClientConnectionBase::make_request(HttpRequest *req,
@@ -201,7 +201,7 @@ HttpsClientConnection::HttpsClientConnection(IOContext &io_ctx,
   SSL *ssl = SSL_new(tls_ctx.get());
 
   // enable SNI
-  SSL_set_tlsext_host_name(ssl, address.c_str());
+  SSL_set_tlsext_host_name(ssl, const_cast<char *>(address.c_str()));
 
   // ownership moved to evhttp_connection_base_bufferevent_new
   bufferevent *bev = bufferevent_openssl_socket_new(
@@ -214,7 +214,7 @@ HttpsClientConnection::HttpsClientConnection(IOContext &io_ctx,
   bufferevent_openssl_set_allow_dirty_shutdown(bev, 1);
 
   pImpl_->conn.reset(evhttp_connection_base_bufferevent_new(
-      ev_base(), NULL, bev, address.c_str(), port));
+      ev_base(), nullptr, bev, address.c_str(), port));
 #else
   (void)io_ctx;
   (void)tls_ctx;

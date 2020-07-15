@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2020, Oracle and/or its affiliates.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -25,9 +25,16 @@
 #include "sql/auth/sql_auth_cache.h"
 
 #include <string.h>
-#include <cmath>
+#include "my_alloc.h"
+#include "mysql/mysql_lex_string.h"
+#include "mysql/psi/psi_base.h"
+#include "sql/auth/auth_internal.h"
+#include "sql/auth/sql_security_ctx.h"
 #include "sql/field.h"
+#include "sql/sql_class.h"
+#include "sql/sql_const.h"
 #include "sql/table.h"
+#include "sql/thr_malloc.h"
 #include "sql_string.h"
 
 namespace consts {
@@ -69,9 +76,18 @@ Mem_root_base::~Mem_root_base() {
 }
 
 bool User_table_schema_factory::is_old_user_table_schema(TABLE *table) {
+  if (table->visible_field_count() <
+      User_table_old_schema::MYSQL_USER_FIELD_PASSWORD_56)
+    return false;
   Field *password_field =
       table->field[User_table_old_schema::MYSQL_USER_FIELD_PASSWORD_56];
   return strncmp(password_field->field_name, "Password", 8) == 0;
+}
+
+void Auth_id::create_key() {
+  m_key.append(m_user.length() ? m_user : "");
+  m_key.push_back('\0');
+  m_key.append(m_host.length() ? m_host : "");
 }
 
 Auth_id::Auth_id() {}
@@ -80,6 +96,7 @@ Auth_id::Auth_id(const char *user, size_t user_len, const char *host,
                  size_t host_len) {
   if (user != nullptr) m_user.assign(user, user_len);
   if (host != nullptr) m_host.assign(host, host_len);
+  create_key();
 }
 
 Auth_id::Auth_id(const Auth_id_ref &id)
@@ -89,7 +106,9 @@ Auth_id::Auth_id(const LEX_CSTRING &user, const LEX_CSTRING &host)
     : Auth_id(user.str, user.length, host.str, host.length) {}
 
 Auth_id::Auth_id(const std::string &user, const std::string &host)
-    : m_user(user), m_host(host) {}
+    : m_user(user), m_host(host) {
+  create_key();
+}
 
 Auth_id::Auth_id(const LEX_USER *lex_user)
     : Auth_id(lex_user->user, lex_user->host) {}
@@ -97,20 +116,25 @@ Auth_id::Auth_id(const LEX_USER *lex_user)
 Auth_id::Auth_id(const ACL_USER *acl_user) {
   if (acl_user) {
     if (acl_user->user != nullptr)  // Not an anonymous user
-      m_user.assign(acl_user->user, strlen(acl_user->user));
+      m_user.assign(acl_user->user, acl_user->get_username_length());
     m_host.assign(acl_user->host.get_host(), acl_user->host.get_host_len());
+    create_key();
   }
+}
+
+Auth_id::Auth_id(const Auth_id &id) : m_user(id.m_user), m_host(id.m_host) {
+  create_key();
 }
 
 Auth_id::~Auth_id() {}
 
-Auth_id::Auth_id(const Auth_id &id) : m_user(id.m_user), m_host(id.m_host) {}
+bool Auth_id::operator<(const Auth_id &id) const { return m_key < id.m_key; }
 
-bool Auth_id::operator<(const Auth_id &id) const {
-  if (m_user >= id.m_user) return m_host < id.m_host;
-  return true;
-}
+/**
+  Output Auth_id in user<at>host format
 
+  @param [in] out Buffer to store user<at>host
+*/
 void Auth_id::auth_str(std::string *out) const {
   String tmp;
   append_identifier(&tmp, m_user.c_str(), m_user.length());

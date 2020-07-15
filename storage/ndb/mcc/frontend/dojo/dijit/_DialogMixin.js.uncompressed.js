@@ -1,4 +1,3 @@
-//>>built
 define("dijit/_DialogMixin", [
 	"dojo/_base/declare", // declare
 	"./a11y"	// _getTabNavigable
@@ -6,12 +5,15 @@ define("dijit/_DialogMixin", [
 
 	// module:
 	//		dijit/_DialogMixin
-	// summary:
-	//		_DialogMixin provides functions useful to Dialog and TooltipDialog
 
 	return declare("dijit._DialogMixin", null, {
 		// summary:
 		//		This provides functions useful to Dialog and TooltipDialog
+
+		// actionBarTemplate: String
+		//		HTML snippet to show the action bar (gray bar with OK/cancel buttons).
+		//		Blank by default, but used by ConfirmDialog/ConfirmTooltipDialog subclasses.
+		actionBarTemplate: "",
 
 		execute: function(/*Object*/ /*===== formContents =====*/){
 			// summary:
@@ -29,22 +31,22 @@ define("dijit/_DialogMixin", [
 
 		onCancel: function(){
 			// summary:
-			//	    Called when user has pressed the Dialog's cancel button, to notify container.
+			//		Called when user has pressed the Dialog's cancel button, to notify container.
 			// description:
-			//	    Developer shouldn't override or connect to this method;
+			//		Developer shouldn't override or connect to this method;
 			//		it's a private communication device between the TooltipDialog
-			//		and the thing that opened it (ex: `dijit.form.DropDownButton`)
+			//		and the thing that opened it (ex: `dijit/form/DropDownButton`)
 			// type:
 			//		protected
 		},
 
 		onExecute: function(){
 			// summary:
-			//	    Called when user has pressed the dialog's OK button, to notify container.
+			//		Called when user has pressed the dialog's OK button, to notify container.
 			// description:
-			//	    Developer shouldn't override or connect to this method;
+			//		Developer shouldn't override or connect to this method;
 			//		it's a private communication device between the TooltipDialog
-			//		and the thing that opened it (ex: `dijit.form.DropDownButton`)
+			//		and the thing that opened it (ex: `dijit/form/DropDownButton`)
 			// type:
 			//		protected
 		},
@@ -65,7 +67,7 @@ define("dijit/_DialogMixin", [
 			// tags:
 			//		protected
 
-			var elems = a11y._getTabNavigable(this.containerNode);
+			var elems = a11y._getTabNavigable(this.domNode);
 			this._firstFocusItem = elems.lowest || elems.first || this.closeButtonNode || this.domNode;
 			this._lastFocusItem = elems.last || elems.highest || this._firstFocusItem;
 		}

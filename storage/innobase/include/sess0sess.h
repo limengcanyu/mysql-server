@@ -1,6 +1,6 @@
 /*****************************************************************************
 
-Copyright (c) 2013, 2018, Oracle and/or its affiliates. All Rights Reserved.
+Copyright (c) 2013, 2019, Oracle and/or its affiliates. All Rights Reserved.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 2.0, as published by the
@@ -36,6 +36,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 
 #include <sql_thd_internal_api.h>
 #include "dict0mem.h"
+#include "log0meb.h"
 #include "srv0tmp.h"
 #include "trx0trx.h"
 #include "univ.i"
@@ -52,7 +53,7 @@ class dict_intrinsic_table_t {
   }
 
   /** Destructor */
-  ~dict_intrinsic_table_t() { m_handler = NULL; }
+  ~dict_intrinsic_table_t() { m_handler = nullptr; }
 
  public:
   /* Table Handler holding other metadata information commonly needed
@@ -76,12 +77,14 @@ class innodb_session_t {
 
   /** Destructor */
   ~innodb_session_t() {
-    m_trx = NULL;
+    m_trx = nullptr;
 
     for (table_cache_t::iterator it = m_open_tables.begin();
          it != m_open_tables.end(); ++it) {
       delete (it->second);
     }
+
+    meb::redo_log_archive_session_end(this);
 
     if (m_usr_temp_tblsp != nullptr) {
       ibt::free_tmp(m_usr_temp_tblsp);
@@ -96,7 +99,7 @@ class innodb_session_t {
   @param[in]	table_name	name of the table
   @param[in,out]	table		table handler to register */
   void register_table_handler(const char *table_name, dict_table_t *table) {
-    ut_ad(lookup_table_handler(table_name) == NULL);
+    ut_ad(lookup_table_handler(table_name) == nullptr);
     m_open_tables.insert(table_cache_t::value_type(
         table_name, new dict_intrinsic_table_t(table)));
   }
@@ -105,7 +108,7 @@ class innodb_session_t {
   @param[in]	table_name	name of the table to lookup */
   dict_table_t *lookup_table_handler(const char *table_name) {
     table_cache_t::iterator it = m_open_tables.find(table_name);
-    return ((it == m_open_tables.end()) ? NULL : it->second->m_handler);
+    return ((it == m_open_tables.end()) ? nullptr : it->second->m_handler);
   }
 
   /** Remove table handler entry.

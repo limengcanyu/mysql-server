@@ -1,4 +1,4 @@
-/* Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License, version 2.0,
@@ -150,7 +150,7 @@ typedef int (*mysql_sys_var_check_func)(MYSQL_THD thd, SYS_VAR *var, void *save,
   @sa mysql_sys_var_check_func, mysql_service_component_sys_variable_register_t
 */
 typedef void (*mysql_sys_var_update_func)(MYSQL_THD thd, SYS_VAR *var,
-                                          void *var_ptr, const void *save);
+                                          void *val_ptr, const void *save);
 
 #define COPY_MYSQL_PLUGIN_VAR_HEADER(sys_var_type, type, sys_var_check, \
                                      sys_var_update)                    \
@@ -382,6 +382,9 @@ DECLARE_BOOL_METHOD(register_variable,
   length of the value (as applicable) is returned into the out_length_of_val
   argument.
 
+  In case when the user buffer was too small to copy the value, the call fails
+  and needed buffer size is returned by 'out_length_of_val'.
+
   Typical use (char * variable):
   @code
 
@@ -402,8 +405,9 @@ DECLARE_BOOL_METHOD(register_variable,
   to the value.
   @param[in,out] out_length_of_val On input: the buffer size. On output the
   length of the data copied.
-  @retval true failure
-  @retval false success
+
+  @retval true    failure
+  @retval false   success
 */
 DECLARE_BOOL_METHOD(get_variable, (const char *component_name, const char *name,
                                    void **val, size_t *out_length_of_val));

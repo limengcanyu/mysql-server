@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2005, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2005, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -93,7 +93,7 @@ uintmax_t cur_page_num;
 /* Skip the checksum verification. */
 static bool no_check;
 /* Enabled for strict checksum verification. */
-bool strict_verify = 0;
+bool strict_verify = false;
 /* Enabled for rewrite checksum. */
 static bool do_write;
 /* Mismatches count allowed (0 by default). */
@@ -101,13 +101,13 @@ static uintmax_t allow_mismatches;
 static bool page_type_summary;
 static bool page_type_dump;
 /* Store filename for page-type-dump option. */
-char *page_dump_filename = 0;
+char *page_dump_filename = nullptr;
 /* skip the checksum verification & rewrite if page is doublewrite buffer. */
-static bool skip_page = 0;
+static bool skip_page = false;
 const char *dbug_setting = "FALSE";
-char *log_filename = NULL;
+char *log_filename = nullptr;
 /* User defined filename for logging. */
-FILE *log_file = NULL;
+FILE *log_file = nullptr;
 /* Enabled for log write option. */
 static bool is_log_enabled = false;
 
@@ -159,7 +159,7 @@ static const char *innochecksum_algorithms[] = {
 /* Used to define an enumerate type of the "innochecksum algorithm". */
 static TYPELIB innochecksum_algorithms_typelib = {
     array_elements(innochecksum_algorithms) - 1, "", innochecksum_algorithms,
-    NULL};
+    nullptr};
 
 /** Error logging classes. */
 namespace ib {
@@ -186,20 +186,20 @@ fatal::~fatal() {
 
 /** Check that a page_size is correct for InnoDB. If correct, set the
 associated page_size_shift which is the power of 2 for this page size.
-@param[in]	page_isze	page size to evaluate
+@param[in]	page_size	page size to evaluate
 @return an associated page_size_shift if valid, 0 if invalid. */
 static int innodb_page_size_validate(ulong page_size) {
   ulong n;
 
-  DBUG_ENTER("innodb_page_size_validate");
+  DBUG_TRACE;
 
   for (n = UNIV_PAGE_SIZE_SHIFT_MIN; n <= UNIV_PAGE_SIZE_SHIFT_MAX; n++) {
     if (page_size == (ulong)(1 << n)) {
-      DBUG_RETURN(n);
+      return n;
     }
   }
 
-  DBUG_RETURN(0);
+  return 0;
 }
 
 /** Get the page size of the filespace from the filespace header.
@@ -258,7 +258,7 @@ static char *error_message(int error) {
 
 /***********************************************/ /*
   @param>>_______[in] name>_____name of file.
-  @retval file pointer; file pointer is NULL when error occured.
+  @retval file pointer; file pointer is NULL when error occurred.
  */
 
 static FILE *open_file(const char *name) {
@@ -314,7 +314,7 @@ static FILE *open_file(const char *name) {
             " %s\n",
             name);
     perror("fcntl");
-    return (NULL);
+    return (nullptr);
   }
 #endif /* _WIN32 */
 
@@ -1122,19 +1122,19 @@ static void parse_page(const byte *page, FILE *file) {
   }
 }
 /**
-@param [in/out] file_name	name of the filename
+@param [in,out] file_name	name of the filename
 
-@retval FILE pointer if successfully created else NULL when error occured.
+@returns FILE pointer if successfully created else NULL when error occurred.
 */
 static FILE *create_file(char *file_name) {
-  FILE *file = NULL;
+  FILE *file = nullptr;
 
 #ifndef _WIN32
   file = fopen(file_name, "wb");
-  if (file == NULL) {
+  if (file == nullptr) {
     fprintf(stderr, "Failed to create file: %s: %s\n", file_name,
             strerror(errno));
-    return (NULL);
+    return (nullptr);
   }
 #else
   HANDLE hFile; /* handle to open file. */
@@ -1208,51 +1208,56 @@ static void print_summary(FILE *fil_out) {
 
 /* command line argument for innochecksum tool. */
 static struct my_option innochecksum_options[] = {
-    {"help", '?', "Displays this help and exits.", 0, 0, 0, GET_NO_ARG, NO_ARG,
-     0, 0, 0, 0, 0, 0},
-    {"info", 'I', "Synonym for --help.", 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0,
-     0, 0, 0},
-    {"version", 'V', "Displays version information and exits.", 0, 0, 0,
-     GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0},
+    {"help", '?', "Displays this help and exits.", nullptr, nullptr, nullptr,
+     GET_NO_ARG, NO_ARG, 0, 0, 0, nullptr, 0, nullptr},
+    {"info", 'I', "Synonym for --help.", nullptr, nullptr, nullptr, GET_NO_ARG,
+     NO_ARG, 0, 0, 0, nullptr, 0, nullptr},
+    {"version", 'V', "Displays version information and exits.", nullptr,
+     nullptr, nullptr, GET_NO_ARG, NO_ARG, 0, 0, 0, nullptr, 0, nullptr},
     {"verbose", 'v', "Verbose (prints progress every 5 seconds).", &verbose,
-     &verbose, 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+     &verbose, nullptr, GET_BOOL, NO_ARG, 0, 0, 0, nullptr, 0, nullptr},
 #ifndef DBUG_OFF
     {"debug", '#', "Output debug log. See " REFMAN "dbug-package.html",
-     &dbug_setting, &dbug_setting, 0, GET_STR, OPT_ARG, 0, 0, 0, 0, 0, 0},
+     &dbug_setting, &dbug_setting, nullptr, GET_STR, OPT_ARG, 0, 0, 0, nullptr,
+     0, nullptr},
 #endif /* !DBUG_OFF */
     {"count", 'c', "Print the count of pages in the file and exits.",
-     &just_count, &just_count, 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+     &just_count, &just_count, nullptr, GET_BOOL, NO_ARG, 0, 0, 0, nullptr, 0,
+     nullptr},
     {"start_page", 's', "Start on this page number (0 based).", &start_page,
-     &start_page, 0, GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, 0, 1, 0},
+     &start_page, nullptr, GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, nullptr, 1,
+     nullptr},
     {"end_page", 'e', "End at this page number (0 based).", &end_page,
-     &end_page, 0, GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, 0, 1, 0},
-    {"page", 'p', "Check only this page (0 based).", &do_page, &do_page, 0,
-     GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, 0, 1, 0},
+     &end_page, nullptr, GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, nullptr, 1,
+     nullptr},
+    {"page", 'p', "Check only this page (0 based).", &do_page, &do_page,
+     nullptr, GET_ULL, REQUIRED_ARG, 0, 0, ULLONG_MAX, nullptr, 1, nullptr},
     {"strict-check", 'C', "Specify the strict checksum algorithm by the user.",
      &strict_check, &strict_check, &innochecksum_algorithms_typelib, GET_ENUM,
-     REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+     REQUIRED_ARG, 0, 0, 0, nullptr, 0, nullptr},
     {"no-check", 'n', "Ignore the checksum verification.", &no_check, &no_check,
-     0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0, 0},
+     nullptr, GET_BOOL, NO_ARG, 0, 0, 0, nullptr, 0, nullptr},
     {"allow-mismatches", 'a', "Maximum checksum mismatch allowed.",
-     &allow_mismatches, &allow_mismatches, 0, GET_ULL, REQUIRED_ARG, 0, 0,
-     ULLONG_MAX, 0, 1, 0},
+     &allow_mismatches, &allow_mismatches, nullptr, GET_ULL, REQUIRED_ARG, 0, 0,
+     ULLONG_MAX, nullptr, 1, nullptr},
     {"write", 'w', "Rewrite the checksum algorithm by the user.", &write_check,
      &write_check, &innochecksum_algorithms_typelib, GET_ENUM, REQUIRED_ARG, 0,
-     0, 0, 0, 0, 0},
+     0, 0, nullptr, 0, nullptr},
     {"page-type-summary", 'S',
      "Display a count of each page type "
      "in a tablespace.",
-     &page_type_summary, &page_type_summary, 0, GET_BOOL, NO_ARG, 0, 0, 0, 0, 0,
-     0},
+     &page_type_summary, &page_type_summary, nullptr, GET_BOOL, NO_ARG, 0, 0, 0,
+     nullptr, 0, nullptr},
     {"page-type-dump", 'D',
      "Dump the page type info for each page in a "
      "tablespace.",
-     &page_dump_filename, &page_dump_filename, 0, GET_STR, REQUIRED_ARG, 0, 0,
-     0, 0, 0, 0},
-    {"log", 'l', "log output.", &log_filename, &log_filename, 0, GET_STR,
-     REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+     &page_dump_filename, &page_dump_filename, nullptr, GET_STR, REQUIRED_ARG,
+     0, 0, 0, nullptr, 0, nullptr},
+    {"log", 'l', "log output.", &log_filename, &log_filename, nullptr, GET_STR,
+     REQUIRED_ARG, 0, 0, 0, nullptr, 0, nullptr},
 
-    {0, 0, 0, 0, 0, 0, GET_NO_ARG, NO_ARG, 0, 0, 0, 0, 0, 0}};
+    {nullptr, 0, nullptr, nullptr, nullptr, nullptr, GET_NO_ARG, NO_ARG, 0, 0,
+     0, nullptr, 0, nullptr}};
 
 static void usage(void) {
 #ifdef DBUG_OFF
@@ -1363,7 +1368,7 @@ static bool get_options(int *argc, char ***argv) {
 
 int main(int argc, char **argv) {
   /* our input file. */
-  FILE *fil_in = NULL;
+  FILE *fil_in = nullptr;
   /* our input filename. */
   char *filename;
   /* Buffer to store pages read. */
@@ -1371,7 +1376,7 @@ int main(int argc, char **argv) {
   /* bytes read count */
   ulong bytes;
   /* Buffer to decompress page.*/
-  byte *tbuf = NULL;
+  byte *tbuf = nullptr;
   /* current time */
   time_t now;
   /* last time */
@@ -1397,7 +1402,7 @@ int main(int argc, char **argv) {
   bool partial_page_read = false;
   /* Enabled when read from stdin is done. */
   bool read_from_stdin = false;
-  FILE *fil_page_type = NULL;
+  FILE *fil_page_type = nullptr;
   fpos_t pos;
 
   /* Use to check the space id of given file. If space_id is zero,
@@ -1409,38 +1414,38 @@ int main(int argc, char **argv) {
   ut_crc32_init();
   MY_INIT(argv[0]);
 
-  DBUG_ENTER("main");
+  DBUG_TRACE;
   DBUG_PROCESS(argv[0]);
 
   if (get_options(&argc, &argv)) {
-    DBUG_RETURN(1);
+    return 1;
   }
 
   if (strict_verify && no_check) {
     fprintf(stderr,
             "Error: --strict-check option cannot be used "
             "together with --no-check option.\n");
-    DBUG_RETURN(1);
+    return 1;
   }
 
   if (no_check && !do_write) {
     fprintf(stderr,
             "Error: --no-check must be associated with "
             "--write option.\n");
-    DBUG_RETURN(1);
+    return 1;
   }
 
   if (page_type_dump) {
     fil_page_type = create_file(page_dump_filename);
     if (!fil_page_type) {
-      DBUG_RETURN(1);
+      return 1;
     }
   }
 
   if (is_log_enabled) {
     log_file = create_file(log_filename);
     if (!log_file) {
-      DBUG_RETURN(1);
+      return 1;
     }
     fprintf(log_file, "InnoDB File Checksum Utility.\n");
   }
@@ -1480,37 +1485,35 @@ int main(int argc, char **argv) {
 #endif /* _WIN32 */
       fprintf(stderr, "Error: %s cannot be found\n", filename);
 
-      DBUG_RETURN(1);
+      return 1;
     }
 
     if (!read_from_stdin) {
       size = st.st_size;
       fil_in = open_file(filename);
       /*If fil_in is NULL, terminate as some error encountered */
-      if (fil_in == NULL) {
-        DBUG_RETURN(1);
+      if (fil_in == nullptr) {
+        return 1;
       }
       /* Save the current file pointer in pos variable.*/
       if (0 != fgetpos(fil_in, &pos)) {
         perror("fgetpos");
-        DBUG_RETURN(1);
+        return 1;
       }
     }
 
-      /* Testing for lock mechanism. The innochecksum
-      acquire lock on given file. So other tools accessing the same
-      file for processsing must fail. */
+    /* Testing for lock mechanism. The innochecksum
+    acquire lock on given file. So other tools accessing the same
+    file for processsing must fail. */
 #ifdef _WIN32
-    DBUG_EXECUTE_IF("innochecksum_cause_mysqld_crash",
-                    ut_ad(page_dump_filename);
-                    while ((_access(page_dump_filename, 0)) == 0) {
-                      sleep(1);
-                    } DBUG_RETURN(0););
+    DBUG_EXECUTE_IF(
+        "innochecksum_cause_mysqld_crash", ut_ad(page_dump_filename);
+        while ((_access(page_dump_filename, 0)) == 0) { sleep(1); } return 0;);
 #else
     DBUG_EXECUTE_IF(
         "innochecksum_cause_mysqld_crash", ut_ad(page_dump_filename);
         struct stat status_buf; while (stat(page_dump_filename, &status_buf) ==
-                                       0) { sleep(1); } DBUG_RETURN(0););
+                                       0) { sleep(1); } return 0;);
 #endif /* _WIN32 */
 
     /* Read the minimum page size. */
@@ -1524,7 +1527,7 @@ int main(int argc, char **argv) {
       fprintf(stderr, "of %d bytes.  Bytes read was %lu\n", UNIV_ZIP_SIZE_MIN,
               bytes);
 
-      DBUG_RETURN(1);
+      return 1;
     }
 
     /* enable variable is_system_tablespace when space_id of given
@@ -1586,14 +1589,14 @@ int main(int argc, char **argv) {
               "Error: Unable to seek to "
               "necessary offset");
 
-          DBUG_RETURN(1);
+          return 1;
         }
         /* Save the current file pointer in
         pos variable. */
         if (0 != fgetpos(fil_in, &pos)) {
           perror("fgetpos");
 
-          DBUG_RETURN(1);
+          return 1;
         }
       } else {
         ulong count = 0;
@@ -1620,7 +1623,7 @@ int main(int argc, char **argv) {
                     "to seek to necessary "
                     "offset");
 
-            DBUG_RETURN(1);
+            return 1;
           }
         }
       }
@@ -1651,18 +1654,18 @@ int main(int argc, char **argv) {
       }
 
       if (ferror(fil_in)) {
-        fprintf(stderr, "Error reading %u bytes", page_size.physical());
+        fprintf(stderr, "Error reading %zu bytes", page_size.physical());
         perror(" ");
 
-        DBUG_RETURN(1);
+        return 1;
       }
 
       if (bytes != page_size.physical()) {
         fprintf(stderr,
                 "Error: bytes read (%lu) "
-                "doesn't match page size (%u)\n",
+                "doesn't match page size (%zu)\n",
                 bytes, page_size.physical());
-        DBUG_RETURN(1);
+        return 1;
       }
 
       if (is_system_tablespace) {
@@ -1674,7 +1677,7 @@ int main(int argc, char **argv) {
         if (!page_decompress(buf.begin(), tbuf, page_size)) {
           fprintf(stderr, "Page decompress failed");
 
-          DBUG_RETURN(1);
+          return 1;
         }
       }
 
@@ -1701,7 +1704,7 @@ int main(int argc, char **argv) {
                       "count::%" PRIuMAX "\n",
                       allow_mismatches);
 
-              DBUG_RETURN(1);
+              return 1;
             }
           }
         }
@@ -1710,7 +1713,7 @@ int main(int argc, char **argv) {
       /* Rewrite checksum */
       if (do_write &&
           !write_file(filename, fil_in, buf.begin(), &pos, page_size)) {
-        DBUG_RETURN(1);
+        return 1;
       }
 
       /* end if this was the last page we were supposed to check */
@@ -1726,7 +1729,7 @@ int main(int argc, char **argv) {
       cur_page_num++;
       if (verbose && !read_from_stdin) {
         if ((cur_page_num % 64) == 0) {
-          now = time(0);
+          now = time(nullptr);
           if (!lastt) {
             lastt = now;
           }
@@ -1763,7 +1766,7 @@ int main(int argc, char **argv) {
     fclose(log_file);
   }
 
-  DBUG_RETURN(0);
+  return 0;
 }
 
 /** Report a failed assertion

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+/* Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License, version 2.0,
@@ -26,7 +26,7 @@
 #include <gtest/gtest.h>
 
 #include "plugin/x/ngs/include/ngs/memory.h"
-#include "plugin/x/ngs/include/ngs/ngs_error.h"
+#include "plugin/x/src/xpl_error.h"
 #include "unittest/gunit/xplugin/xpl/mock/capabilities.h"
 
 const int NUMBER_OF_HANDLERS = 4;
@@ -98,7 +98,7 @@ class CapabilitiesConfiguratorTestSuite : public Test {
 
     ngs::Memory_instrumented<Capabilities>::Unique_ptr cap(sut->get());
 
-    ASSERT_TRUE(NULL != cap.get());
+    ASSERT_TRUE(nullptr != cap.get());
     ASSERT_EQ(static_cast<int>(supported_handlers.size()),
               cap->capabilities_size());
 

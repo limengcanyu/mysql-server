@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2003, 2018, Oracle and/or its affiliates. All rights reserved.
+   Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License, version 2.0,
@@ -157,6 +157,7 @@ private:
   Uint32        noOfConnectedNodes;
   Uint32        noOfConnectedDBNodes;
   Uint32        minDbVersion;
+  Uint32        minApiVersion;
   Node          theNodes[MAX_NODES];
   NdbThread*    theClusterMgrThread;
 
@@ -194,6 +195,7 @@ private:
   void execAPI_REGREQ    (const Uint32 * theData);
   void execAPI_REGCONF   (const NdbApiSignal*, const LinearSectionPtr ptr[]);
   void execAPI_REGREF    (const Uint32 * theData);
+  void execDUMP_STATE_ORD(const NdbApiSignal*, const LinearSectionPtr ptr[]);
   void execNODE_FAILREP  (const NdbApiSignal*, const LinearSectionPtr ptr[]);
   void execNF_COMPLETEREP(const NdbApiSignal*, const LinearSectionPtr ptr[]);
 
@@ -222,6 +224,7 @@ private:
 
   void print_nodes(const char* where, NdbOut& out = ndbout);
   void recalcMinDbVersion();
+  void recalcMinApiVersion();
   void sendProcessInfoReport(NodeId nodeId);
 
 public:
@@ -260,13 +263,13 @@ ClusterMgr::hb_received(NodeId nodeId) {
 
 /*****************************************************************************/
 
+extern "C" void* runArbitMgr_C(void* me);
+
 /**
  * @class ArbitMgr
  * Arbitration manager.  Runs in separate thread.
  * Started only by a request from the kernel.
  */
-
-extern "C" void* runArbitMgr_C(void* me);
 
 class ArbitMgr
 {

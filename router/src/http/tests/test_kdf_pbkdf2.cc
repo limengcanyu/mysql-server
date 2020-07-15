@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2018, Oracle and/or its affiliates. All rights reserved.
+  Copyright (c) 2018, 2020, Oracle and/or its affiliates.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of the GNU General Public License, version 2.0,
@@ -36,14 +36,15 @@ TEST_F(Pbkdf2SaltTest, size) {
   EXPECT_EQ(salt.size(), 16);
 }
 
-class Pbkdf2Test : public ::testing::Test,
-                   public ::testing::WithParamInterface<
-                       std::tuple<std::string,  // MCF string
-                                  int,          // rounds
-                                  std::string,  // salt
-                                  std::string,  // checksum
-                                  const char *  // password
-                                  >> {};
+class Pbkdf2Test
+    : public ::testing::Test,
+      public ::testing::WithParamInterface<std::tuple<std::string,  // MCF
+                                                                    // string
+                                                      int,          // rounds
+                                                      std::string,  // salt
+                                                      std::string,  // checksum
+                                                      const char *  // password
+                                                      >> {};
 
 TEST_P(Pbkdf2Test, decode) {
   auto hash_info = Pbkdf2McfAdaptor::from_mcf(std::get<0>(GetParam()));
@@ -63,7 +64,7 @@ TEST_P(Pbkdf2Test, verify) {
   }
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     Foo, Pbkdf2Test,
     ::testing::Values(
 
